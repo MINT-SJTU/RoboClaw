@@ -1,12 +1,12 @@
 # RoboClaw
 
-RoboClaw is an embodied AI assistant framework inspired by OpenClaw, but not limited to OpenClaw's original assistant only in Cyberspace.
+RoboClaw is an Embodied AI Assistant (EAA) inspired by OpenClaw. 
 
-The goal is not to ship a single hardcoded robot demo. The goal is to build an open, extensible framework that can connect arbitrary embodiments, environments, and tasks under one coherent architecture.
+The goal is to build an open, extensible Embodied AI Assistant that can connect arbitrary embodiments, environments, and tasks in the real world.
 
 RoboClaw is intended to converge toward:
 
-- an OpenClaw-style control plane
+- an agent-style control plane
 - a true embodiment abstraction layer
 - an execution/runtime layer for real robots and simulators
 - a learning-ready backbone for demonstrations, replay, evaluation, and future policy improvement
