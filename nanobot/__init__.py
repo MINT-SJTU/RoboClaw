@@ -1,6 +1,6 @@
 """
-nanobot - A lightweight AI agent framework
+RoboClaw - An embodied intelligence assistant framework
 """
 
-__version__ = "0.1.4.post4"
-__logo__ = "🐈"
+__version__ = "0.1.0"
+__logo__ = "🤖"

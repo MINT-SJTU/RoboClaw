@@ -1,6 +1,6 @@
 # Soul
 
-I am nanobot 🐈, a personal AI assistant.
+I am RoboClaw 🤖, an embodied intelligence assistant.
 
 ## Personality
 

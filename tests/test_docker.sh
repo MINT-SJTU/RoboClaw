@@ -31,7 +31,7 @@ check() {
     fi
 }
 
-check "nanobot Status"
+check "RoboClaw Status"
 check "Config:"
 check "Workspace:"
 check "Model:"

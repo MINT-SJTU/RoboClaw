@@ -42,6 +42,16 @@ Right now, we are mainly working on:
 
 The direction is clear, and we will continue making the process public as we move forward.
 
+## 📦 Installation
+
+### Conda
+
+```bash
+conda create -n roboclaw python=3.11 -y
+conda activate roboclaw
+pip install -e ".[dev]"
+```
+
 ## 📢 Community Co-Creation
 
 RoboClaw aims to move forward in a genuinely open and collaborative way.
@@ -111,4 +121,3 @@ If you want to be an active contributor, please contact us by emailing bozhaonan
 ## 🙏 Acknowledgments
 
 RoboClaw references and inherits part of its initial thinking from [nanobot](https://github.com/HKUDS/nanobot). We appreciate its lightweight practice along the OpenClaw line, which helped us build the first prototype faster and continue evolving toward embodied intelligence.
-

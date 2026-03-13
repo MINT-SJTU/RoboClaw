@@ -1,13 +1,13 @@
 [project]
-name = "nanobot-ai"
-version = "0.1.4.post4"
-description = "A lightweight personal AI assistant framework"
+name = "roboclaw-ai"
+version = "0.1.0"
+description = "An embodied intelligence assistant framework"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "nanobot contributors"}
+    {name = "RoboClaw contributors"}
 ]
-keywords = ["ai", "agent", "chatbot"]
+keywords = ["embodied-ai", "robotics", "agent"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -63,6 +63,7 @@ dev = [
 
 [project.scripts]
 nanobot = "nanobot.cli.commands:app"
+roboclaw = "nanobot.cli.commands:app"
 
 [build-system]
 requires = ["hatchling"]

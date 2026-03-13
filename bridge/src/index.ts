@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * nanobot WhatsApp Bridge
+ * RoboClaw WhatsApp Bridge
  * 
- * This bridge connects WhatsApp Web to nanobot's Python backend
+ * This bridge connects WhatsApp Web to RoboClaw's Python backend
  * via WebSocket. It handles authentication, message forwarding,
  * and reconnection logic.
  * 
@@ -27,7 +27,7 @@ const PORT = parseInt(process.env.BRIDGE_PORT || '3001', 10);
 const AUTH_DIR = process.env.AUTH_DIR || join(homedir(), '.nanobot', 'whatsapp-auth');
 const TOKEN = process.env.BRIDGE_TOKEN || undefined;
 
-console.log('🐈 nanobot WhatsApp Bridge');
+console.log('🤖 RoboClaw WhatsApp Bridge');
 console.log('========================\n');
 
 const server = new BridgeServer(PORT, AUTH_DIR, TOKEN);
