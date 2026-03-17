@@ -7,8 +7,12 @@ from dataclasses import dataclass, field, replace
 from roboclaw.embodied.definition.systems.assemblies.model import (
     AssemblyManifest,
     ControlGroup,
+    FailureDomain,
     FrameTransform,
+    ResourceOwnership,
     RobotAttachment,
+    SafetyBoundary,
+    SafetyZone,
     SensorAttachment,
     ToolAttachment,
 )
@@ -45,6 +49,10 @@ class AssemblyBlueprint:
     tools: tuple[ToolAttachment, ...] = field(default_factory=tuple)
     control_groups: tuple[ControlGroup, ...] = field(default_factory=tuple)
     default_control_group_id: str | None = None
+    safety_zones: tuple[SafetyZone, ...] = field(default_factory=tuple)
+    safety_boundaries: tuple[SafetyBoundary, ...] = field(default_factory=tuple)
+    failure_domains: tuple[FailureDomain, ...] = field(default_factory=tuple)
+    resource_ownerships: tuple[ResourceOwnership, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
@@ -61,6 +69,10 @@ class AssemblyBlueprint:
             tools=manifest.tools,
             control_groups=manifest.control_groups,
             default_control_group_id=manifest.default_control_group_id,
+            safety_zones=manifest.safety_zones,
+            safety_boundaries=manifest.safety_boundaries,
+            failure_domains=manifest.failure_domains,
+            resource_ownerships=manifest.resource_ownerships,
             notes=manifest.notes,
         )
 
@@ -103,6 +115,34 @@ class AssemblyBlueprint:
         )
         return replace(self, control_groups=groups)
 
+    def with_safety_zone(self, safety_zone: SafetyZone) -> "AssemblyBlueprint":
+        zones = _dedupe_by_key(
+            (*self.safety_zones, safety_zone),
+            key_fn=lambda item: item.id,
+        )
+        return replace(self, safety_zones=zones)
+
+    def with_safety_boundary(self, safety_boundary: SafetyBoundary) -> "AssemblyBlueprint":
+        boundaries = _dedupe_by_key(
+            (*self.safety_boundaries, safety_boundary),
+            key_fn=lambda item: item.id,
+        )
+        return replace(self, safety_boundaries=boundaries)
+
+    def with_failure_domain(self, failure_domain: FailureDomain) -> "AssemblyBlueprint":
+        failure_domains = _dedupe_by_key(
+            (*self.failure_domains, failure_domain),
+            key_fn=lambda item: item.id,
+        )
+        return replace(self, failure_domains=failure_domains)
+
+    def with_resource_ownership(self, resource_ownership: ResourceOwnership) -> "AssemblyBlueprint":
+        ownerships = _dedupe_by_key(
+            (*self.resource_ownerships, resource_ownership),
+            key_fn=lambda item: item.id,
+        )
+        return replace(self, resource_ownerships=ownerships)
+
     def remap_sensor(
         self,
         sensor_ref: str,
@@ -122,6 +162,8 @@ class AssemblyBlueprint:
                         attachment_id=sensor.attachment_id,
                         sensor_id=sensor.sensor_id,
                         mount=to_mount,
+                        mount_frame=sensor.mount_frame,
+                        mount_transform=sensor.mount_transform,
                         config=sensor.config,
                         optional=sensor.optional,
                     )
@@ -164,6 +206,10 @@ class AssemblyBlueprint:
             tools=self.tools,
             control_groups=self.control_groups,
             default_control_group_id=self.default_control_group_id,
+            safety_zones=self.safety_zones,
+            safety_boundaries=self.safety_boundaries,
+            failure_domains=self.failure_domains,
+            resource_ownerships=self.resource_ownerships,
             notes=self.notes,
         )
 
@@ -199,6 +245,22 @@ def compose_assemblies(*blueprints: AssemblyBlueprint) -> AssemblyBlueprint:
         tuple(group for blueprint in blueprints for group in blueprint.control_groups),
         key_fn=lambda item: item.id,
     )
+    safety_zones = _dedupe_by_key(
+        tuple(zone for blueprint in blueprints for zone in blueprint.safety_zones),
+        key_fn=lambda item: item.id,
+    )
+    safety_boundaries = _dedupe_by_key(
+        tuple(boundary for blueprint in blueprints for boundary in blueprint.safety_boundaries),
+        key_fn=lambda item: item.id,
+    )
+    failure_domains = _dedupe_by_key(
+        tuple(domain for blueprint in blueprints for domain in blueprint.failure_domains),
+        key_fn=lambda item: item.id,
+    )
+    resource_ownerships = _dedupe_by_key(
+        tuple(ownership for blueprint in blueprints for ownership in blueprint.resource_ownerships),
+        key_fn=lambda item: item.id,
+    )
     default_target = None
     default_control_group = None
     for blueprint in blueprints:
@@ -219,5 +281,9 @@ def compose_assemblies(*blueprints: AssemblyBlueprint) -> AssemblyBlueprint:
         tools=tools,
         control_groups=control_groups,
         default_control_group_id=default_control_group,
+        safety_zones=safety_zones,
+        safety_boundaries=safety_boundaries,
+        failure_domains=failure_domains,
+        resource_ownerships=resource_ownerships,
         notes=tuple(note for blueprint in blueprints for note in blueprint.notes),
     )

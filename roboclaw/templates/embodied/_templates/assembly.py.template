@@ -5,8 +5,13 @@ from roboclaw.embodied.definition.components.sensors import Ros2CameraConfig
 from roboclaw.embodied.definition.systems.assemblies import (
     AssemblyBlueprint,
     ControlGroup,
+    FailureDomain,
     FrameTransform,
+    ResourceLockScope,
+    ResourceOwnership,
     RobotAttachment,
+    SafetyBoundary,
+    SafetyZone,
     SensorAttachment,
     ToolAttachment,
     Transform3D,
@@ -72,6 +77,11 @@ ASSEMBLY = AssemblyBlueprint(
             attachment_id="wrist_camera",
             sensor_id="rgb_camera",
             mount="wrist",
+            mount_frame="<tool_frame>",
+            mount_transform=Transform3D(
+                translation_xyz=(0.0, 0.0, 0.0),
+                rotation_rpy=(0.0, 0.0, 0.0),
+            ),
             config=PRIMARY_CAMERA_CONFIG,
         ),
     ),
@@ -114,4 +124,44 @@ ASSEMBLY = AssemblyBlueprint(
         ),
     ),
     default_control_group_id="manipulation",
+    safety_zones=(
+        SafetyZone(
+            id="primary_workspace",
+            frame="<base_frame>",
+            min_xyz=(-0.6, -0.6, 0.0),
+            max_xyz=(0.6, 0.6, 0.9),
+        ),
+    ),
+    safety_boundaries=(
+        SafetyBoundary(
+            id="manipulation_safety",
+            control_group_ids=("manipulation",),
+            robot_attachment_ids=("primary",),
+            sensor_attachment_ids=("wrist_camera",),
+            zone_ids=("primary_workspace",),
+            max_linear_speed_mps=0.25,
+            max_angular_speed_radps=0.75,
+            max_joint_speed_scale=0.6,
+        ),
+    ),
+    failure_domains=(
+        FailureDomain(
+            id="arm_cell",
+            robot_attachment_ids=("primary",),
+            sensor_attachment_ids=("wrist_camera",),
+            target_ids=("real", "sim_gazebo"),
+            containment_actions=("stop", "recover"),
+        ),
+    ),
+    resource_ownerships=(
+        ResourceOwnership(
+            id="manipulation_lock",
+            control_group_id="manipulation",
+            resource_ids=("joint_controller", "wrist_camera_stream"),
+            lock_scope=ResourceLockScope.EXCLUSIVE,
+            robot_attachment_ids=("primary",),
+            sensor_attachment_ids=("wrist_camera",),
+            failure_domain_id="arm_cell",
+        ),
+    ),
 ).build()

@@ -11,9 +11,12 @@ from roboclaw.embodied import (
     HUMANOID_WHOLE_BODY_BRIDGE,
     IdempotencyMode,
     MOBILE_BASE_FLEET_BRIDGE,
+    ResourceLockScope,
     RollbackStrategy,
     RGB_CAMERA,
     RawEvidenceHandle,
+    SafetyBoundary,
+    SafetyZone,
     SIMULATOR_BRIDGE,
     SO101_ROBOT,
     TelemetryEvent,
@@ -33,7 +36,9 @@ from roboclaw.embodied import (
 from roboclaw.embodied.definition.systems.assemblies import (
     AssemblyBlueprint,
     ControlGroup,
+    FailureDomain,
     FrameTransform,
+    ResourceOwnership,
     RobotAttachment,
     ToolAttachment,
     Transform3D,
@@ -78,6 +83,8 @@ def _workspace_blueprint() -> AssemblyBlueprint:
                 attachment_id="wrist_camera",
                 sensor_id="rgb_camera",
                 mount="wrist",
+                mount_frame="tool0",
+                mount_transform=Transform3D(),
             ),
         ),
         execution_targets=(
@@ -119,6 +126,45 @@ def _workspace_blueprint() -> AssemblyBlueprint:
             ),
         ),
         default_control_group_id="manipulation",
+        safety_zones=(
+            SafetyZone(
+                id="workspace_zone",
+                frame="base_link",
+                min_xyz=(-0.5, -0.5, 0.0),
+                max_xyz=(0.5, 0.5, 0.8),
+            ),
+        ),
+        safety_boundaries=(
+            SafetyBoundary(
+                id="manipulation_safety",
+                control_group_ids=("manipulation",),
+                robot_attachment_ids=("primary",),
+                sensor_attachment_ids=("wrist_camera",),
+                zone_ids=("workspace_zone",),
+                max_linear_speed_mps=0.2,
+                max_joint_speed_scale=0.5,
+            ),
+        ),
+        failure_domains=(
+            FailureDomain(
+                id="arm_cell",
+                robot_attachment_ids=("primary",),
+                sensor_attachment_ids=("wrist_camera",),
+                target_ids=("real",),
+                containment_actions=("stop", "recover"),
+            ),
+        ),
+        resource_ownerships=(
+            ResourceOwnership(
+                id="manipulation_lock",
+                control_group_id="manipulation",
+                resource_ids=("joint_controller", "camera_stream"),
+                lock_scope=ResourceLockScope.EXCLUSIVE,
+                robot_attachment_ids=("primary",),
+                sensor_attachment_ids=("wrist_camera",),
+                failure_domain_id="arm_cell",
+            ),
+        ),
     )
 
 
@@ -182,6 +228,8 @@ def test_workspace_blueprint_can_be_composed_into_a_variant() -> None:
             attachment_id="wrist_camera",
             sensor_id="rgb_camera",
             mount="overhead",
+            mount_frame="tool0",
+            mount_transform=Transform3D(),
             config=None,
             optional=False,
         ),
@@ -233,6 +281,10 @@ def test_assembly_topology_contract_is_machine_checkable() -> None:
     assert assembly.control_group().robot_attachment_ids == ("primary",)
     assert assembly.tools[0].robot_attachment_id == "primary"
     assert assembly.frame_transforms[1].parent_frame == "base_link"
+    assert assembly.safety_zones[0].id == "workspace_zone"
+    assert assembly.safety_boundaries[0].zone_ids == ("workspace_zone",)
+    assert assembly.failure_domains[0].containment_actions == ("stop", "recover")
+    assert assembly.resource_ownerships[0].control_group_id == "manipulation"
 
 
 def test_adapter_lifecycle_contract_is_machine_checkable() -> None:
