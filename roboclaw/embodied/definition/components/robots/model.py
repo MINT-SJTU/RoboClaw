@@ -69,6 +69,7 @@ class RobotManifest:
     default_named_poses: tuple[str, ...] = field(default_factory=tuple)
     suggested_sensor_ids: tuple[str, ...] = field(default_factory=tuple)
     safety: SafetyProfile = field(default_factory=SafetyProfile)
+    setup_hints: tuple[str, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:

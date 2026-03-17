@@ -17,18 +17,19 @@ always: true
 
 1. Read `EMBODIED.md` in the active workspace before creating embodied files.
 2. As soon as the user identifies the robot model or class, create or update `embodied/intake/<slug>.md` with what is already known.
-3. Reuse built-in robot and sensor ids when they already exist in framework code.
-4. Default to the RoboClaw ROS2 path unless the user explicitly asks for a different execution stack.
-5. Infer what you can from the repo, framework manifests, workspace, and local environment before asking the user.
-6. Ask only the smallest missing setup-specific question needed for the next step.
-7. Create or update only the workspace files needed for this setup:
+3. If the robot already exists in framework code, inspect its built-in manifest, notes, and setup hints before asking follow-up questions.
+4. Reuse built-in robot and sensor ids when they already exist in framework code.
+5. Use the RoboClaw ROS2 path.
+6. Infer what you can from the repo, framework manifests, workspace, and local environment before asking the user.
+7. Ask only the smallest missing setup-specific question needed for the next step.
+8. Create or update only the workspace files needed for this setup:
    - `embodied/robots/`
    - `embodied/sensors/`
    - `embodied/assemblies/`
    - `embodied/deployments/`
    - `embodied/adapters/`
    - `embodied/simulators/`
-8. Keep ids stable so later chat turns can refine the same setup instead of generating a new one.
+9. Keep ids stable so later chat turns can refine the same setup instead of generating a new one.
 
 ## First-Run Success Criteria
 
@@ -47,7 +48,9 @@ are sufficient for RoboClaw to attempt:
 - Attachment placement, ROS2 namespaces, deployment connection params, lab safety limits, and simulator worlds are setup-specific and belong in workspace assets.
 - If a setup needs a new robot manifest that is not reusable enough for framework, create it in workspace first.
 - The current path is framework contracts plus workspace assets loaded through catalog.
-- Do not require a first-time user to choose ROS2 vs SDK, list topics/actions, or provide package paths before intake starts when the framework already implies the default path.
+- RoboClaw currently assumes ROS2 as the integration path for embodiment setup.
+- Do not require a first-time user to choose ROS2 vs SDK, list topics/actions, or provide package paths before intake starts.
+- Robot-specific defaults belong in the corresponding built-in robot manifest, not in this generic skill.
 - Do not front-load large questionnaires. Ask one targeted question, then continue.
 
 ## Scaffolding
@@ -69,6 +72,6 @@ are sufficient for RoboClaw to attempt:
   - "我想接入一台真实的机器人，请一步一步带我完成配置。"
   - "我想安装 SO101。"
   - "我想接入一个仿真机械臂。"
-- For a known framework robot such as SO101, start intake immediately and assume the framework-default path first.
+- For a known framework robot such as SO101, start intake immediately, inspect the built-in robot setup hints, and then assume the framework-default path first.
 - Only ask questions the user is realistically expected to know.
 - Do not ask for connection details, namespaces, package names, or SDK choices until they are required for the next concrete action.

@@ -353,6 +353,12 @@ SO101_ROBOT = RobotManifest(
             "Visual servo flows should stay above the robot manifest and consume normalized primitives.",
         ),
     ),
+    setup_hints=(
+        "For first-run setup, treat SO101 as a known framework robot and start intake immediately once the user names it.",
+        "Default the integration path to ROS2 unless the user explicitly asks for another stack.",
+        "For a real SO101, assume the common deployment path is a local USB/serial connection.",
+        "Do not start by asking whether SO101 uses USB, serial, or IP. Ask for the concrete serial device only when deployment generation actually needs it and it cannot be inferred locally.",
+    ),
     notes=(
         "SO101 only defines robot-local motion and maintenance capabilities here.",
         "Sensors and carrier targets are composed separately through assemblies.",
