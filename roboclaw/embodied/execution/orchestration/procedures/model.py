@@ -94,6 +94,65 @@ class IdempotencyConflictPolicy(StrEnum):
     RESTART_EXECUTION = "restart_execution"
 
 
+class ProcedureActionTarget(StrEnum):
+    """Execution target family for one procedure action."""
+
+    ADAPTER = "adapter"
+    ORCHESTRATOR = "orchestrator"
+
+
+class AdapterProcedureAction(StrEnum):
+    """Adapter-facing actions used by first-landscape procedures."""
+
+    PROBE_ENV = "probe_env"
+    CHECK_DEPENDENCIES = "check_dependencies"
+    CONNECT = "connect"
+    DISCONNECT = "disconnect"
+    READY = "ready"
+    STOP = "stop"
+    RESET = "reset"
+    RECOVER = "recover"
+    GET_STATE = "get_state"
+    EXECUTE_PRIMITIVE = "execute_primitive"
+    CAPTURE_SENSOR = "capture_sensor"
+    DEBUG_SNAPSHOT = "debug_snapshot"
+
+
+class OrchestratorProcedureAction(StrEnum):
+    """Orchestrator-level actions resolved by runtime services."""
+
+    RESOLVE_TARGET = "resolve_target"
+    RESOLVE_PRIMITIVE = "resolve_primitive"
+    LIST_CALIBRATION_TARGETS = "list_calibration_targets"
+    START_CALIBRATION = "start_calibration"
+    TRACK_CALIBRATION = "track_calibration"
+    CANCEL_CALIBRATION = "cancel_calibration"
+
+
+@dataclass(frozen=True)
+class ProcedureActionRef:
+    """Typed action reference used by procedure steps and policies."""
+
+    target: ProcedureActionTarget
+    name: str
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("Procedure action name cannot be empty.")
+
+
+def adapter_action(action: AdapterProcedureAction) -> ProcedureActionRef:
+    """Create an adapter action reference."""
+
+    return ProcedureActionRef(target=ProcedureActionTarget.ADAPTER, name=action.value)
+
+
+def orchestrator_action(action: OrchestratorProcedureAction) -> ProcedureActionRef:
+    """Create an orchestrator action reference."""
+
+    return ProcedureActionRef(target=ProcedureActionTarget.ORCHESTRATOR, name=action.value)
+
+
 @dataclass(frozen=True)
 class ProcedureRetryPolicy:
     """Retry policy for a step or a whole procedure."""
@@ -113,15 +172,13 @@ class ProcedureCancellationPolicy:
     """Cancellation behavior for one step or whole procedure."""
 
     mode: CancellationMode = CancellationMode.SAFE_POINT
-    cancel_action: str | None = None
+    cancel_action: ProcedureActionRef | None = None
     timeout_s: float = 10.0
     requires_operator_confirmation: bool = False
 
     def __post_init__(self) -> None:
         if self.mode == CancellationMode.NON_CANCELLABLE and self.cancel_action is not None:
             raise ValueError("Non-cancellable policy cannot define cancel_action.")
-        if self.cancel_action is not None and not self.cancel_action.strip():
-            raise ValueError("Cancellation policy cancel_action cannot be empty when specified.")
         if self.timeout_s <= 0:
             raise ValueError("Cancellation policy timeout_s must be > 0.")
 
@@ -130,7 +187,7 @@ class ProcedureCancellationPolicy:
 class ProcedureCompensationSpec:
     """Compensation action executed during rollback."""
 
-    action: str
+    action: ProcedureActionRef
     description: str
     triggers: tuple[CompensationTrigger, ...] = (
         CompensationTrigger.ON_FAILURE,
@@ -140,8 +197,6 @@ class ProcedureCompensationSpec:
     best_effort: bool = True
 
     def __post_init__(self) -> None:
-        if not self.action.strip():
-            raise ValueError("Compensation action cannot be empty.")
         if not self.description.strip():
             raise ValueError("Compensation description cannot be empty.")
         if not self.triggers:
@@ -211,7 +266,7 @@ class ProcedureStep:
     """One executable step in a procedure."""
 
     id: str
-    action: str
+    action: ProcedureActionRef
     description: str
     preconditions: tuple[ProcedurePrecondition, ...] = field(default_factory=tuple)
     timeout_s: float | None = None
@@ -223,8 +278,6 @@ class ProcedureStep:
     def __post_init__(self) -> None:
         if not self.id.strip():
             raise ValueError("Procedure step id cannot be empty.")
-        if not self.action.strip():
-            raise ValueError(f"Step '{self.id}' action cannot be empty.")
         if not self.description.strip():
             raise ValueError(f"Step '{self.id}' description cannot be empty.")
         if self.timeout_s is not None and self.timeout_s <= 0:

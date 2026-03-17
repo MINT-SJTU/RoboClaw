@@ -62,10 +62,13 @@ from roboclaw.embodied.execution.observability import (
     TelemetrySeverity,
 )
 from roboclaw.embodied.execution.orchestration.procedures import (
+    AdapterProcedureAction,
     CancellationMode,
     CompensationTrigger,
     DEFAULT_PROCEDURES,
     IdempotencyMode,
+    OrchestratorProcedureAction,
+    ProcedureActionTarget,
     RollbackStrategy,
 )
 from roboclaw.embodied.execution.orchestration.runtime import RuntimeManager, RuntimeStatus
@@ -415,9 +418,20 @@ def test_procedure_contract_is_machine_checkable() -> None:
     assert connect.rollback_strategy == RollbackStrategy.REVERSE_COMPENSATION
     assert connect.idempotency_policy.mode == IdempotencyMode.BEST_EFFORT
     assert connect.idempotency_policy.key_fields == ("deployment_id", "target_id")
+    select_target_step = next(step for step in connect.steps if step.id == "select_target")
+    assert select_target_step.action.target == ProcedureActionTarget.ORCHESTRATOR
+    assert select_target_step.action.name == OrchestratorProcedureAction.RESOLVE_TARGET.value
+
     assert connect_step.cancellation is not None
     assert connect_step.cancellation.mode == CancellationMode.IMMEDIATE
+    assert connect_step.action.target == ProcedureActionTarget.ADAPTER
+    assert connect_step.action.name == AdapterProcedureAction.CONNECT.value
+    assert connect_step.cancellation.cancel_action is not None
+    assert connect_step.cancellation.cancel_action.target == ProcedureActionTarget.ADAPTER
+    assert connect_step.cancellation.cancel_action.name == AdapterProcedureAction.DISCONNECT.value
     assert connect_step.compensation is not None
+    assert connect_step.compensation.action.target == ProcedureActionTarget.ADAPTER
+    assert connect_step.compensation.action.name == AdapterProcedureAction.DISCONNECT.value
     assert CompensationTrigger.ON_CANCEL in connect_step.compensation.triggers
     assert connect_step.idempotency is not None
     assert connect_step.idempotency.mode == IdempotencyMode.BEST_EFFORT

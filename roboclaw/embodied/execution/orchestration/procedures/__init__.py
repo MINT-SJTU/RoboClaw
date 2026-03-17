@@ -2,14 +2,18 @@
 
 from roboclaw.embodied.execution.orchestration.procedures.library import DEFAULT_PROCEDURES
 from roboclaw.embodied.execution.orchestration.procedures.model import (
+    AdapterProcedureAction,
     CancellationMode,
     CompensationTrigger,
     IdempotencyConflictPolicy,
     IdempotencyMode,
     InterventionTiming,
     OperatorInterventionPoint,
+    OrchestratorProcedureAction,
     PreconditionOperator,
     PreconditionSource,
+    ProcedureActionRef,
+    ProcedureActionTarget,
     ProcedureCancellationPolicy,
     ProcedureCompensationSpec,
     ProcedureDefinition,
@@ -20,19 +24,25 @@ from roboclaw.embodied.execution.orchestration.procedures.model import (
     ProcedureStep,
     ProcedureStepEdge,
     RollbackStrategy,
+    adapter_action,
+    orchestrator_action,
 )
 from roboclaw.embodied.execution.orchestration.procedures.registry import ProcedureRegistry
 
 __all__ = [
     "DEFAULT_PROCEDURES",
+    "AdapterProcedureAction",
     "CancellationMode",
     "CompensationTrigger",
     "IdempotencyConflictPolicy",
     "IdempotencyMode",
     "InterventionTiming",
     "OperatorInterventionPoint",
+    "OrchestratorProcedureAction",
     "PreconditionOperator",
     "PreconditionSource",
+    "ProcedureActionRef",
+    "ProcedureActionTarget",
     "ProcedureCancellationPolicy",
     "ProcedureCompensationSpec",
     "ProcedureDefinition",
@@ -44,4 +54,6 @@ __all__ = [
     "ProcedureStep",
     "ProcedureStepEdge",
     "RollbackStrategy",
+    "adapter_action",
+    "orchestrator_action",
 ]

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from roboclaw.embodied.execution.orchestration.procedures.model import (
+    AdapterProcedureAction,
     CancellationMode,
     CompensationTrigger,
     IdempotencyConflictPolicy,
     IdempotencyMode,
     InterventionTiming,
     OperatorInterventionPoint,
+    OrchestratorProcedureAction,
     PreconditionOperator,
     PreconditionSource,
     ProcedureCancellationPolicy,
@@ -21,6 +23,8 @@ from roboclaw.embodied.execution.orchestration.procedures.model import (
     ProcedureStep,
     ProcedureStepEdge,
     RollbackStrategy,
+    adapter_action,
+    orchestrator_action,
 )
 from roboclaw.embodied.definition.foundation.schema import CapabilityFamily
 
@@ -32,14 +36,14 @@ CONNECT_PROCEDURE = ProcedureDefinition(
     steps=(
         ProcedureStep(
             "probe_env",
-            "probe_env",
+            adapter_action(AdapterProcedureAction.PROBE_ENV),
             "Probe the environment and available transport.",
             timeout_s=10.0,
             retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=1.0),
         ),
         ProcedureStep(
             "select_target",
-            "resolve_target",
+            orchestrator_action(OrchestratorProcedureAction.RESOLVE_TARGET),
             "Resolve the desired execution target.",
             preconditions=(
                 ProcedurePrecondition(
@@ -55,17 +59,17 @@ CONNECT_PROCEDURE = ProcedureDefinition(
         ),
         ProcedureStep(
             "connect",
-            "connect",
+            adapter_action(AdapterProcedureAction.CONNECT),
             "Connect the adapter to the target.",
             timeout_s=30.0,
             retry_policy=ProcedureRetryPolicy(max_retries=2, backoff_s=1.0),
             cancellation=ProcedureCancellationPolicy(
                 mode=CancellationMode.IMMEDIATE,
-                cancel_action="disconnect",
+                cancel_action=adapter_action(AdapterProcedureAction.DISCONNECT),
                 timeout_s=5.0,
             ),
             compensation=ProcedureCompensationSpec(
-                action="disconnect",
+                action=adapter_action(AdapterProcedureAction.DISCONNECT),
                 description="Disconnect transport if connection partially succeeded.",
                 triggers=(
                     CompensationTrigger.ON_FAILURE,
@@ -83,7 +87,7 @@ CONNECT_PROCEDURE = ProcedureDefinition(
         ),
         ProcedureStep(
             "verify_state",
-            "ready",
+            adapter_action(AdapterProcedureAction.READY),
             "Verify the runtime is ready.",
             timeout_s=10.0,
             retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=0.5),
@@ -98,7 +102,7 @@ CONNECT_PROCEDURE = ProcedureDefinition(
     default_retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=1.0),
     cancellation_policy=ProcedureCancellationPolicy(
         mode=CancellationMode.SAFE_POINT,
-        cancel_action="disconnect",
+        cancel_action=adapter_action(AdapterProcedureAction.DISCONNECT),
         timeout_s=10.0,
     ),
     rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
@@ -126,22 +130,22 @@ CALIBRATE_PROCEDURE = ProcedureDefinition(
     steps=(
         ProcedureStep(
             "list_targets",
-            "list_calibration_targets",
+            orchestrator_action(OrchestratorProcedureAction.LIST_CALIBRATION_TARGETS),
             "List calibration targets.",
             timeout_s=10.0,
         ),
         ProcedureStep(
             "start",
-            "start_calibration",
+            orchestrator_action(OrchestratorProcedureAction.START_CALIBRATION),
             "Start calibration for the selected targets.",
             timeout_s=30.0,
             cancellation=ProcedureCancellationPolicy(
                 mode=CancellationMode.SAFE_POINT,
-                cancel_action="cancel_calibration",
+                cancel_action=orchestrator_action(OrchestratorProcedureAction.CANCEL_CALIBRATION),
                 timeout_s=10.0,
             ),
             compensation=ProcedureCompensationSpec(
-                action="cancel_calibration",
+                action=orchestrator_action(OrchestratorProcedureAction.CANCEL_CALIBRATION),
                 description="Cancel partially started calibration tasks.",
                 triggers=(
                     CompensationTrigger.ON_FAILURE,
@@ -153,7 +157,7 @@ CALIBRATE_PROCEDURE = ProcedureDefinition(
         ),
         ProcedureStep(
             "track",
-            "track_calibration",
+            orchestrator_action(OrchestratorProcedureAction.TRACK_CALIBRATION),
             "Track calibration progress until completion.",
             timeout_s=120.0,
             retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=2.0),
@@ -162,7 +166,7 @@ CALIBRATE_PROCEDURE = ProcedureDefinition(
     default_timeout_s=60.0,
     cancellation_policy=ProcedureCancellationPolicy(
         mode=CancellationMode.SAFE_POINT,
-        cancel_action="cancel_calibration",
+        cancel_action=orchestrator_action(OrchestratorProcedureAction.CANCEL_CALIBRATION),
         timeout_s=15.0,
     ),
     rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
@@ -190,13 +194,13 @@ MOVE_PROCEDURE = ProcedureDefinition(
     steps=(
         ProcedureStep(
             "read_state",
-            "get_state",
+            adapter_action(AdapterProcedureAction.GET_STATE),
             "Read current state before moving.",
             timeout_s=5.0,
         ),
         ProcedureStep(
             "resolve_primitive",
-            "resolve_primitive",
+            orchestrator_action(OrchestratorProcedureAction.RESOLVE_PRIMITIVE),
             "Resolve the normalized primitive.",
             preconditions=(
                 ProcedurePrecondition(
@@ -211,17 +215,17 @@ MOVE_PROCEDURE = ProcedureDefinition(
         ),
         ProcedureStep(
             "execute",
-            "execute_primitive",
+            adapter_action(AdapterProcedureAction.EXECUTE_PRIMITIVE),
             "Execute the primitive through the adapter.",
             timeout_s=30.0,
             retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=1.0),
             cancellation=ProcedureCancellationPolicy(
                 mode=CancellationMode.IMMEDIATE,
-                cancel_action="stop",
+                cancel_action=adapter_action(AdapterProcedureAction.STOP),
                 timeout_s=3.0,
             ),
             compensation=ProcedureCompensationSpec(
-                action="stop",
+                action=adapter_action(AdapterProcedureAction.STOP),
                 description="Stop motion and hold position when execution aborts.",
                 triggers=(
                     CompensationTrigger.ON_FAILURE,
@@ -242,7 +246,7 @@ MOVE_PROCEDURE = ProcedureDefinition(
     default_timeout_s=20.0,
     cancellation_policy=ProcedureCancellationPolicy(
         mode=CancellationMode.IMMEDIATE,
-        cancel_action="stop",
+        cancel_action=adapter_action(AdapterProcedureAction.STOP),
         timeout_s=3.0,
     ),
     rollback_strategy=RollbackStrategy.REVERSE_COMPENSATION,
@@ -271,19 +275,19 @@ DEBUG_PROCEDURE = ProcedureDefinition(
     steps=(
         ProcedureStep(
             "probe_env",
-            "probe_env",
+            adapter_action(AdapterProcedureAction.PROBE_ENV),
             "Probe environment health.",
             timeout_s=8.0,
         ),
         ProcedureStep(
             "state",
-            "get_state",
+            adapter_action(AdapterProcedureAction.GET_STATE),
             "Read normalized state.",
             timeout_s=8.0,
         ),
         ProcedureStep(
             "sensor",
-            "capture_sensor",
+            adapter_action(AdapterProcedureAction.CAPTURE_SENSOR),
             "Capture a primary sensor snapshot if available.",
             preconditions=(
                 ProcedurePrecondition(
@@ -299,7 +303,7 @@ DEBUG_PROCEDURE = ProcedureDefinition(
         ),
         ProcedureStep(
             "bundle",
-            "debug_snapshot",
+            adapter_action(AdapterProcedureAction.DEBUG_SNAPSHOT),
             "Collect the debug bundle.",
             timeout_s=15.0,
         ),
@@ -307,7 +311,7 @@ DEBUG_PROCEDURE = ProcedureDefinition(
     default_timeout_s=15.0,
     cancellation_policy=ProcedureCancellationPolicy(
         mode=CancellationMode.IMMEDIATE,
-        cancel_action="stop",
+        cancel_action=adapter_action(AdapterProcedureAction.STOP),
         timeout_s=5.0,
     ),
     rollback_strategy=RollbackStrategy.NONE,
@@ -327,13 +331,13 @@ RESET_PROCEDURE = ProcedureDefinition(
     steps=(
         ProcedureStep(
             "stop",
-            "stop",
+            adapter_action(AdapterProcedureAction.STOP),
             "Stop active motion or tasks.",
             timeout_s=5.0,
         ),
         ProcedureStep(
             "recover",
-            "recover",
+            adapter_action(AdapterProcedureAction.RECOVER),
             "Run recovery if the system is in a bad state.",
             preconditions=(
                 ProcedurePrecondition(
@@ -351,12 +355,12 @@ RESET_PROCEDURE = ProcedureDefinition(
         ),
         ProcedureStep(
             "reset",
-            "reset",
+            adapter_action(AdapterProcedureAction.RESET),
             "Reset to the default safe pose or mode.",
             timeout_s=20.0,
             retry_policy=ProcedureRetryPolicy(max_retries=1, backoff_s=1.0),
             compensation=ProcedureCompensationSpec(
-                action="recover",
+                action=adapter_action(AdapterProcedureAction.RECOVER),
                 description="Run recovery if reset leaves system unstable.",
                 triggers=(
                     CompensationTrigger.ON_FAILURE,
