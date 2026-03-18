@@ -9,6 +9,8 @@ This file is meant to be followed by RoboClaw, not just shown to the user.
 
 - Prefer installing ROS2 yourself with shell commands when the user has already
   said they want local setup help.
+- Prefer a RoboClaw-controlled step-by-step flow over a single opaque installer
+  script.
 - Prefer supported binary installs over source builds.
 - Prefer the most stable supported distro for the user's OS instead of the
   newest short-lived release.
@@ -19,6 +21,32 @@ This file is meant to be followed by RoboClaw, not just shown to the user.
   - whether root / sudo is available
 - Do not improvise a custom ROS2 install from memory when this guide already
   covers the case.
+
+## RoboClaw Guided Flow
+
+RoboClaw should treat ROS2 installation as a deterministic prerequisite flow:
+
+1. probe the host
+2. choose the supported distro/profile
+3. choose the next explicit install step
+4. show the exact commands for that step
+5. wait for the user to confirm the step or paste the failure output
+6. verify `ros2` before continuing setup generation
+
+This flow intentionally borrows the useful shape of fishros/install:
+
+- detect OS codename before selecting packages
+- choose a concrete ROS2 distro instead of a generic "install ROS2" step
+- choose headless vs desktop explicitly
+- finish by wiring shell init and validating the CLI
+
+RoboClaw should still prefer the official ROS apt-source path below as the
+default implementation. Fishros-style mirror switching is a fallback when the
+official path is blocked or too unreliable for the user's region.
+
+RoboClaw should not hard-code the fishros menu structure or pipe
+`http://fishros.com/install` directly into the shell as the default first-run
+path.
 
 ## Default Decision Tree
 
@@ -222,6 +250,31 @@ export LIBGL_ALWAYS_SOFTWARE=true
 rviz2
 ```
 
+## Mirror And Network Fallbacks
+
+If the official ROS apt source or GitHub release fetch is too slow or blocked,
+offer a mirror fallback instead of inventing a different install method.
+
+This is inspired by fishros/install, which explicitly separates:
+
+1. system-source cleanup
+2. ROS source selection
+3. ROS package installation
+4. `rosdep`
+5. shell environment setup
+
+RoboClaw should keep that separation, but keep the commands explicit and
+reviewable in chat.
+
+Common community mirror options include:
+
+- Tsinghua
+- USTC
+- Huawei Cloud
+- MirrorZ
+
+Use them only as fallbacks when the official path fails repeatedly.
+
 ## Post-Install Facts RoboClaw Should Record
 
 After a successful install, update intake or workspace notes with:
@@ -262,7 +315,21 @@ printenv | grep -i ROS
 
 Expected variables include `ROS_VERSION=2` and `ROS_DISTRO=<distro>`.
 
-### 3. DDS discovery problems on shared networks
+### 3. ROS2 packages installed under `/opt/ros`, but `ros2` is still missing in PATH
+
+Sometimes the installation succeeded, but the shell init file was never updated.
+
+Check:
+
+```bash
+ls /opt/ros
+grep -F "/opt/ros/" ~/.bashrc ~/.zshrc 2>/dev/null || true
+```
+
+If `/opt/ros/<distro>` exists, add the correct `source /opt/ros/<distro>/setup.*`
+line and open a fresh shell before re-checking.
+
+### 4. DDS discovery problems on shared networks
 
 If nodes do not discover each other:
 
@@ -282,7 +349,7 @@ If communication should stay on one machine only, use:
 export ROS_LOCALHOST_ONLY=1
 ```
 
-### 4. Wayland / RViz issues
+### 5. Wayland / RViz issues
 
 If RViz fails on Linux desktops using Wayland:
 
@@ -290,7 +357,7 @@ If RViz fails on Linux desktops using Wayland:
 QT_QPA_PLATFORM=xcb rviz2
 ```
 
-### 5. Source vs binary mixing
+### 6. Source vs binary mixing
 
 Do not mix an existing sourced ROS install with a new install path in the same
 shell. Use a fresh terminal before switching between binary and source installs.

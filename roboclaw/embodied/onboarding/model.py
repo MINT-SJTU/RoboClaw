@@ -23,6 +23,8 @@ class SetupStage(StrEnum):
     CONFIRM_CONNECTED = "confirm_connected"
     PROBE_LOCAL_ENVIRONMENT = "probe_local_environment"
     RESOLVE_PREREQUISITES = "resolve_prerequisites"
+    INSTALL_PREREQUISITES = "install_prerequisites"
+    VALIDATE_PREREQUISITES = "validate_prerequisites"
     MATERIALIZE_ASSEMBLY = "materialize_assembly"
     MATERIALIZE_DEPLOYMENT_ADAPTER = "materialize_deployment_adapter"
     VALIDATE_SETUP = "validate_setup"

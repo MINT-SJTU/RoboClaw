@@ -58,6 +58,15 @@ Infer missing facts from code, docs, and local context before asking the user.
 Do not write local device paths, namespaces, IPs, serial ids, or one-off demo assumptions into reusable framework code.
 不要把本地设备路径、namespace、IP、串口标识或一次性 demo 假设写进可复用 framework 代码。
 
+Do not hard-code a specific embodiment, robot id, or example platform into generic framework layers such as onboarding, runtime, procedures, generic adapters, or agent routing.
+不要在 onboarding、runtime、procedure、通用 adapter、agent routing 这类通用 framework 层中硬编码某个 embodiment、robot id 或示例平台。
+
+If an embodiment-specific path is temporarily required, keep it inside an embodiment-owned module, profile, or bridge implementation and make the generic layer resolve it through manifests, contracts, or registries.
+如果暂时必须引入 embodiment-specific 路径，应把它限制在该 embodiment 自己的模块、profile 或 bridge 实现里，并让通用层通过 manifest、contract 或 registry 去解析它。
+
+Concrete example names such as `SO101` may appear in embodiment-owned manifests, profiles, bridge implementations, and tests, but should not appear in generic orchestration or routing logic.
+像 `SO101` 这样的具体示例名称可以出现在 embodiment 自己拥有的 manifest、profile、bridge 实现和测试中，但不应出现在通用 orchestration 或 routing 逻辑里。
+
 Protect the current critical path before expanding into broader features or abstractions.
 在扩展更宽的功能和抽象之前，先保护当前关键路径的稳定性。
 
@@ -69,6 +78,15 @@ Keep names, ids, and embodied contracts stable unless there is a clear migration
 
 If a change affects both behavior and operator understanding, update the docs as well as the code.
 如果一个改动同时影响行为和操作者理解，就应同时更新代码和文档。
+
+Keep production framework code, runtime logs, and user-facing default copy in English unless a dedicated localization layer or user asset explicitly owns the non-English text.
+除非存在专门的本地化层或用户资产显式负责非英文文案，否则正式 framework 代码、runtime 日志和默认用户提示应保持英文。
+
+Non-English trigger phrases, aliases, and conversational shortcuts should live in tests, localization assets, or user/workspace-owned data, not in reusable framework logic.
+非英文触发词、别名和对话捷径应放在测试、本地化资产或用户/workspace 自有数据里，而不是可复用的 framework 逻辑中。
+
+If multilingual UX is temporarily needed for validation, keep the locale-specific mapping outside the core framework path and make the core path depend on an explicit localization or profile asset.
+如果为了验收暂时需要多语言交互，也应把语言映射放在核心 framework 路径之外，并让核心路径依赖显式的 localization 或 profile 资产。
 
 ## Source of Truth | 相关文档入口
 
