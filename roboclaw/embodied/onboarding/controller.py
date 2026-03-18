@@ -39,7 +39,7 @@ class OnboardingController:
     """Handle first-run embodied setup and later setup refinements."""
 
     _ROBOT_ALIASES = {
-        "so101": ("so101", "so 101", "s101", "s 101"),
+        "so101": ("so101", "so 101"),
     }
     _SETUP_START_KEYWORDS = (
         "connect", "real robot", "setup", "onboard",

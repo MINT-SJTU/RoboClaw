@@ -93,7 +93,6 @@ def test_onboarding_routes_chinese_real_robot_request(tmp_path: Path) -> None:
     session = Session(key="cli:direct")
 
     assert controller.should_handle(session, "我想用一个真实的机器人")
-    assert controller.should_handle(session, "S101")
 
 
 @pytest.mark.asyncio
