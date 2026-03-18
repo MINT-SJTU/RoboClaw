@@ -253,6 +253,16 @@ host_lerobot_calibration_dir() {
   fi
 }
 
+host_scservo_sdk_dir() {
+  python - <<'PY' 2>/dev/null
+import importlib.util
+import pathlib
+spec = importlib.util.find_spec("scservo_sdk")
+if spec and spec.origin:
+    print(pathlib.Path(spec.origin).resolve().parent)
+PY
+}
+
 instance_oauth_cli_kit_auth_dir() {
   local instance="${1}"
   local profile

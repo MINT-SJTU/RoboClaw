@@ -25,6 +25,7 @@ TARGET_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$(image_ref "${INSTA
 AUTH_PATH="$(host_codex_auth_path || true)"
 OAUTH_CLI_KIT_AUTH_DIR="$(host_oauth_cli_kit_auth_dir || true)"
 LEROBOT_CALIBRATION_DIR="$(host_lerobot_calibration_dir || true)"
+SCSERVO_SDK_DIR="$(host_scservo_sdk_dir || true)"
 
 DOCKER_ARGS=(
   -d
@@ -55,6 +56,10 @@ fi
 
 if [ -n "${LEROBOT_CALIBRATION_DIR}" ]; then
   DOCKER_ARGS+=(-v "${LEROBOT_CALIBRATION_DIR}:/roboclaw-instance/home/.cache/huggingface/lerobot/calibration:ro")
+fi
+
+if [ -n "${SCSERVO_SDK_DIR}" ]; then
+  DOCKER_ARGS+=(-v "${SCSERVO_SDK_DIR}:/usr/local/lib/python3.11/dist-packages/scservo_sdk:ro")
 fi
 
 append_hardware_device_args DOCKER_ARGS
