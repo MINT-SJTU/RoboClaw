@@ -1,4 +1,4 @@
-"""Cross-robot procedures for first-stage embodied interactions."""
+"""Cross-robot procedures for embodied control interactions."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ class ProcedureActionTarget(StrEnum):
 
 
 class AdapterProcedureAction(StrEnum):
-    """Adapter-facing actions used by first-landscape procedures."""
+    """Adapter-facing actions used by embodied control procedures."""
 
     PROBE_ENV = "probe_env"
     CHECK_DEPENDENCIES = "check_dependencies"

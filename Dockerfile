@@ -77,14 +77,14 @@ WORKDIR /app
 # Install Python dependencies first (cached layer)
 COPY pyproject.toml README.md LICENSE ./
 RUN mkdir -p roboclaw bridge scservo_sdk && touch roboclaw/__init__.py scservo_sdk/__init__.py && \
-    python -m pip install --no-cache-dir . && \
+    python -m pip install --no-cache-dir --break-system-packages --ignore-installed . && \
     rm -rf roboclaw bridge scservo_sdk
 
 # Copy the full source and install
 COPY roboclaw/ roboclaw/
 COPY scservo_sdk/ scservo_sdk/
 COPY bridge/ bridge/
-RUN python -m pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir --break-system-packages --ignore-installed .
 RUN python - <<'PY'
 import importlib.util
 spec = importlib.util.find_spec("scservo_sdk")
