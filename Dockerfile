@@ -34,6 +34,7 @@ RUN apt-get update && \
       gnupg \
       locales \
       lsb-release \
+      python3-pip \
       software-properties-common && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && \
@@ -85,12 +86,18 @@ COPY roboclaw/ roboclaw/
 COPY scservo_sdk/ scservo_sdk/
 COPY bridge/ bridge/
 RUN python -m pip install --no-cache-dir --break-system-packages --ignore-installed .
+RUN if [ "${ROBOCLAW_INSTALL_ROS2}" = "1" ]; then \
+      /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages --ignore-requires-python --ignore-installed .; \
+    fi
 RUN python - <<'PY'
 import importlib.util
 spec = importlib.util.find_spec("scservo_sdk")
 if spec is None:
     raise SystemExit("scservo_sdk was not installed into the image")
 PY
+RUN if [ "${ROBOCLAW_INSTALL_ROS2}" = "1" ]; then \
+      /usr/bin/python3 -c "import importlib.util; modules=('roboclaw','scservo_sdk','pydantic','pydantic_core'); missing=[m for m in modules if importlib.util.find_spec(m) is None]; assert not missing, f'missing control-python modules: {missing}'"; \
+    fi
 
 RUN mv /usr/local/bin/roboclaw /usr/local/bin/roboclaw-real
 COPY scripts/docker/roboclaw-wrapper.sh /usr/local/bin/roboclaw

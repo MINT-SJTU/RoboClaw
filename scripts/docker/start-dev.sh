@@ -32,6 +32,7 @@ TARGET_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${TARGET_IMAGE}")"
 AUTH_PATH="$(host_codex_auth_path || true)"
 OAUTH_CLI_KIT_AUTH_DIR="$(host_oauth_cli_kit_auth_dir || true)"
 SOURCE_PYTHONPATH="/roboclaw-source:/usr/local/lib/python${ROBOCLAW_PYTHON_VERSION}/dist-packages:/app"
+CONTROL_SOURCE_PYTHONPATH="/roboclaw-source:/app:/usr/lib/python3/dist-packages"
 
 DOCKER_ARGS=(
   -d
@@ -45,7 +46,7 @@ DOCKER_ARGS=(
   -e ROBOCLAW_WORKSPACE_PATH=/roboclaw-instance/workspace
   -e ROBOCLAW_ROS2_NAMESPACE_PREFIX="$(ros2_namespace_prefix "${INSTANCE}" "${PROFILE}")"
   -e ROBOCLAW_ROS2_CONTROL_PYTHON="/usr/bin/python3"
-  -e ROBOCLAW_ROS2_CONTROL_PYTHONPATH="${SOURCE_PYTHONPATH}"
+  -e ROBOCLAW_ROS2_CONTROL_PYTHONPATH="${CONTROL_SOURCE_PYTHONPATH}"
   -e PYTHONPATH="${SOURCE_PYTHONPATH}"
   -e HTTP_PROXY="${HTTP_PROXY:-}"
   -e HTTPS_PROXY="${HTTPS_PROXY:-}"

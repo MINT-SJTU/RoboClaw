@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import inspect
 import shlex
-import site
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,13 +39,8 @@ def _default_control_pythonpath() -> str:
     except Exception:
         pass
 
-    for entry in site.getsitepackages():
-        add(entry)
-    add(site.getusersitepackages())
-
-    for entry in sys.path:
-        if "site-packages" in entry or "dist-packages" in entry:
-            add(entry)
+    add("/app")
+    add("/usr/lib/python3/dist-packages")
 
     return ":".join(paths) or "/app"
 
