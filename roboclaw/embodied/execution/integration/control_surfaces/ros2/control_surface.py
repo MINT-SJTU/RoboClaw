@@ -158,18 +158,66 @@ class Ros2ControlSurfaceServer:
         response.message = message
         return response
 
+    @staticmethod
+    def _is_recoverable_runtime_error(exc: Exception) -> bool:
+        lower = str(exc).lower()
+        return any(
+            token in lower
+            for token in (
+                "port is in use",
+                "there is no status packet",
+                "incorrect status packet",
+            )
+        )
+
+    @classmethod
+    def _friendly_runtime_error_message(cls, exc: Exception) -> str:
+        lower = str(exc).lower()
+        if "port is in use" in lower:
+            return (
+                "The SO101 serial port is still busy. RoboClaw already tried to reset the robot connection automatically, "
+                "but something else is still using the arm. Close the other program and reply `connect` again."
+            )
+        if "there is no status packet" in lower or "incorrect status packet" in lower:
+            return (
+                "RoboClaw could reach the SO101 USB device, but the arm did not answer. "
+                "Please make sure the arm power is on and the USB/serial cable is firmly connected, then reply `connect` again."
+            )
+        return str(exc)
+
+    def _recover_runtime_locked(self) -> None:
+        try:
+            self._runtime.disconnect()
+        except Exception:
+            pass
+        self._runtime.connect()
+
+    def _call_with_runtime_recovery(self, action: Any) -> Any:
+        try:
+            return action()
+        except Exception as exc:
+            if not self._is_recoverable_runtime_error(exc):
+                raise
+        self._recover_runtime_locked()
+        return action()
+
     def _failure(self, response: Any, exc: Exception) -> Any:
-        self._last_error = str(exc)
+        friendly = self._friendly_runtime_error_message(exc)
+        self._last_error = friendly
         response.success = False
-        response.message = str(exc)
+        response.message = friendly
         return response
 
     def _handle_connect(self, request: Any, response: Any) -> Any:
         del request
         with self._lock:
             try:
-                self._runtime.connect()
-                result = self._runtime.snapshot()
+                result = self._call_with_runtime_recovery(
+                    lambda: (
+                        self._runtime.connect(),
+                        self._runtime.snapshot(),
+                    )[1]
+                )
             except Exception as exc:
                 return self._failure(response, exc)
         return self._success(response, "connected", result)
@@ -192,10 +240,13 @@ class Ros2ControlSurfaceServer:
         del request
         with self._lock:
             try:
-                if not self._runtime.connected:
-                    self._runtime.connect()
-                self._last_primitive = "go_named_pose"
-                result = self._runtime.go_home()
+                def run() -> Any:
+                    if not self._runtime.connected:
+                        self._runtime.connect()
+                    self._last_primitive = "go_named_pose"
+                    return self._runtime.go_home()
+
+                result = self._call_with_runtime_recovery(run)
             except Exception as exc:
                 return self._failure(response, exc)
         return self._success(response, "reset to home", result)
@@ -204,9 +255,13 @@ class Ros2ControlSurfaceServer:
         del request
         with self._lock:
             try:
-                self._runtime.disconnect()
-                self._runtime.connect()
-                result = self._runtime.snapshot()
+                result = self._call_with_runtime_recovery(
+                    lambda: (
+                        self._runtime.disconnect(),
+                        self._runtime.connect(),
+                        self._runtime.snapshot(),
+                    )[2]
+                )
             except Exception as exc:
                 return self._failure(response, exc)
         return self._success(response, "recovered", result)
@@ -220,10 +275,13 @@ class Ros2ControlSurfaceServer:
         del request
         with self._lock:
             try:
-                if not self._runtime.connected:
-                    self._runtime.connect()
-                self._last_primitive = "gripper_open"
-                result = self._runtime.open_gripper()
+                def run() -> Any:
+                    if not self._runtime.connected:
+                        self._runtime.connect()
+                    self._last_primitive = "gripper_open"
+                    return self._runtime.open_gripper()
+
+                result = self._call_with_runtime_recovery(run)
             except Exception as exc:
                 return self._failure(response, exc)
         return self._success(response, "gripper opened", result)
@@ -232,10 +290,13 @@ class Ros2ControlSurfaceServer:
         del request
         with self._lock:
             try:
-                if not self._runtime.connected:
-                    self._runtime.connect()
-                self._last_primitive = "gripper_close"
-                result = self._runtime.close_gripper()
+                def run() -> Any:
+                    if not self._runtime.connected:
+                        self._runtime.connect()
+                    self._last_primitive = "gripper_close"
+                    return self._runtime.close_gripper()
+
+                result = self._call_with_runtime_recovery(run)
             except Exception as exc:
                 return self._failure(response, exc)
         return self._success(response, "gripper closed", result)
@@ -244,10 +305,13 @@ class Ros2ControlSurfaceServer:
         del request
         with self._lock:
             try:
-                if not self._runtime.connected:
-                    self._runtime.connect()
-                self._last_primitive = "go_named_pose"
-                result = self._runtime.go_home()
+                def run() -> Any:
+                    if not self._runtime.connected:
+                        self._runtime.connect()
+                    self._last_primitive = "go_named_pose"
+                    return self._runtime.go_home()
+
+                result = self._call_with_runtime_recovery(run)
             except Exception as exc:
                 return self._failure(response, exc)
         return self._success(response, "home pose reached", result)

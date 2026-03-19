@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -182,3 +183,51 @@ def test_probe_servo_register_uses_resolved_host_device_for_by_id(monkeypatch: p
         "read:6:56:/roboclaw-host-dev/ttyACM0",
         "close",
     ]
+
+
+def test_control_surface_connect_auto_recovers_when_port_is_in_use() -> None:
+    server = Ros2ControlSurfaceServer.__new__(Ros2ControlSurfaceServer)
+    server._lock = threading.RLock()
+    server._last_error = None
+    server._last_result = {}
+
+    calls: list[str] = []
+
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.snapshot_calls = 0
+
+        def connect(self) -> None:
+            calls.append("connect")
+
+        def disconnect(self) -> None:
+            calls.append("disconnect")
+
+        def snapshot(self) -> dict[str, object]:
+            self.snapshot_calls += 1
+            calls.append(f"snapshot:{self.snapshot_calls}")
+            if self.snapshot_calls == 1:
+                raise RuntimeError("read2(6, 56) failed: [TxRxResult] Port is in use!")
+            return {"connected": True}
+
+    server._runtime = FakeRuntime()
+
+    response = types.SimpleNamespace(success=None, message=None)
+    result = server._handle_connect(object(), response)
+
+    assert result.success is True
+    assert result.message == "connected"
+    assert calls == ["connect", "snapshot:1", "disconnect", "connect", "connect", "snapshot:2"]
+
+
+def test_control_surface_failure_translates_port_in_use_for_user() -> None:
+    server = Ros2ControlSurfaceServer.__new__(Ros2ControlSurfaceServer)
+    server._last_error = None
+    server._last_result = {}
+
+    response = types.SimpleNamespace(success=None, message=None)
+    result = server._failure(response, RuntimeError("read2(6, 56) failed: [TxRxResult] Port is in use!"))
+
+    assert result.success is False
+    assert "serial port is still busy" in result.message
+    assert "Port is in use" not in result.message
