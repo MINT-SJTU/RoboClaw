@@ -1,6 +1,8 @@
 """Configuration module for roboclaw."""
 
-from roboclaw.config.loader import get_config_path, load_config
+from __future__ import annotations
+
+from roboclaw.config.loader import get_config_path
 from roboclaw.config.paths import (
     ensure_robot_calibration_file,
     get_bridge_install_dir,
@@ -17,7 +19,6 @@ from roboclaw.config.paths import (
     resolve_active_serial_device_path,
     resolve_serial_by_id_path,
 )
-from roboclaw.config.schema import Config
 
 __all__ = [
     "Config",
@@ -38,3 +39,15 @@ __all__ = [
     "resolve_serial_by_id_path",
     "resolve_active_serial_device_path",
 ]
+
+
+def __getattr__(name: str):
+    if name == "Config":
+        from roboclaw.config.schema import Config
+
+        return Config
+    if name == "load_config":
+        from roboclaw.config.loader import load_config
+
+        return load_config
+    raise AttributeError(f"module 'roboclaw.config' has no attribute {name!r}")
