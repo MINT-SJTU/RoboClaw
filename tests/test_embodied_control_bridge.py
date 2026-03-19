@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+import signal
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -192,6 +195,7 @@ def test_control_surface_connect_auto_recovers_when_port_is_in_use() -> None:
     server._last_result = {}
 
     calls: list[str] = []
+    terminated: list[str] = []
 
     class FakeRuntime:
         def __init__(self) -> None:
@@ -211,12 +215,14 @@ def test_control_surface_connect_auto_recovers_when_port_is_in_use() -> None:
             return {"connected": True}
 
     server._runtime = FakeRuntime()
+    server._terminate_competing_device_users_locked = lambda: terminated.append("terminated")  # type: ignore[method-assign]
 
     response = types.SimpleNamespace(success=None, message=None)
     result = server._handle_connect(object(), response)
 
     assert result.success is True
     assert result.message == "connected"
+    assert terminated == ["terminated"]
     assert calls == ["connect", "snapshot:1", "disconnect", "connect", "connect", "snapshot:2"]
 
 
@@ -231,3 +237,69 @@ def test_control_surface_failure_translates_port_in_use_for_user() -> None:
     assert result.success is False
     assert "serial port is still busy" in result.message
     assert "Port is in use" not in result.message
+
+
+def test_control_surface_connect_also_recovers_on_missing_status_packet() -> None:
+    server = Ros2ControlSurfaceServer.__new__(Ros2ControlSurfaceServer)
+    server._lock = threading.RLock()
+    server._last_error = None
+    server._last_result = {}
+
+    calls: list[str] = []
+    terminated: list[str] = []
+
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.snapshot_calls = 0
+
+        def connect(self) -> None:
+            calls.append("connect")
+
+        def disconnect(self) -> None:
+            calls.append("disconnect")
+
+        def snapshot(self) -> dict[str, object]:
+            self.snapshot_calls += 1
+            calls.append(f"snapshot:{self.snapshot_calls}")
+            if self.snapshot_calls == 1:
+                raise RuntimeError("read2(6, 56) failed: [TxRxResult] There is no status packet!")
+            return {"connected": True}
+
+    server._runtime = FakeRuntime()
+    server._terminate_competing_device_users_locked = lambda: terminated.append("terminated")  # type: ignore[method-assign]
+
+    response = types.SimpleNamespace(success=None, message=None)
+    result = server._handle_connect(object(), response)
+
+    assert result.success is True
+    assert result.message == "connected"
+    assert terminated == ["terminated"]
+    assert calls == ["connect", "snapshot:1", "disconnect", "connect", "connect", "snapshot:2"]
+
+
+def test_control_surface_discovers_other_pids_holding_runtime_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = Ros2ControlSurfaceServer.__new__(Ros2ControlSurfaceServer)
+    server._runtime = types.SimpleNamespace(
+        _resolved_device_path="/roboclaw-host-dev/ttyACM3",
+        device_by_id="/dev/serial/by-id/usb-so101",
+    )
+
+    monkeypatch.setattr(
+        "roboclaw.embodied.execution.integration.control_surfaces.ros2.control_surface.resolve_active_serial_device_path",
+        lambda _: Path("/roboclaw-host-dev/ttyACM3"),
+    )
+    monkeypatch.setattr(os, "getpid", lambda: 10)
+    monkeypatch.setattr(
+        Ros2ControlSurfaceServer,
+        "_pids_using_device",
+        staticmethod(lambda device: (10, 11, 12) if device.endswith("ttyACM3") else ()),
+    )
+    terminated: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: terminated.append((pid, sig)))
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    monkeypatch.setattr(os.path, "exists", lambda path: False)
+
+    server._terminate_competing_device_users_locked()
+
+    assert terminated == [(11, signal.SIGTERM), (12, signal.SIGTERM)]

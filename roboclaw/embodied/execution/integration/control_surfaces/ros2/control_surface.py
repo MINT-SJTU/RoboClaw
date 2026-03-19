@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import threading
+import time
 from typing import Any
 
+from roboclaw.config.paths import resolve_active_serial_device_path
 from roboclaw.embodied.execution.integration.adapters.ros2.profiles import (
     SO101_ROS2_PROFILE,
     get_ros2_profile,
@@ -175,7 +179,7 @@ class Ros2ControlSurfaceServer:
         lower = str(exc).lower()
         if "port is in use" in lower:
             return (
-                "The SO101 serial port is still busy. RoboClaw already tried to reset the robot connection automatically, "
+                "The SO101 serial port is still busy. RoboClaw already tried to clear the current robot connection automatically, "
                 "but something else is still using the arm. Close the other program and reply `connect` again."
             )
         if "there is no status packet" in lower or "incorrect status packet" in lower:
@@ -184,6 +188,71 @@ class Ros2ControlSurfaceServer:
                 "Please make sure the arm power is on and the USB/serial cable is firmly connected, then reply `connect` again."
             )
         return str(exc)
+
+    def _runtime_device_candidates(self) -> tuple[str, ...]:
+        candidates: set[str] = set()
+        resolved = getattr(self._runtime, "_resolved_device_path", None)
+        if resolved is not None:
+            candidates.add(os.path.realpath(str(resolved)))
+        device_by_id = str(getattr(self._runtime, "device_by_id", "") or "").strip()
+        if device_by_id:
+            try:
+                candidates.add(os.path.realpath(str(resolve_active_serial_device_path(device_by_id))))
+            except Exception:
+                candidates.add(os.path.realpath(device_by_id))
+        return tuple(sorted(item for item in candidates if item))
+
+    @staticmethod
+    def _pids_using_device(device_path: str) -> tuple[int, ...]:
+        current_pid = os.getpid()
+        owners: list[int] = []
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == current_pid:
+                continue
+            fd_dir = os.path.join(entry.path, "fd")
+            try:
+                fd_entries = os.scandir(fd_dir)
+            except OSError:
+                continue
+            with fd_entries as iterator:
+                for fd_entry in iterator:
+                    try:
+                        target = os.readlink(fd_entry.path)
+                    except OSError:
+                        continue
+                    if os.path.realpath(target) == device_path:
+                        owners.append(pid)
+                        break
+        return tuple(sorted(set(owners)))
+
+    def _terminate_competing_device_users_locked(self) -> None:
+        current_pid = os.getpid()
+        owner_pids: set[int] = set()
+        for device_path in self._runtime_device_candidates():
+            owner_pids.update(self._pids_using_device(device_path))
+        owner_pids.discard(current_pid)
+        if not owner_pids:
+            return
+        for pid in owner_pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                continue
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            alive = {pid for pid in owner_pids if os.path.exists(f"/proc/{pid}")}
+            if not alive:
+                return
+            time.sleep(0.05)
+            owner_pids = alive
+        for pid in owner_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                continue
 
     def _recover_runtime_locked(self) -> None:
         try:
@@ -198,6 +267,7 @@ class Ros2ControlSurfaceServer:
         except Exception as exc:
             if not self._is_recoverable_runtime_error(exc):
                 raise
+            self._terminate_competing_device_users_locked()
         self._recover_runtime_locked()
         return action()
 
