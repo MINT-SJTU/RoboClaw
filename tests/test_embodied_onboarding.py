@@ -87,6 +87,13 @@ def _build_tools(workspace: Path, exec_responses: dict[str, str | list[str]]) ->
     return registry, fake_exec
 
 
+SO101_SERIAL_PROBE_OK = (
+    "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=0 error=0 value=2048\n"
+    "ROBOCLAW_SO101_SERIAL_OK\n"
+)
+SO101_SERIAL_PROBE_MARKER = "read2ByteTxRx(port, 6, 56)"
+
+
 def test_onboarding_routes_chinese_real_robot_request(tmp_path: Path) -> None:
     _prepare_workspace(tmp_path)
     controller = OnboardingController(tmp_path, ToolRegistry())
@@ -113,7 +120,7 @@ async def test_onboarding_generates_ready_setup_for_so101_with_camera(tmp_path: 
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
-            "ROBOCLAW_SO101_SERIAL_PROBE": "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=0 error=0 value=2048\nROBOCLAW_SO101_SERIAL_OK\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
         },
     )
@@ -163,7 +170,7 @@ async def test_onboarding_stops_at_ros2_prerequisite_gate(tmp_path: Path) -> Non
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
-            "ROBOCLAW_SO101_SERIAL_PROBE": "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=0 error=0 value=2048\nROBOCLAW_SO101_SERIAL_OK\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_MISSING\n",
         },
     )
@@ -251,7 +258,7 @@ async def test_onboarding_blocks_unresponsive_so101_serial_device(tmp_path: Path
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
-            "ROBOCLAW_SO101_SERIAL_PROBE": "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=-6 error=0 value=0\n[TxRxResult] There is no status packet!\n",
+            SO101_SERIAL_PROBE_MARKER: "ROBOCLAW_SO101_SERIAL_PROBE resolved=/dev/ttyACM0 open=1 baud=1 result=-6 error=0 value=0\n[TxRxResult] There is no status packet!\n",
             "command -v ros2": "ROS2_OK\nros2 0.0.0\nROS_DISTRO=jazzy\n",
         },
     )
@@ -282,6 +289,7 @@ async def test_onboarding_accepts_chinese_connected_confirmation(tmp_path: Path)
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_MISSING\nROS2_SHELL_INIT=0\n",
             "printf \"ID=%s\\n\"": "ID=ubuntu\nVERSION_ID=22.04\nVERSION_CODENAME=jammy\nPRETTY_NAME=Ubuntu 22.04 LTS\nSHELL_NAME=bash\nWSL=0\nSUDO=1\nSUDO_PASSWORDLESS=0\n",
         },
@@ -311,6 +319,7 @@ async def test_onboarding_starts_guided_ros2_install_flow(tmp_path: Path) -> Non
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_MISSING\nROS2_SHELL_INIT=0\n",
             "printf \"ID=%s\\n\"": "ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\nPRETTY_NAME=Ubuntu 24.04 LTS\nSHELL_NAME=zsh\nCONDA_PREFIX=\nWSL=0\nSUDO=1\nSUDO_PASSWORDLESS=0\n",
         },
@@ -348,6 +357,7 @@ async def test_onboarding_advances_guided_ros2_install_steps(tmp_path: Path) -> 
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_MISSING\nROS2_SHELL_INIT=0\n",
             "printf \"ID=%s\\n\"": "ID=ubuntu\nVERSION_ID=22.04\nVERSION_CODENAME=jammy\nPRETTY_NAME=Ubuntu 22.04 LTS\nSHELL_NAME=bash\nWSL=0\nSUDO=1\nSUDO_PASSWORDLESS=0\n",
         },
@@ -387,6 +397,7 @@ async def test_onboarding_does_not_advance_ros2_install_on_continue_request(tmp_
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_MISSING\nROS2_SHELL_INIT=0\n",
             "printf \"ID=%s\\n\"": "ID=ubuntu\nVERSION_ID=22.04\nVERSION_CODENAME=jammy\nPRETTY_NAME=Ubuntu 22.04 LTS\nSHELL_NAME=bash\nWSL=0\nSUDO=1\nSUDO_PASSWORDLESS=0\n",
         },
@@ -425,6 +436,7 @@ async def test_onboarding_resumes_after_manual_ros2_install_report(tmp_path: Pat
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": [
                 "ROS2_MISSING\nROS2_SHELL_INIT=0\n",
                 "ROS2_OK\nros2 0.0.0\nROS_DISTRO=humble\n",
@@ -465,6 +477,7 @@ async def test_onboarding_keeps_partial_opt_ros_install_in_prerequisite_flow(tmp
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_PRESENT\nINSTALLED_DISTROS=jazzy\nROS2_SHELL_INIT=0\n",
             "printf \"ID=%s\\n\"": "ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\nPRETTY_NAME=Ubuntu 24.04 LTS\nSHELL_NAME=bash\nCONDA_PREFIX=\nWSL=0\nSUDO=1\nSUDO_PASSWORDLESS=0\n",
         },
@@ -496,6 +509,7 @@ async def test_onboarding_does_not_treat_ros1_install_as_ros2_available(tmp_path
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_MISSING\nROS2_SHELL_INIT=0\n",
             "printf \"ID=%s\\n\"": "ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\nPRETTY_NAME=Ubuntu 24.04 LTS\nSHELL_NAME=bash\nWSL=0\nSUDO=1\nSUDO_PASSWORDLESS=0\n",
         },
@@ -525,6 +539,7 @@ async def test_onboarding_accepts_installed_ros2_when_shell_init_is_configured(t
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_PRESENT\nINSTALLED_DISTROS=humble\nROS2_SHELL_INIT=1\n",
         },
     )
@@ -555,6 +570,7 @@ async def test_onboarding_refinement_updates_existing_setup(tmp_path: Path) -> N
         tmp_path,
         {
             "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+            SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
             "command -v ros2": "ROS2_OK\nROS_DISTRO=jazzy\n",
         },
     )
@@ -598,6 +614,7 @@ async def test_agent_loop_routes_first_run_setup_without_calling_provider(tmp_pa
         FakeExecTool(
             {
                 "for link in /dev/serial/by-id/*": "/dev/serial/by-id/usb-so101 -> /dev/ttyACM0\n/dev/ttyACM0\n",
+                SO101_SERIAL_PROBE_MARKER: SO101_SERIAL_PROBE_OK,
                 "command -v ros2": "ROS2_OK\nROS_DISTRO=jazzy\n",
             }
         )
