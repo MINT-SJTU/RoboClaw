@@ -38,6 +38,7 @@ DOCKER_ARGS=(
   --name "${CONTAINER_NAME}"
   --restart unless-stopped
   --network host
+  -w /roboclaw-source
   --user "$(id -u):$(id -g)"
   -e HOME=/roboclaw-instance/home
   -e ROBOCLAW_CONFIG_PATH=/roboclaw-instance/config.json

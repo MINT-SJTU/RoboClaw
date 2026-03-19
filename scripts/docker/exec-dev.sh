@@ -19,4 +19,4 @@ ensure_instance_dir "${INSTANCE}" "${PROFILE}"
 configure_proxy_env
 
 "${SCRIPT_DIR}/start-dev.sh" --profile "${PROFILE}" "${INSTANCE}" >/dev/null
-docker exec -it "$(dev_container_name "${INSTANCE}" "${PROFILE}")" /bin/sh
+docker exec -it -w /roboclaw-source "$(dev_container_name "${INSTANCE}" "${PROFILE}")" /bin/sh
