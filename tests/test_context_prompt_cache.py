@@ -71,3 +71,19 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_extra_runtime_context_is_injected_only_into_runtime_metadata(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    messages = builder.build_messages(
+        history=[],
+        current_message="Inspect embodied state",
+        channel="cli",
+        chat_id="direct",
+        extra_runtime_context='[Embodied Context]\n{"selected_setup_id":"so101_setup"}',
+    )
+
+    assert "[Embodied Context]" not in messages[0]["content"]
+    assert '"selected_setup_id":"so101_setup"' in str(messages[-1]["content"])

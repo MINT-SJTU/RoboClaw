@@ -67,6 +67,20 @@ class OnboardingController:
             return self._looks_like_setup_edit(content)
         return self._looks_like_setup_start(content)
 
+    def has_active_onboarding(self, session: Session) -> bool:
+        """Return whether the session is currently mid-onboarding."""
+        state = self._load_state(session)
+        return state is not None and not state.is_ready
+
+    def should_handle_setup_edit(self, session: Session, content: str) -> bool:
+        """Return whether a ready session should be routed back into setup editing."""
+        state = self._load_state(session)
+        return state is not None and state.is_ready and self._looks_like_setup_edit(content)
+
+    def looks_like_setup_start(self, content: str) -> bool:
+        """Expose setup-start detection for outer routing."""
+        return self._looks_like_setup_start(content)
+
     async def handle_message(
         self,
         msg: InboundMessage,

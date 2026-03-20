@@ -5,6 +5,7 @@ import os
 import select
 import signal
 import sys
+import uuid
 from pathlib import Path
 
 # Force UTF-8 encoding for Windows console
@@ -50,6 +51,25 @@ _PROMPT_SESSION: PromptSession | None = None
 _SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
 _LIVE_PROGRESS_LINES = 0
 _CALIBRATION_LIVE_PREFIX = "SO101 calibration live view on "
+
+
+def _new_cli_session_id() -> str:
+    """Generate a fresh CLI session id for one agent invocation."""
+    return f"cli:{uuid.uuid4().hex[:12]}"
+
+
+def _session_resume_command(session_id: str) -> str:
+    """Return the CLI command that resumes a prior session."""
+    return f"roboclaw agent --session {session_id}"
+
+
+def _print_session_exit_message(session_id: str, *, prefix: str = "Goodbye!") -> None:
+    """Show a consistent exit message with the resume command."""
+    console.print(f"\n{prefix}")
+    console.print(
+        "[dim]If you want to come back, run:[/dim] "
+        f"[bold]{_session_resume_command(session_id)}[/bold]"
+    )
 
 
 def _session_accepts_blank_input(session: object | None) -> bool:
@@ -582,7 +602,7 @@ def gateway(
 @app.command()
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    session_id: str | None = typer.Option(None, "--session", "-s", help="Session ID to resume; omit to start a new session"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
@@ -629,6 +649,7 @@ def agent(
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
     )
+    resolved_session_id = session_id or _new_cli_session_id()
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
     def _thinking_ctx():
@@ -650,7 +671,7 @@ def agent(
         # Single message mode — direct call, no bus needed
         async def run_once():
             with _thinking_ctx():
-                response = await agent_loop.process_direct(message, session_id, on_progress=_cli_progress)
+                response = await agent_loop.process_direct(message, resolved_session_id, on_progress=_cli_progress)
             _print_agent_response(response, render_markdown=markdown)
             await agent_loop.close_mcp()
 
@@ -660,16 +681,17 @@ def agent(
         from roboclaw.bus.events import InboundMessage
         _init_prompt_session()
         console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
+        console.print(f"[dim]Session: {resolved_session_id}[/dim]\n")
 
-        if ":" in session_id:
-            cli_channel, cli_chat_id = session_id.split(":", 1)
+        if ":" in resolved_session_id:
+            cli_channel, cli_chat_id = resolved_session_id.split(":", 1)
         else:
-            cli_channel, cli_chat_id = "cli", session_id
+            cli_channel, cli_chat_id = "cli", resolved_session_id
 
         def _handle_signal(signum, frame):
             sig_name = signal.Signals(signum).name
             _restore_terminal()
-            console.print(f"\nReceived {sig_name}, goodbye!")
+            _print_session_exit_message(resolved_session_id, prefix=f"Received {sig_name}, goodbye!")
             sys.exit(0)
 
         signal.signal(signal.SIGINT, _handle_signal)
@@ -716,7 +738,7 @@ def agent(
             outbound_task = asyncio.create_task(_consume_outbound())
 
             async def _run_calibration_stream_mode() -> None:
-                while _session_calibration_phase(agent_loop.sessions.get_or_create(session_id)) == "streaming":
+                while _session_calibration_phase(agent_loop.sessions.get_or_create(resolved_session_id)) == "streaming":
                     console.print("[dim]Calibration live view is active. Press Enter to stop and save.[/dim]")
                     await _wait_for_enter_async()
                     turn_done.clear()
@@ -737,13 +759,13 @@ def agent(
                         _flush_pending_tty_input()
                         user_input = await _read_interactive_input_async()
                         command = user_input.strip()
-                        current_session = agent_loop.sessions.get_or_create(session_id)
+                        current_session = agent_loop.sessions.get_or_create(resolved_session_id)
                         if not command and not _session_accepts_blank_input(current_session):
                             continue
 
                         if _is_exit_command(command):
                             _restore_terminal()
-                            console.print("\nGoodbye!")
+                            _print_session_exit_message(resolved_session_id)
                             break
 
                         turn_done.clear()
@@ -761,15 +783,15 @@ def agent(
 
                         if turn_response:
                             _print_agent_response(turn_response[0], render_markdown=markdown)
-                        if _session_calibration_phase(agent_loop.sessions.get_or_create(session_id)) == "streaming":
+                        if _session_calibration_phase(agent_loop.sessions.get_or_create(resolved_session_id)) == "streaming":
                             await _run_calibration_stream_mode()
                     except KeyboardInterrupt:
                         _restore_terminal()
-                        console.print("\nGoodbye!")
+                        _print_session_exit_message(resolved_session_id)
                         break
                     except EOFError:
                         _restore_terminal()
-                        console.print("\nGoodbye!")
+                        _print_session_exit_message(resolved_session_id)
                         break
             finally:
                 agent_loop.stop()

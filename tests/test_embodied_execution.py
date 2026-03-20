@@ -12,7 +12,7 @@ from roboclaw.agent.tools.base import Tool
 from roboclaw.agent.tools.filesystem import ListDirTool, ReadFileTool, WriteFileTool
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.bus.queue import MessageBus
-from roboclaw.config.loader import CONFIG_PATH_ENV
+from roboclaw.config.loader import CONFIG_PATH_ENV, set_config_path
 from roboclaw.embodied.execution.integration.transports.ros2 import canonical_ros2_namespace
 from roboclaw.embodied.execution.integration.control_surfaces.ros2.so101_feetech import (
     ADDR_HOMING_OFFSET,
@@ -35,7 +35,7 @@ from roboclaw.embodied.onboarding import (
     SetupStage,
     SetupStatus,
 )
-from roboclaw.providers.base import LLMResponse
+from roboclaw.providers.base import LLMResponse, ToolCallRequest
 from roboclaw.session.manager import Session
 
 
@@ -46,6 +46,11 @@ def _framework_calibration_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     calibration_path.parent.mkdir(parents=True, exist_ok=True)
     calibration_path.write_text("{}", encoding="utf-8")
     monkeypatch.setenv(CONFIG_PATH_ENV, str(config_path))
+    set_config_path(config_path)
+    try:
+        yield
+    finally:
+        set_config_path(None)
 
 
 class FakeExecTool(Tool):
@@ -85,15 +90,35 @@ class FakeExecTool(Tool):
 
 
 class RecordingProvider:
-    def __init__(self) -> None:
+    def __init__(self, responses: list[LLMResponse] | None = None) -> None:
         self.chat_calls = 0
+        self.messages: list[list[dict[str, object]]] = []
+        self.tools: list[list[dict[str, object]]] = []
+        self.responses = list(responses or [LLMResponse(content="done")])
 
     async def chat(self, *args, **kwargs) -> LLMResponse:
         self.chat_calls += 1
-        return LLMResponse(content="provider should not be called")
+        self.messages.append(list(kwargs.get("messages") or (args[0] if args else [])))
+        self.tools.append(list(kwargs.get("tools") or []))
+        if self.responses:
+            return self.responses.pop(0)
+        return LLMResponse(content="done")
 
     def get_default_model(self) -> str:
         return "openai-codex/gpt-5.4"
+
+
+def _tool_call_response(name: str, arguments: dict[str, object], *, call_id: str = "call_1") -> LLMResponse:
+    return LLMResponse(
+        content=None,
+        tool_calls=[ToolCallRequest(id=call_id, name=name, arguments=arguments)],
+    )
+
+
+def _last_tool_payload(provider: RecordingProvider, *, call_index: int = -1) -> dict[str, object]:
+    tool_messages = [msg for msg in provider.messages[call_index] if msg.get("role") == "tool"]
+    assert tool_messages
+    return json.loads(str(tool_messages[-1]["content"]))
 
 
 def _prepare_workspace(root: Path) -> None:
@@ -291,8 +316,13 @@ def _seed_ready_setup(session: Session, setup_id: str = "so101_setup") -> None:
     session.metadata[SETUP_STATE_KEY] = state.to_dict()
 
 
-def _build_loop(tmp_path: Path, exec_responses: dict[str, str | list[str]]) -> tuple[AgentLoop, RecordingProvider, FakeExecTool]:
-    provider = RecordingProvider()
+def _build_loop(
+    tmp_path: Path,
+    exec_responses: dict[str, str | list[str]],
+    *,
+    provider: RecordingProvider | None = None,
+) -> tuple[AgentLoop, RecordingProvider, FakeExecTool]:
+    provider = provider or RecordingProvider()
     loop = AgentLoop(
         bus=MessageBus(),
         provider=provider,
@@ -354,13 +384,25 @@ def _standard_ros2_responses(setup_id: str) -> dict[str, str]:
 async def test_ready_session_routes_embodied_commands_without_provider(tmp_path: Path) -> None:
     _prepare_workspace(tmp_path)
     _write_setup_assets(tmp_path, "so101_setup")
-    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Opened."),
+        ]
+    )
+    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
     session = _seed_session(loop)
 
     response = await loop.process_direct("打开夹爪", session_key=session.key)
 
-    assert provider.chat_calls == 0
-    assert "provider should not be called" not in response
+    assert provider.chat_calls == 2
+    assert response == "Opened."
+    assert any(tool["function"]["name"] == "embodied_status" for tool in provider.tools[0])
+    assert any(tool["function"]["name"] == "embodied_control" for tool in provider.tools[0])
+    assert "[Embodied Context]" in str(provider.messages[0][-1]["content"])
     assert any("execute_primitive" in call for call in fake_exec.calls)
 
 
@@ -380,12 +422,21 @@ async def test_chinese_aliases_normalize_to_expected_primitives(
 ) -> None:
     _prepare_workspace(tmp_path)
     _write_setup_assets(tmp_path, "so101_setup")
-    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": expected_fragment if expected_fragment != "go_named_pose" else "go_named_pose", "primitive_args": {"name": "home"} if expected_fragment == "go_named_pose" else {}},
+            ),
+            LLMResponse(content="Done."),
+        ]
+    )
+    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
     session = _seed_session(loop)
 
     await loop.process_direct(message, session_key=session.key)
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 2
     assert any(expected_fragment in call for call in fake_exec.calls)
 
 
@@ -393,7 +444,15 @@ async def test_chinese_aliases_normalize_to_expected_primitives(
 async def test_runtime_session_is_reused_across_multiple_commands(tmp_path: Path) -> None:
     _prepare_workspace(tmp_path)
     _write_setup_assets(tmp_path, "so101_setup")
-    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response("embodied_control", {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}}),
+            LLMResponse(content="Opened."),
+            _tool_call_response("embodied_control", {"action": "run_primitive", "primitive_name": "gripper_close", "primitive_args": {}}),
+            LLMResponse(content="Closed."),
+        ]
+    )
+    loop, provider, fake_exec = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
     session = _seed_session(loop)
 
     await loop.process_direct("打开夹爪", session_key=session.key)
@@ -401,8 +460,32 @@ async def test_runtime_session_is_reused_across_multiple_commands(tmp_path: Path
 
     connect_calls = [call for call in fake_exec.calls if "ros2 service call" in call and "/connect" in call]
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 4
     assert len(connect_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_active_setup_is_bound_and_visible_to_agent(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    _write_setup_assets(tmp_path, "so101_setup")
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Opened."),
+        ]
+    )
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
+    session = _seed_session(loop)
+
+    await loop.process_direct("打开夹爪", session_key=session.key)
+
+    assert session.metadata["embodied_active_setup"] == "so101_setup"
+    snapshot = loop.embodied_execution.build_agent_snapshot(session)
+    assert snapshot.active_setup_id == "so101_setup"
+    assert '"active_setup_id": "so101_setup"' in str(provider.messages[0][-1]["content"])
 
 
 @pytest.mark.asyncio
@@ -412,7 +495,13 @@ async def test_chinese_calibration_phrase_routes_to_calibration_without_provider
 ) -> None:
     _prepare_workspace(tmp_path)
     _write_setup_assets(tmp_path, "so101_setup")
-    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response("embodied_control", {"action": "calibrate"}),
+            LLMResponse(content="calibration prompt"),
+        ]
+    )
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
     session = _seed_session(loop)
 
     async def fake_execute_calibrate(context, on_progress=None):
@@ -428,7 +517,7 @@ async def test_chinese_calibration_phrase_routes_to_calibration_without_provider
 
     response = await loop.process_direct("我要标定", session_key=session.key)
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 2
     assert response == "calibration prompt"
     assert session.metadata["embodied_calibration"]["phase"] == "await_mid_pose_ack"
 
@@ -438,14 +527,99 @@ async def test_setup_ambiguity_prompts_for_clarification(tmp_path: Path) -> None
     _prepare_workspace(tmp_path)
     _write_setup_assets(tmp_path, "so101_setup")
     _write_setup_assets(tmp_path, "lab_arm_setup")
-    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"))
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response("embodied_status", {}),
+            LLMResponse(content="I found multiple embodied setups: so101_setup, lab_arm_setup. Tell me which setup id to use."),
+        ]
+    )
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
 
     response = await loop.process_direct("打开夹爪", session_key="cli:ambiguous")
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 2
     assert "so101_setup" in response
     assert "lab_arm_setup" in response
     assert any(token in response.lower() for token in ("which", "clarify", "哪个", "哪一个", "哪台"))
+
+
+@pytest.mark.asyncio
+async def test_direct_control_without_ready_setup_routes_into_onboarding(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    loop, provider, _ = _build_loop(tmp_path, {})
+
+    response = await loop.process_direct("打开夹爪", session_key="cli:first_time")
+
+    assert provider.chat_calls == 0
+    session = loop.sessions.get_or_create("cli:first_time")
+    assert SETUP_STATE_KEY in session.metadata
+    assert any(token in response.lower() for token in ("robot", "setup", "so101", "connect", "机器人"))
+
+
+@pytest.mark.asyncio
+async def test_embodied_control_reports_needs_calibration_for_first_motion_failure(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    _write_setup_assets(tmp_path, "so101_setup")
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_close", "primitive_args": {}},
+            ),
+            LLMResponse(content="Need calibration first."),
+        ]
+    )
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
+    session = _seed_session(loop)
+
+    config_path = tmp_path / "config.json"
+    calibration_path = config_path.parent / "calibration" / "so101" / "so101_real.json"
+    calibration_path.unlink()
+
+    await loop.process_direct("闭合夹爪", session_key=session.key)
+
+    payload = _last_tool_payload(provider)
+    assert payload["ok"] is False
+    assert payload["needs_calibration"] is True
+    assert "calibrate" in payload["suggested_next_actions"]
+
+
+@pytest.mark.asyncio
+async def test_embodied_control_suggests_debug_after_non_calibration_failure(tmp_path: Path) -> None:
+    _prepare_workspace(tmp_path)
+    _write_setup_assets(tmp_path, "so101_setup")
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Try debug."),
+        ]
+    )
+    loop, provider, _ = _build_loop(tmp_path, _standard_ros2_responses("so101_setup"), provider=provider)
+    session = _seed_session(loop)
+
+    async def fake_move(context, primitive_name: str, primitive_args=None, on_progress=None):
+        assert primitive_name == "gripper_open"
+        return ProcedureExecutionResult(
+            procedure=ProcedureKind.MOVE,
+            ok=False,
+            message="Primitive rejected by adapter.",
+            details={"error_code": "rejected"},
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(loop.embodied_execution.executor, "execute_move", fake_move)
+    try:
+        await loop.process_direct("打开夹爪", session_key=session.key)
+    finally:
+        monkeypatch.undo()
+
+    payload = _last_tool_payload(provider)
+    assert payload["ok"] is False
+    assert payload["needs_calibration"] is False
+    assert "debug" in payload["suggested_next_actions"]
 
 
 @pytest.mark.asyncio
@@ -457,12 +631,21 @@ async def test_adapter_ignores_unrelated_ros_nodes_when_required_interfaces_are_
     responses["ros2 service list"] = "/some_unrelated_service\n"
     responses["ros2 action list"] = "/some_other_robot_action\n"
     responses["ros2 topic list"] = "/cb_left_hand_state\n/cb_left_hand_control_cmd\n"
-    loop, provider, _ = _build_loop(tmp_path, responses)
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Setup `so101_setup` is not ready yet: missing required ROS2 interfaces."),
+        ]
+    )
+    loop, provider, _ = _build_loop(tmp_path, responses, provider=provider)
     session = _seed_session(loop)
 
     response = await loop.process_direct("打开夹爪", session_key=session.key)
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 2
     assert "handretarget" not in response.lower()
     assert "linker_hand_sdk" not in response.lower()
     assert any(token in response.lower() for token in ("missing", "required", "unavailable", "not ready"))
@@ -500,12 +683,21 @@ async def test_control_surface_profile_can_fallback_to_primitive_services_withou
     responses[f"ros2 topic echo --once {namespace}/state"] = (
         "data: '{\"connected\": true, \"gripper_percent\": 100.0}'\n---\n"
     )
-    loop, provider, fake_exec = _build_loop(tmp_path, responses)
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Primitive `gripper_open` completed on setup `so101_setup`. Current gripper state: open."),
+        ]
+    )
+    loop, provider, fake_exec = _build_loop(tmp_path, responses, provider=provider)
     session = _seed_session(loop)
 
     response = await loop.process_direct("打开夹爪", session_key=session.key)
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 2
     assert "Current gripper state" in response
     assert any("--field data" in call for call in fake_exec.calls)
     assert any("primitive_gripper_open" in call for call in fake_exec.calls)
@@ -516,12 +708,21 @@ async def test_adapter_does_not_launch_duplicate_runtime_when_connect_service_ex
     _prepare_workspace(tmp_path)
     _write_setup_assets(tmp_path, "so101_setup", launch_command="python -m fake_control_surface")
     responses = _standard_ros2_responses("so101_setup")
-    loop, provider, fake_exec = _build_loop(tmp_path, responses)
+    provider = RecordingProvider(
+        responses=[
+            _tool_call_response(
+                "embodied_control",
+                {"action": "run_primitive", "primitive_name": "gripper_open", "primitive_args": {}},
+            ),
+            LLMResponse(content="Opened."),
+        ]
+    )
+    loop, provider, fake_exec = _build_loop(tmp_path, responses, provider=provider)
     session = _seed_session(loop)
 
     await loop.process_direct("打开夹爪", session_key=session.key)
 
-    assert provider.chat_calls == 0
+    assert provider.chat_calls == 2
     assert not any("nohup bash -lc" in call for call in fake_exec.calls)
 
 

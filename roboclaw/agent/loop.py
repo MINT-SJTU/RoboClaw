@@ -24,6 +24,7 @@ from roboclaw.agent.tools.spawn import SpawnTool
 from roboclaw.agent.tools.web import WebFetchTool, WebSearchTool
 from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.execution.controller import EmbodiedExecutionController
+from roboclaw.embodied.execution.tools import EmbodiedControlTool, EmbodiedStatusTool
 from roboclaw.embodied.execution.orchestration.runtime import RuntimeManager
 from roboclaw.bus.queue import MessageBus
 from roboclaw.embodied.onboarding import OnboardingController
@@ -137,6 +138,8 @@ class AgentLoop:
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(EmbodiedStatusTool(self.embodied_execution))
+        self.tools.register(EmbodiedControlTool(self.embodied_execution))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
 
@@ -168,6 +171,24 @@ class AgentLoop:
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
                     tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+
+    def _set_embodied_tool_context(
+        self,
+        session: Session,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """Bind the current session/progress callback to embodied tools."""
+        if tool := self.tools.get("embodied_status"):
+            if hasattr(tool, "set_context"):
+                tool.set_context(session)
+        if tool := self.tools.get("embodied_control"):
+            if hasattr(tool, "set_context"):
+                tool.set_context(session, on_progress)
+
+    def _embodied_runtime_context(self, session: Session) -> str:
+        """Render the current embodied snapshot into runtime metadata."""
+        snapshot = self.embodied_execution.build_agent_snapshot(session)
+        return "[Embodied Context]\n" + json.dumps(snapshot.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -352,10 +373,14 @@ class AgentLoop:
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+            self._set_embodied_tool_context(session)
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
                 history=history,
-                current_message=msg.content, channel=channel, chat_id=chat_id,
+                current_message=msg.content,
+                channel=channel,
+                chat_id=chat_id,
+                extra_runtime_context=self._embodied_runtime_context(session),
             )
             final_content, _, all_msgs = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
@@ -434,7 +459,9 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        if self.onboarding.should_handle(session, msg.content):
+        self._set_embodied_tool_context(session, on_progress or _bus_progress)
+
+        if self.onboarding.has_active_onboarding(session) or self.onboarding.should_handle_setup_edit(session, msg.content):
             response = await self.onboarding.handle_message(
                 msg,
                 session,
@@ -443,8 +470,22 @@ class AgentLoop:
             self.sessions.save(session)
             return response
 
-        if self.embodied_execution.should_handle(session, msg.content):
-            response = await self.embodied_execution.handle_message(
+        if self.embodied_execution.has_pending_calibration(session):
+            response = await self.embodied_execution.handle_pending_calibration_message(
+                msg,
+                session,
+                on_progress=on_progress or _bus_progress,
+            )
+            self.sessions.save(session)
+            return response
+
+        snapshot = self.embodied_execution.build_agent_snapshot(session)
+        if (
+            snapshot.selected_setup_id is None
+            and not snapshot.candidates
+            and self.embodied_execution.looks_like_embodied_request(msg.content)
+        ):
+            response = await self.onboarding.handle_message(
                 msg,
                 session,
                 on_progress=on_progress or _bus_progress,
@@ -457,7 +498,9 @@ class AgentLoop:
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
-            channel=msg.channel, chat_id=msg.chat_id,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            extra_runtime_context="[Embodied Context]\n" + json.dumps(snapshot.to_dict(), ensure_ascii=False, sort_keys=True),
         )
 
         final_content, _, all_msgs = await self._run_agent_loop(

@@ -1,4 +1,6 @@
+import asyncio
 import shutil
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -177,7 +179,8 @@ def test_agent_help_shows_workspace_and_config_options():
 
 
 def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_runtime):
-    result = runner.invoke(app, ["agent", "-m", "hello"])
+    with patch("roboclaw.cli.commands._new_cli_session_id", return_value="cli:test-new-session"):
+        result = runner.invoke(app, ["agent", "-m", "hello"])
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_config"].call_args.args == (None,)
@@ -188,7 +191,70 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
         mock_agent_runtime["config"].workspace_path
     )
     mock_agent_runtime["agent_loop"].process_direct.assert_awaited_once()
+    assert mock_agent_runtime["agent_loop"].process_direct.await_args.args[:2] == ("hello", "cli:test-new-session")
     mock_agent_runtime["print_response"].assert_called_once_with("mock-response", render_markdown=True)
+
+
+def test_agent_uses_explicit_session_when_provided(mock_agent_runtime):
+    result = runner.invoke(app, ["agent", "-m", "hello", "--session", "cli:resume-me"])
+
+    assert result.exit_code == 0
+    mock_agent_runtime["agent_loop"].process_direct.assert_awaited_once()
+    assert mock_agent_runtime["agent_loop"].process_direct.await_args.args[:2] == ("hello", "cli:resume-me")
+
+
+def test_agent_interactive_exit_prints_resume_command(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+
+    class _FakeBus:
+        async def consume_outbound(self):
+            await asyncio.sleep(3600)
+
+        async def publish_inbound(self, _msg):
+            return None
+
+    class _FakeSessions:
+        def __init__(self) -> None:
+            self._session = SimpleNamespace(metadata={})
+
+        def get_or_create(self, _session_id: str):
+            return self._session
+
+    class _FakeAgentLoop:
+        def __init__(self, *args, **kwargs) -> None:
+            self.channels_config = None
+            self.sessions = _FakeSessions()
+            self._stop_event = asyncio.Event()
+
+        async def run(self) -> None:
+            await self._stop_event.wait()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            self._stop_event.set()
+
+    monkeypatch.setattr("roboclaw.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("roboclaw.config.paths.get_cron_dir", lambda: tmp_path / "cron")
+    monkeypatch.setattr("roboclaw.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("roboclaw.cli.commands._make_provider", lambda _config: object())
+    monkeypatch.setattr("roboclaw.bus.queue.MessageBus", _FakeBus)
+    monkeypatch.setattr("roboclaw.cron.service.CronService", lambda _store: object())
+    monkeypatch.setattr("roboclaw.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("roboclaw.cli.commands._init_prompt_session", lambda: None)
+    monkeypatch.setattr("roboclaw.cli.commands._restore_terminal", lambda: None)
+    monkeypatch.setattr("roboclaw.cli.commands._flush_pending_tty_input", lambda: None)
+    monkeypatch.setattr("roboclaw.cli.commands._read_interactive_input_async", AsyncMock(return_value="exit"))
+    monkeypatch.setattr("roboclaw.cli.commands.signal.signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("roboclaw.cli.commands._new_cli_session_id", lambda: "cli:test-new-session")
+
+    result = runner.invoke(app, ["agent"])
+
+    assert result.exit_code == 0
+    assert "Goodbye!" in result.stdout
+    assert "roboclaw agent --session cli:test-new-session" in result.stdout
 
 
 def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path):
