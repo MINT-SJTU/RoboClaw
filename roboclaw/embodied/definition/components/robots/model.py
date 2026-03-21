@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from roboclaw.embodied.definition.foundation.schema import (
     ActionSchema,
@@ -17,6 +18,9 @@ from roboclaw.embodied.definition.foundation.schema import (
     SafetyProfile,
     ToleranceSpec,
 )
+
+if TYPE_CHECKING:
+    from roboclaw.embodied.capabilities import CapabilityProfile
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,11 @@ class RobotManifest:
 
     def supports(self, capability: CapabilityFamily) -> bool:
         return capability in self.capability_families
+
+    def capability_profile(self) -> CapabilityProfile:
+        from roboclaw.embodied.capabilities import infer_capabilities
+
+        return infer_capabilities(self)
 
     def primitive(self, name: str) -> PrimitiveSpec | None:
         return next((primitive for primitive in self.primitives if primitive.name == name), None)

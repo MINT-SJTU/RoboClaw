@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from roboclaw.embodied.definition.foundation.schema import CapabilityFamily
 from roboclaw.embodied.execution.orchestration.procedures.model import ProcedureKind
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ class SkillSpec:
     description: str
     steps: tuple[SkillStep, ...]
     parameters: tuple[str, ...] = ()
+    required_capabilities: tuple[CapabilityFamily, ...] = field(default_factory=tuple)
 
 
 async def execute_skill(

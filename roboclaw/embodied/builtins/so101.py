@@ -13,6 +13,7 @@ from typing import Any, TYPE_CHECKING
 from roboclaw.embodied.builtins.model import BuiltinEmbodiment
 from roboclaw.embodied.builtins.registry import register_builtin_embodiment
 from roboclaw.embodied.definition.components.robots import SO101_ROBOT
+from roboclaw.embodied.definition.foundation.schema import CapabilityFamily
 from roboclaw.embodied.execution.integration.adapters.ros2.profiles import (
     PrimitiveAliasSpec,
     PrimitiveServiceSpec,
@@ -675,11 +676,13 @@ SO101_BUILTIN = BuiltinEmbodiment(
                 SkillStep("go_named_pose", {"name": "home"}),
                 SkillStep("gripper_open"),
             ),
+            required_capabilities=(CapabilityFamily.END_EFFECTOR, CapabilityFamily.NAMED_POSE),
         ),
         SkillSpec(
             name="reset_arm",
             description="Return to home and open the gripper.",
             steps=(SkillStep("go_named_pose", {"name": "home"}), SkillStep("gripper_open")),
+            required_capabilities=(CapabilityFamily.NAMED_POSE,),
         ),
     ),
     control_surface_runtime_factory=build_so101_runtime,
