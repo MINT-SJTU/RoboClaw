@@ -1,0 +1,2 @@
+"""Built-in research recipes."""
+
