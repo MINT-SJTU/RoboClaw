@@ -23,6 +23,16 @@ CAPABILITY_LABELS = {
     CapabilityFamily.NAMED_POSE: "has_named_poses",
     CapabilityFamily.TORQUE_CONTROL: "has_torque_control",
 }
+_HARDWARE_CAPABILITIES = frozenset(
+    {
+        CapabilityFamily.JOINT_MOTION,
+        CapabilityFamily.CARTESIAN_MOTION,
+        CapabilityFamily.BASE_MOTION,
+        CapabilityFamily.HEAD_MOTION,
+        CapabilityFamily.END_EFFECTOR,
+        CapabilityFamily.CAMERA,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +50,14 @@ class CapabilityProfile:
         return all(cap in self.capabilities for cap in skill.required_capabilities)
 
 
+@dataclass(frozen=True)
+class CapabilityGap:
+    requested_action: str
+    missing_capabilities: tuple[str, ...]
+    has_hardware: bool
+    suggestion: str
+
+
 def infer_capabilities(manifest: RobotManifest) -> CapabilityProfile:
     capabilities = frozenset(manifest.capability_families)
     from_primitives = frozenset(primitive.capability_family for primitive in manifest.primitives)
@@ -54,3 +72,28 @@ def resolve_available_skills(
 ) -> tuple[SkillSpec, ...]:
     """Return skills whose required_capabilities are satisfied by this profile."""
     return tuple(skill for skill in all_skills if profile.can_run_skill(skill))
+
+
+def diagnose_gap(
+    profile: CapabilityProfile,
+    skill: SkillSpec | None = None,
+    requested_capabilities: tuple[CapabilityFamily, ...] = (),
+) -> CapabilityGap | None:
+    """Return None when all capabilities are met, or a small diagnosis for what is missing."""
+    required = set(skill.required_capabilities if skill else requested_capabilities)
+    missing = tuple(
+        sorted(required - profile.capabilities, key=lambda capability: CAPABILITY_LABELS.get(capability, capability.value))
+    )
+    if not missing:
+        return None
+    missing_labels = tuple(CAPABILITY_LABELS.get(capability, capability.value) for capability in missing)
+    has_hardware = not any(capability in _HARDWARE_CAPABILITIES for capability in missing)
+    return CapabilityGap(
+        requested_action=skill.name if skill else "unknown",
+        missing_capabilities=missing_labels,
+        has_hardware=has_hardware,
+        suggestion="Train a policy for this task" if has_hardware else "This robot does not have the required hardware",
+    )
+
+
+diagnose_capability_gap = diagnose_gap

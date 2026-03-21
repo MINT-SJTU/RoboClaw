@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.embodied.builtins import get_builtin_embodiment_for_robot, list_ros2_profiles
-from roboclaw.embodied.capabilities import resolve_available_skills
+from roboclaw.embodied.capabilities import diagnose_gap, resolve_available_skills
 from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.embodied.catalog import build_catalog
 from roboclaw.embodied.localization import choose_language, localize_text
@@ -459,6 +459,23 @@ class EmbodiedExecutionController:
                         zh=f"机器人 `{context.robot.id}` 不支持 skill `{skill_name}`。",
                     ),
                     details={},
+                )
+            gap = diagnose_gap(context.robot.capability_profile(), skill=skill)
+            if gap is not None:
+                missing = ", ".join(gap.missing_capabilities)
+                next_actions = ("collect_data", "start_training") if gap.has_hardware else ("check_robot_hardware", "choose_supported_skill")
+                return EmbodiedToolResult(
+                    ok=False,
+                    action=action,
+                    setup_id=setup.setup_id,
+                    runtime_status=context.runtime.status.value,
+                    message=localize_text(
+                        context.preferred_language,
+                        en=f"Cannot run `{skill.name}`: missing {missing}. {gap.suggestion}.",
+                        zh=f"无法执行 `{skill.name}`：缺少 {missing}。{'硬件能力足够，但还没有对应的已训练策略。要不要先采集数据并训练一个？' if gap.has_hardware else '当前机器人缺少所需硬件。请改用具备这些能力的机器人，或先补齐硬件配置。'}",
+                    ),
+                    suggested_next_actions=next_actions,
+                    details={"missing_capabilities": gap.missing_capabilities, "has_hardware": gap.has_hardware},
                 )
             result = await execute_skill(
                 self.executor,
