@@ -125,7 +125,8 @@ def launch_command(state: SetupOnboardingState) -> str | None:
         joint_mapping = json.dumps(facts.get("sim_joint_mapping", {}) or {}, ensure_ascii=True, sort_keys=True)
         return " ".join(
             [
-                "python -m roboclaw.embodied.simulation.mujoco_ros2_node",
+                "source /opt/ros/*/setup.bash 2>/dev/null;",
+                "/usr/bin/python3 -m roboclaw.embodied.simulation.mujoco_ros2_node",
                 f"--model-path {shlex.quote(model_path)}",
                 f"--namespace {shlex.quote(namespace)}",
                 f"--joint-mapping {shlex.quote(joint_mapping)}",

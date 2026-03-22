@@ -45,11 +45,17 @@ class MujocoRuntime:
     def start(self) -> None:
         if self.is_running:
             return
-        model_path = Path(self.model_path)
+        model_path = Path(self.model_path).resolve()
         if not model_path.exists():
             raise FileNotFoundError(f"MuJoCo model file not found: {model_path}")
         mujoco = self._import_mujoco()
-        self._model = mujoco.MjModel.from_xml_path(str(model_path))
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(model_path.parent)
+            self._model = mujoco.MjModel.from_xml_path(str(model_path))
+        finally:
+            os.chdir(old_cwd)
         self._data = mujoco.MjData(self._model)
 
     def stop(self) -> None:
