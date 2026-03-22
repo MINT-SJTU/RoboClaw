@@ -142,14 +142,21 @@ class Ros2ActionServiceAdapter:
         self._active_target_id = target_id
         await self._maybe_launch_runtime(config=config)
         service = self._service_spec("connect", required=True)
+        # After launching, wait for the connect service to appear in the ROS2 graph
+        if self._launched and service is not None:
+            for _ in range(10):
+                available = await self._list_runtime_interfaces("service")
+                if service.path in available:
+                    break
+                await asyncio.sleep(1.0)
         result = await self._call_service(
             service,
             payload={"deployment_id": self.deployment.id},
             operation=AdapterOperation.CONNECT,
         )
         if not result.ok and self._launched:
-            for _ in range(2):
-                await asyncio.sleep(1.0)
+            for _ in range(3):
+                await asyncio.sleep(2.0)
                 result = await self._call_service(
                     service,
                     payload={"deployment_id": self.deployment.id},
@@ -678,26 +685,28 @@ class Ros2ActionServiceAdapter:
 
     async def _maybe_launch_runtime(self, *, config: dict[str, Any] | None = None) -> None:
         launch_command = str((config or {}).get("launch_command") or self.deployment.connection.get("launch_command") or "").strip()
-        if not launch_command or self._launched:
+        if not launch_command:
             return
         connect_service = self._service_spec("connect", required=False)
+        # If already launched, verify the service is still reachable before skipping
+        if self._launched and connect_service is not None:
+            available_services = await self._list_runtime_interfaces("service")
+            if connect_service.path in available_services:
+                return
+            # Service disappeared — runtime died, allow re-launch
+            self._launched = False
+        if self._launched:
+            return
         if connect_service is not None:
             available_services = await self._list_runtime_interfaces("service")
             if connect_service.path in available_services:
                 self._launched = True
                 return
-        if connect_service is None:
-            wait_clause = "sleep 4"
-        else:
-            wait_clause = (
-                f"for _ in 1 2 3 4 5 6 7 8; do "
-                f"ros2 service list | grep -Fx {shlex.quote(connect_service.path)} >/dev/null 2>&1 && break; "
-                "sleep 1; "
-                "done"
-            )
-        await self._run_ros2_command(
-            f"nohup bash -lc {shlex.quote(launch_command)} >/tmp/{self.adapter_id}_launch.log 2>&1 & {wait_clause}"
-        )
+        # Launch the runtime directly via exec tool to avoid nested quoting issues
+        log_path = f"/tmp/{self.adapter_id}_launch.log"
+        launch_script = f"nohup bash -lc {shlex.quote(launch_command)} >{log_path} 2>&1 & sleep 2"
+        if self.tools is not None and hasattr(self.tools, "execute"):
+            await self.tools.execute("exec", {"command": launch_script})
         self._launched = True
 
     async def _run_ros2_command(self, command: str) -> str:
