@@ -87,6 +87,7 @@ RUN if [ "${ROBOCLAW_INSTALL_ROS2}" = "1" ]; then \
         || (curl -fsSL https://bootstrap.pypa.io/get-pip.py | /usr/bin/python3 - --break-system-packages --force-reinstall && \
             /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages --ignore-requires-python --ignore-installed .); \
     fi
+RUN python -m pip install --no-cache-dir --break-system-packages mujoco Pillow || true
 RUN python -c "import roboclaw; import scservo_sdk; print('scservo_sdk: found (vendored)')"
 RUN if [ "${ROBOCLAW_INSTALL_ROS2}" = "1" ]; then \
       /usr/bin/python3 -c "import roboclaw; import scservo_sdk; import pydantic; import pydantic_core; print('control-python modules: ok')"; \
