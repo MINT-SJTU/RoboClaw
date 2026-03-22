@@ -43,7 +43,7 @@ from roboclaw.embodied.onboarding.ros2_install import (
     ros2_install_summary,
     select_ros2_recipe,
 )
-from roboclaw.embodied.workspace import WorkspaceInspectOptions, WorkspaceLintProfile, inspect_workspace_assets
+from roboclaw.embodied.workspace import WorkspaceInspectOptions, WorkspaceIssueLevel, WorkspaceLintProfile, inspect_workspace_assets
 from roboclaw.session.manager import Session
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -482,8 +482,8 @@ class StageHandler:
         )
         if not validation.has_errors:
             return None
-        # Only report issues related to this setup's assets
-        issues = validation.issues
+        # Only report errors (not warnings) related to this setup's assets
+        issues = [i for i in validation.issues if i.level == WorkspaceIssueLevel.ERROR]
         if setup_id:
             issues = [i for i in issues if setup_id in i.path]
         if not issues:

@@ -20,7 +20,7 @@ from roboclaw.embodied.onboarding.ros2_install import (
     select_ros2_recipe,
 )
 from roboclaw.embodied.probes import ToolRunner
-from roboclaw.embodied.workspace import WorkspaceInspectOptions, WorkspaceLintProfile, inspect_workspace_assets
+from roboclaw.embodied.workspace import WorkspaceInspectOptions, WorkspaceIssueLevel, WorkspaceLintProfile, inspect_workspace_assets
 
 try:
     from roboclaw.embodied.onboarding.asset_generator import AssetGenerator
@@ -272,9 +272,10 @@ class EnvironmentProbe:
             options=WorkspaceInspectOptions(lint_profile=WorkspaceLintProfile.BASIC),
         )
         if validation.has_errors:
-            # Only block on issues related to this setup's assets
+            # Only block on errors (not warnings) related to this setup's assets
             setup_prefix = state.setup_id or ""
-            relevant = [i for i in validation.issues if setup_prefix and setup_prefix in i.path] if setup_prefix else list(validation.issues)
+            errors_only = [i for i in validation.issues if i.level == WorkspaceIssueLevel.ERROR]
+            relevant = [i for i in errors_only if setup_prefix and setup_prefix in i.path] if setup_prefix else errors_only
             if relevant:
                 issues = "\n".join(f"- {issue.path}: {issue.message}" for issue in relevant[:5])
                 return (

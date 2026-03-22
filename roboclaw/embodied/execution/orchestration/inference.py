@@ -39,16 +39,13 @@ class _ZeroPolicy:
 
 
 def _load_policy(checkpoint_path: str) -> Any:
-    try:
-        torch = importlib.import_module("torch")
-        from roboclaw.embodied.learning.policies.act import ACTConfig, ACTPolicy
-        model = ACTPolicy(ACTConfig())
-        state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
-    except Exception:
-        return _ZeroPolicy()
+    torch = importlib.import_module("torch")
+    from roboclaw.embodied.learning.policies.act import ACTConfig, ACTPolicy
+    model = ACTPolicy(ACTConfig())
+    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
 
 
 async def start_inference(
@@ -62,7 +59,10 @@ async def start_inference(
         if not connected.ok:
             return InferenceResult(False, session.steps_completed, connected.message, dict(connected.details))
     adapter = executor._adapter(context)
-    policy = _load_policy(session.checkpoint_path)
+    try:
+        policy = _load_policy(session.checkpoint_path)
+    except Exception as exc:
+        return InferenceResult(False, 0, f"Failed to load policy: {exc}", {"error": str(exc)})
     session.running = True
     session.stop_event = session.stop_event or asyncio.Event()
     context.runtime.status = RuntimeStatus.BUSY
