@@ -9,6 +9,8 @@ import json
 import os
 import sys
 
+from roboclaw.embodied.scan import restore_stderr, suppress_stderr
+
 PRESENT_POS_ADDR = 56
 PRESENT_POS_LEN = 2
 MOTOR_IDS = list(range(1, 7))
@@ -54,7 +56,7 @@ def read_positions(
     return positions
 
 
-def detect_motion(baseline: dict[int, int], current: dict[int, int], threshold: int = MOTION_THRESHOLD) -> int:
+def detect_motion(baseline: dict[int, int], current: dict[int, int]) -> int:
     """Compute total absolute delta between baseline and current positions."""
     total = 0
     for mid, base_val in baseline.items():
@@ -73,9 +75,6 @@ def _resolve_port_path(port: dict) -> str:
 def _resolve_port_by_id(port: dict) -> str:
     """Pick a stable identifier for set_arm (prefer by_id)."""
     return port.get("by_id") or port.get("dev") or port.get("by_path", "")
-
-
-from roboclaw.embodied.scan import restore_stderr, suppress_stderr
 
 
 def _probe_single_port(port: dict) -> dict | None:

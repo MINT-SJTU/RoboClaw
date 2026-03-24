@@ -350,7 +350,6 @@ class EmbodiedTool(Tool):
         from roboclaw.embodied.embodiment.so101 import SO101Controller
         from roboclaw.embodied.learning.act import ACTPipeline
         from roboclaw.embodied.runner import LocalLeRobotRunner
-        from roboclaw.embodied.setup import find_arm
 
         arms = setup.get("arms", [])
         followers = [a for a in arms if "follower" in a.get("type", "")]
@@ -438,8 +437,6 @@ def _auto_resolve(
     arms: list[dict], follower_names: list[str], leader_names: list[str],
 ) -> dict[str, Any] | str:
     """Auto-resolve when one or both name lists are empty."""
-    from roboclaw.embodied.setup import find_arm
-
     all_followers = [a for a in arms if "follower" in a.get("type", "")]
     all_leaders = [a for a in arms if "leader" in a.get("type", "")]
 
