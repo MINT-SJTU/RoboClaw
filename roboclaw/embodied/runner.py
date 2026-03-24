@@ -33,6 +33,11 @@ class LocalLeRobotRunner:
             stderr.decode("utf-8", errors="replace"),
         )
 
+    async def run_interactive(self, argv: list[str]) -> int:
+        """Run command with inherited TTY (user sees output directly). Returns exit code."""
+        process = await asyncio.create_subprocess_exec(*argv)
+        return await process.wait()
+
     async def run_detached(self, argv: list[str], log_dir: Path) -> str:
         """Run command in background, return job_id (uuid). Save pid and log path."""
         log_dir.mkdir(parents=True, exist_ok=True)

@@ -64,11 +64,13 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        tty_handoff: Any = None,
     ):
         from roboclaw.config.schema import ExecToolConfig, WebSearchConfig
 
         self.bus = bus
         self.channels_config = channels_config
+        self.tty_handoff = tty_handoff
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
@@ -134,7 +136,7 @@ class AgentLoop:
             self.tools.register(CronTool(self.cron_service))
         if not self.restrict_to_workspace:
             from roboclaw.embodied.tool import EmbodiedTool
-            self.tools.register(EmbodiedTool())
+            self.tools.register(EmbodiedTool(tty_handoff=self.tty_handoff))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""

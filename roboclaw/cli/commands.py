@@ -690,6 +690,20 @@ def agent(
     else:
         logger.disable("roboclaw")
 
+    # TTY handoff for interactive embodied commands (calibrate, teleoperate, record)
+    async def _embodied_tty_handoff(*, start: bool, label: str) -> None:
+        nonlocal _thinking
+        if start:
+            if _thinking and _thinking._spinner and _thinking._active:
+                _thinking._spinner.stop()
+            _flush_pending_tty_input()
+            console.print(f"\n[dim]Executing {label}...[/dim]")
+        else:
+            _flush_pending_tty_input()
+            console.print(f"[dim]{label} finished.[/dim]\n")
+            if _thinking and _thinking._spinner and _thinking._active:
+                _thinking._spinner.start()
+
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -704,6 +718,7 @@ def agent(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        tty_handoff=_embodied_tty_handoff,
     )
 
     # Shared reference for progress callbacks

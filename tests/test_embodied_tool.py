@@ -71,9 +71,10 @@ async def test_doctor_action() -> None:
 
 @pytest.mark.asyncio
 async def test_calibrate_all_arms() -> None:
-    tool = EmbodiedTool()
+    mock_handoff = AsyncMock()
+    tool = EmbodiedTool(tty_handoff=mock_handoff)
     mock_runner = AsyncMock()
-    mock_runner.run.return_value = (0, "Calibration done", "")
+    mock_runner.run_interactive.return_value = 0
 
     with (
         patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP),
@@ -85,7 +86,8 @@ async def test_calibrate_all_arms() -> None:
     assert "2 succeeded" in result
     assert "follower" in result
     assert "leader" in result
-    assert mock_runner.run.call_count == 2
+    assert mock_runner.run_interactive.call_count == 2
+    assert mock_handoff.call_count == 4  # start+stop for each arm
 
 
 @pytest.mark.asyncio
@@ -98,10 +100,18 @@ async def test_calibrate_no_arms() -> None:
 
 
 @pytest.mark.asyncio
+async def test_calibrate_no_tty() -> None:
+    tool = EmbodiedTool()  # no tty_handoff
+    with patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP):
+        result = await tool.execute(action="calibrate")
+    assert "local terminal" in result.lower()
+
+
+@pytest.mark.asyncio
 async def test_record_action() -> None:
-    tool = EmbodiedTool()
+    tool = EmbodiedTool(tty_handoff=AsyncMock())
     mock_runner = AsyncMock()
-    mock_runner.run.return_value = (0, "Recorded 5 episodes", "")
+    mock_runner.run_interactive.return_value = 0
 
     with (
         patch("roboclaw.embodied.setup.ensure_setup", return_value=_MOCK_SETUP),
@@ -109,8 +119,8 @@ async def test_record_action() -> None:
     ):
         result = await tool.execute(action="record", dataset_name="test", task="grasp", num_episodes=5)
 
-    assert "Recorded 5 episodes" in result
-    argv = mock_runner.run.call_args[0][0]
+    assert "Recording finished" in result
+    argv = mock_runner.run_interactive.call_args[0][0]
     assert "--robot.type=so101_follower" in argv
     assert "--teleop.type=so101_leader" in argv
     assert any("--robot.cameras=" in a for a in argv)

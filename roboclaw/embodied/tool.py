@@ -19,6 +19,7 @@ _ACTIONS = [
 ]
 
 _LOGS_DIR = Path("~/.roboclaw/workspace/embodied/jobs").expanduser()
+_NO_TTY_MSG = "This action requires a local terminal. Run: roboclaw agent"
 
 
 class EmbodiedTool(Tool):
@@ -27,6 +28,9 @@ class EmbodiedTool(Tool):
     The agent maintains setup.json through conversation (setup_show / setup_update).
     All hardware actions read setup.json for arm ports, cameras, calibration dirs.
     """
+
+    def __init__(self, tty_handoff: Any = None):
+        self._tty_handoff = tty_handoff
 
     @property
     def name(self) -> str:
@@ -144,22 +148,23 @@ class EmbodiedTool(Tool):
         uncalibrated = {name: arm for name, arm in arms.items() if arm.get("calibrated") is not True}
         if not uncalibrated:
             return "All arms are already calibrated."
+        if not self._tty_handoff:
+            return _NO_TTY_MSG
         controller = SO101Controller()
         runner = LocalLeRobotRunner()
         succeeded, failed = 0, 0
         results = []
         for name, arm in uncalibrated.items():
             argv = controller.calibrate(arm["type"], arm["port"], arm.get("calibration_dir", ""))
-            returncode, stdout, stderr = await runner.run(argv)
+            returncode = await self._run_tty(runner, argv, f"lerobot-calibrate ({name})")
             if returncode == 0:
                 succeeded += 1
                 update_setup({"arms": {name: {"calibrated": True}}})
                 results.append(f"{name}: OK")
             else:
                 failed += 1
-                results.append(f"{name}: FAILED (exit {returncode}) {stderr[:200]}")
-        summary = f"{succeeded} succeeded, {failed} failed."
-        return summary + "\n" + "\n".join(results)
+                results.append(f"{name}: FAILED (exit {returncode})")
+        return f"{succeeded} succeeded, {failed} failed.\n" + "\n".join(results)
 
     async def _do_teleoperate(self, setup: dict) -> str:
         from roboclaw.embodied.embodiment.so101 import SO101Controller
@@ -168,11 +173,14 @@ class EmbodiedTool(Tool):
         follower, leader = self._resolve_arms(setup)
         if isinstance(follower, str):
             return follower
+        if not self._tty_handoff:
+            return _NO_TTY_MSG
         argv = SO101Controller().teleoperate(
             robot_type=follower["type"], robot_port=follower["port"], robot_cal_dir=follower["calibration_dir"],
             teleop_type=leader["type"], teleop_port=leader["port"], teleop_cal_dir=leader["calibration_dir"],
         )
-        return await self._run(LocalLeRobotRunner(), argv)
+        rc = await self._run_tty(LocalLeRobotRunner(), argv, "lerobot-teleoperate")
+        return "Teleoperation finished." if rc == 0 else f"Teleoperation failed (exit {rc})."
 
     async def _do_record(self, setup: dict, kwargs: dict) -> str:
         from roboclaw.embodied.embodiment.so101 import SO101Controller
@@ -181,6 +189,8 @@ class EmbodiedTool(Tool):
         follower, leader = self._resolve_arms(setup)
         if isinstance(follower, str):
             return follower
+        if not self._tty_handoff:
+            return _NO_TTY_MSG
         cameras = self._resolve_cameras(setup)
         dataset_name = kwargs.get("dataset_name", "default")
         argv = SO101Controller().record(
@@ -192,7 +202,8 @@ class EmbodiedTool(Tool):
             fps=kwargs.get("fps", 30),
             num_episodes=kwargs.get("num_episodes", 10),
         )
-        return await self._run(LocalLeRobotRunner(), argv)
+        rc = await self._run_tty(LocalLeRobotRunner(), argv, "lerobot-record")
+        return "Recording finished." if rc == 0 else f"Recording failed (exit {rc})."
 
     async def _do_train(self, setup: dict, kwargs: dict) -> str:
         from roboclaw.embodied.learning.act import ACTPipeline
@@ -257,6 +268,14 @@ class EmbodiedTool(Tool):
                 continue
             result[name] = {"type": "opencv", "index_or_path": path}
         return result
+
+    async def _run_tty(self, runner: Any, argv: list[str], label: str) -> int:
+        """Run interactive command with TTY handoff. Always calls stop even on error."""
+        await self._tty_handoff(start=True, label=label)
+        try:
+            return await runner.run_interactive(argv)
+        finally:
+            await self._tty_handoff(start=False, label=label)
 
     @staticmethod
     async def _run(runner: Any, argv: list[str]) -> str:
