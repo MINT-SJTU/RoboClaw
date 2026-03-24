@@ -50,7 +50,17 @@ def create_setup_with_scan(path: Path = SETUP_PATH) -> dict[str, Any]:
     if len(ports) == 1:
         setup["robot"]["port"] = ports[0]["path"]
     cameras = scan_cameras()
-    setup["cameras"] = [{"id": c["id"], "type": "opencv", "width": c["width"], "height": c["height"]} for c in cameras]
+    setup["cameras"] = [
+        {
+            "path": c.get("by_path") or c["dev"],
+            "by_id": c.get("by_id", ""),
+            "dev": c["dev"],
+            "type": "opencv",
+            "width": c["width"],
+            "height": c["height"],
+        }
+        for c in cameras
+    ]
     save_setup(setup, path)
     return setup
 
