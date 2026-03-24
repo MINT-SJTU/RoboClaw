@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 SETUP_PATH = Path("~/.roboclaw/workspace/embodied/setup.json").expanduser()
 
 _ARM_TYPES = ("so101_follower", "so101_leader")
-_ARM_ROLES = ("follower", "leader")
-_ARM_FIELDS = {"type", "port", "calibration_dir", "calibrated", "alias"}
+_ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
 _CAMERA_FIELDS = {"by_path", "by_id", "dev", "width", "height"}
 _VALID_TOP_KEYS = {"version", "arms", "cameras", "datasets", "policies", "scanned_ports", "scanned_cameras"}
 
@@ -19,7 +19,7 @@ _CALIBRATION_ROOT = Path("~/.roboclaw/workspace/embodied/calibration").expanduse
 
 _DEFAULT_SETUP: dict[str, Any] = {
     "version": 2,
-    "arms": {},
+    "arms": [],
     "cameras": {},
     "datasets": {
         "root": str(Path("~/.roboclaw/workspace/embodied/datasets").expanduser()),
@@ -66,14 +66,14 @@ def ensure_setup(path: Path = SETUP_PATH) -> dict[str, Any]:
     return defaults
 
 
-def update_setup(updates: dict[str, Any], path: Path = SETUP_PATH) -> dict[str, Any]:
-    """Merge updates into existing setup and save. Returns the merged result.
 
-    Internal helper for programmatic updates (e.g. calibrate marking arms done).
-    Not exposed as an agent action — use set_arm / set_camera instead.
-    """
+def mark_arm_calibrated(alias: str, path: Path = SETUP_PATH) -> dict[str, Any]:
+    """Mark an arm as calibrated by alias."""
     setup = load_setup(path)
-    _deep_merge(setup, updates)
+    arm = find_arm(setup.get("arms", []), alias)
+    if not arm:
+        raise ValueError(f"No arm with alias '{alias}' in setup.")
+    arm["calibrated"] = True
     save_setup(setup, path)
     return setup
 
@@ -96,50 +96,76 @@ def _resolve_port(port: str, scanned_ports: list[dict]) -> str:
     return port
 
 
+def _extract_serial_number(port: str) -> str:
+    """Extract serial number from a by_id port path.
+
+    E.g. "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14032630-if00" -> "5B14032630"
+    Falls back to the full filename if no pattern matches.
+    """
+    filename = Path(port).name
+    # Match serial number: last segment before optional -ifNN suffix
+    m = re.search(r"_([A-Za-z0-9]+)(?:-if\d+)?$", filename)
+    if m:
+        return m.group(1)
+    return filename
+
+
 # ── Structured mutators (exposed as agent actions) ──────────────────
 
 
 def set_arm(
-    role: str, arm_type: str, port: str, *, alias: str | None = None, path: Path = SETUP_PATH,
+    alias: str, arm_type: str, port: str, *, path: Path = SETUP_PATH,
 ) -> dict[str, Any]:
-    """Add or update an arm. Auto-fills calibration_dir, sets calibrated=False."""
-    if role not in _ARM_ROLES:
-        raise ValueError(f"Invalid role '{role}'. Must be one of {_ARM_ROLES}.")
+    """Add or update an arm by alias. Auto-fills calibration_dir, sets calibrated=False."""
     if arm_type not in _ARM_TYPES:
         raise ValueError(f"Invalid arm_type '{arm_type}'. Must be one of {_ARM_TYPES}.")
     if not port:
         raise ValueError("Arm port is required.")
+    if not alias:
+        raise ValueError("Arm alias is required.")
     from roboclaw.embodied.scan import scan_serial_ports
     setup = load_setup(path)
     port = _resolve_port(port, scan_serial_ports())
+    serial = _extract_serial_number(port)
     entry: dict[str, Any] = {
+        "alias": alias,
         "type": arm_type,
         "port": port,
-        "calibration_dir": str(_CALIBRATION_ROOT / role),
+        "calibration_dir": str(_CALIBRATION_ROOT / serial),
         "calibrated": False,
     }
-    if alias:
-        entry["alias"] = alias
-    setup.setdefault("arms", {})[role] = entry
+    arms = setup.setdefault("arms", [])
+    existing = find_arm(arms, alias)
+    if existing is not None:
+        idx = arms.index(existing)
+        arms[idx] = entry
+    else:
+        arms.append(entry)
     save_setup(setup, path)
     return setup
 
 
-def arm_display_name(role: str, arm: dict) -> str:
-    """Return user-friendly display name: 'alias (role)' if alias exists, else role."""
-    alias = arm.get("alias")
-    if alias:
-        return f"{alias} ({role})"
-    return role
+def arm_display_name(arm: dict) -> str:
+    """Return user-friendly display name: the arm's alias."""
+    return arm.get("alias", "unnamed")
 
 
-def remove_arm(role: str, path: Path = SETUP_PATH) -> dict[str, Any]:
-    """Remove an arm by role."""
+def find_arm(arms: list[dict], alias: str) -> dict | None:
+    """Find an arm in the arms list by alias. Returns the dict or None."""
+    for arm in arms:
+        if arm.get("alias") == alias:
+            return arm
+    return None
+
+
+def remove_arm(alias: str, path: Path = SETUP_PATH) -> dict[str, Any]:
+    """Remove an arm by alias."""
     setup = load_setup(path)
-    arms = setup.get("arms", {})
-    if role not in arms:
-        raise ValueError(f"No arm with role '{role}' in setup.")
-    del arms[role]
+    arms = setup.get("arms", [])
+    arm = find_arm(arms, alias)
+    if arm is None:
+        raise ValueError(f"No arm with alias '{alias}' in setup.")
+    arms.remove(arm)
     save_setup(setup, path)
     return setup
 
@@ -179,23 +205,24 @@ def _validate_setup(setup: dict[str, Any]) -> None:
     invalid_top = set(setup.keys()) - _VALID_TOP_KEYS
     if invalid_top:
         raise ValueError(f"Unknown top-level keys: {invalid_top}")
-    _validate_arms(setup.get("arms", {}))
+    _validate_arms(setup.get("arms", []))
     _validate_cameras(setup.get("cameras", {}))
 
 
 def _validate_arms(arms: Any) -> None:
-    """Validate all arm entries."""
-    if not isinstance(arms, dict):
-        raise ValueError("'arms' must be a dict.")
-    for role, arm in arms.items():
+    """Validate all arm entries. Arms is a list of dicts."""
+    if not isinstance(arms, list):
+        raise ValueError("'arms' must be a list.")
+    for arm in arms:
         if not isinstance(arm, dict):
-            raise ValueError(f"Arm '{role}' must be a dict.")
+            raise ValueError(f"Each arm entry must be a dict, got {type(arm).__name__}.")
+        alias = arm.get("alias", "<unknown>")
         bad_fields = set(arm.keys()) - _ARM_FIELDS
         if bad_fields:
-            raise ValueError(f"Arm '{role}' has unknown fields: {bad_fields}")
+            raise ValueError(f"Arm '{alias}' has unknown fields: {bad_fields}")
         arm_type = arm.get("type")
         if arm_type is not None and arm_type not in _ARM_TYPES:
-            raise ValueError(f"Arm '{role}' has invalid type '{arm_type}'.")
+            raise ValueError(f"Arm '{alias}' has invalid type '{arm_type}'.")
 
 
 def _validate_cameras(cameras: Any) -> None:
@@ -210,10 +237,3 @@ def _validate_cameras(cameras: Any) -> None:
             raise ValueError(f"Camera '{name}' has unknown fields: {bad_fields}")
 
 
-def _deep_merge(base: dict, override: dict) -> None:
-    """Recursively merge override into base, mutating base."""
-    for key, value in override.items():
-        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
