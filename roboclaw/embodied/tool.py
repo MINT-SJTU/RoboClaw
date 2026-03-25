@@ -45,15 +45,12 @@ class EmbodiedTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Control embodied robots — connect, calibrate, collect data, "
-            "train policies, and run inference. "
-            "Use setup_show to view current config. "
-            "Use set_arm(name, arm_type, port) to add/update arms by alias. "
-            "Use remove_arm(name) to remove an arm. "
-            "For teleoperate/record, specify follower_names and leader_names "
-            "(comma-separated aliases). 1+1 = single arm, 2+2 = bimanual. "
-            "Use set_camera/remove_camera to configure cameras "
-            "(picks from scanned_cameras by index)."
+            "ALWAYS use this tool for robot/arm/hardware questions. "
+            "NEVER use exec for /dev queries. "
+            "Actions: setup_show (view config), identify (detect arms), "
+            "calibrate, teleoperate, record, train, run_policy, job_status, "
+            "set_arm, remove_arm, set_camera, remove_camera. "
+            "Use arm aliases from setup.json for follower_names/leader_names."
         )
 
     @property

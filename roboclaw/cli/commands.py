@@ -10,16 +10,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-# Force UTF-8 encoding for Windows console
-if sys.platform == "win32":
-    if sys.stdout.encoding != "utf-8":
-        os.environ["PYTHONIOENCODING"] = "utf-8"
-        # Re-open stdout/stderr with UTF-8 encoding
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+# Force UTF-8 encoding for CLI stdio
+os.environ["PYTHONIOENCODING"] = "utf-8"
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 import typer
 from prompt_toolkit import print_formatted_text

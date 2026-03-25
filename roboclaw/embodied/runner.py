@@ -9,6 +9,14 @@ from pathlib import Path
 from uuid import uuid4
 
 
+def _utf8_env() -> dict[str, str]:
+    """Return environment with UTF-8 forced for Python stdio."""
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 class LocalLeRobotRunner:
     """Runs LeRobot CLI commands via subprocess."""
 
@@ -18,6 +26,7 @@ class LocalLeRobotRunner:
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_utf8_env(),
         )
 
         try:
@@ -35,7 +44,7 @@ class LocalLeRobotRunner:
 
     async def run_interactive(self, argv: list[str]) -> int:
         """Run command with inherited TTY (user sees output directly). Returns exit code."""
-        process = await asyncio.create_subprocess_exec(*argv)
+        process = await asyncio.create_subprocess_exec(*argv, env=_utf8_env())
         return await process.wait()
 
     async def run_detached(self, argv: list[str], log_dir: Path) -> str:
@@ -52,6 +61,7 @@ class LocalLeRobotRunner:
                 stdout=log_file,
                 stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
+                env=_utf8_env(),
             )
 
         pid_path.write_text(str(process.pid), encoding="utf-8")

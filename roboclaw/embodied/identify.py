@@ -6,7 +6,6 @@ Run via: python -m roboclaw.embodied.identify <scanned_ports_json>
 from __future__ import annotations
 
 import json
-import os
 import sys
 
 from roboclaw.embodied.scan import restore_stderr, suppress_stderr
@@ -16,6 +15,25 @@ PRESENT_POS_LEN = 2
 MOTOR_IDS = list(range(1, 7))
 DEFAULT_BAUDRATE = 1_000_000
 MOTION_THRESHOLD = 50
+
+
+def _configure_stdio() -> None:
+    """Force UTF-8 stdio when streams support reconfiguration."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def _safe_input(prompt: str) -> str:
+    """Read input with UTF-8 fallback for misconfigured TTY handoff."""
+    try:
+        return input(prompt)
+    except UnicodeDecodeError:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return ""
+        return line.decode("utf-8", errors="replace").rstrip("\r\n")
 
 
 def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
@@ -125,8 +143,8 @@ def _ask_arm_details(port: dict) -> tuple[str, str]:
     """Ask user for arm type and alias. Returns (arm_type, alias)."""
     port_id = _resolve_port_by_id(port)
     print(f"\nDetected movement on: {port_id}")
-    arm_type = input("Type (so101_follower/so101_leader): ").strip()
-    alias = input("Name for this arm: ").strip()
+    arm_type = _safe_input("Type (so101_follower/so101_leader): ").strip()
+    alias = _safe_input("Name for this arm: ").strip()
     return arm_type, alias
 
 
@@ -142,7 +160,7 @@ def _save_arm(alias: str, arm_type: str, port: dict) -> None:
 def _identify_one_arm(ports: list[dict]) -> dict | None:
     """Run one round of the identify loop. Returns the identified port or None."""
     baselines = _read_all_baselines(ports)
-    input("\nMove one arm, then press Enter.")
+    _safe_input("\nMove one arm, then press Enter.")
     moved = _find_moved_port(ports, baselines)
     if moved is None:
         print("No movement detected. Try again.")
@@ -157,6 +175,8 @@ def _identify_one_arm(ports: list[dict]) -> dict | None:
 
 def main() -> None:
     """Interactive identify loop. Expects scanned_ports JSON as argv[1]."""
+    _configure_stdio()
+
     if len(sys.argv) < 2:
         print("Usage: python -m roboclaw.embodied.identify <scanned_ports_json>")
         sys.exit(1)
@@ -183,7 +203,7 @@ def main() -> None:
         identified.append(_resolve_port_by_id(moved))
         if not ports:
             break
-        cont = input("Continue identifying? (Y/n): ").strip().lower()
+        cont = _safe_input("Continue identifying? (Y/n): ").strip().lower()
         if cont == "n":
             break
 
