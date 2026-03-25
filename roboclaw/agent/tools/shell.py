@@ -12,6 +12,8 @@ from roboclaw.agent.tools.base import Tool
 class ExecTool(Tool):
     """Tool to execute shell commands."""
 
+    _PROTECTED_EMBODIED_ROOT = Path("~/.roboclaw/workspace/embodied").expanduser()
+
     def __init__(
         self,
         timeout: int = 60,
@@ -150,6 +152,9 @@ class ExecTool(Tool):
             if re.search(pattern, lower):
                 return "Error: Command blocked by safety guard (dangerous pattern detected)"
 
+        if self._targets_protected_embodied_path(cmd):
+            return "Error: Command blocked by safety guard (embodied workspace path protected)"
+
         if self.allow_patterns:
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
@@ -174,6 +179,26 @@ class ExecTool(Tool):
                     return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
+
+    @classmethod
+    def _targets_protected_embodied_path(cls, command: str) -> bool:
+        if not re.search(r"\b(?:rm|rmdir|mv)\b", command.lower()):
+            return False
+
+        normalized = command.replace("\\", "/").lower()
+        if ".roboclaw/workspace/embodied/" in normalized:
+            return True
+
+        for raw in cls._extract_absolute_paths(command):
+            if cls._is_protected_embodied_path(raw):
+                return True
+        return False
+
+    @classmethod
+    def _is_protected_embodied_path(cls, raw_path: str) -> bool:
+        path = Path(os.path.expandvars(raw_path.strip())).expanduser().resolve(strict=False)
+        root = cls._PROTECTED_EMBODIED_ROOT.resolve(strict=False)
+        return path == root or root in path.parents
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

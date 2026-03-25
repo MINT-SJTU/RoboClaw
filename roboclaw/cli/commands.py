@@ -193,6 +193,7 @@ class _ThinkingSpinner:
             "[dim]RoboClaw is thinking...[/dim]", spinner="dots"
         ) if enabled else None
         self._active = False
+        self._suspended = False
 
     def __enter__(self):
         if self._spinner:
@@ -206,6 +207,18 @@ class _ThinkingSpinner:
             self._spinner.stop()
         return False
 
+    def suspend(self) -> None:
+        """Stop the spinner until resume() is called."""
+        self._suspended = True
+        if self._spinner and self._active:
+            self._spinner.stop()
+
+    def resume(self) -> None:
+        """Restart the spinner after a suspend()."""
+        self._suspended = False
+        if self._spinner and self._active:
+            self._spinner.start()
+
     @contextmanager
     def pause(self):
         """Temporarily stop spinner while printing progress."""
@@ -214,7 +227,7 @@ class _ThinkingSpinner:
         try:
             yield
         finally:
-            if self._spinner and self._active:
+            if self._spinner and self._active and not self._suspended:
                 self._spinner.start()
 
 
@@ -697,8 +710,8 @@ def agent(
         if start:
             _tty_handoff_active = True
             _last_sigint_at = 0.0
-            if _thinking and _thinking._spinner and _thinking._active:
-                _thinking._spinner.stop()
+            if _thinking:
+                _thinking.suspend()
             _flush_pending_tty_input()
             console.print(f"\n[dim]Executing {label}...[/dim]")
         else:
@@ -706,8 +719,8 @@ def agent(
             _last_sigint_at = 0.0
             _flush_pending_tty_input()
             console.print(f"[dim]{label} finished.[/dim]\n")
-            if _thinking and _thinking._spinner and _thinking._active:
-                _thinking._spinner.start()
+            if _thinking:
+                _thinking.resume()
 
     agent_loop = AgentLoop(
         bus=bus,

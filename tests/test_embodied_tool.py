@@ -91,6 +91,7 @@ def test_tool_schema() -> None:
     assert params["properties"]["target_action"]["type"] == "string"
     assert params["properties"]["episode"]["type"] == "integer"
     assert params["properties"]["alias"]["type"] == "string"
+    assert "port" not in params["properties"]
     assert params["properties"]["action"]["enum"] == [
         "doctor",
         "identify",

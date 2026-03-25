@@ -77,6 +77,27 @@ def test_thinking_spinner_pause_stops_and_restarts():
     ]
 
 
+def test_thinking_spinner_pause_stays_stopped_while_suspended():
+    """Pause should not restart the spinner during a TTY handoff suspension."""
+    spinner = MagicMock()
+
+    with patch.object(commands.console, "status", return_value=spinner):
+        thinking = commands._ThinkingSpinner(enabled=True)
+        with thinking:
+            thinking.suspend()
+            with thinking.pause():
+                pass
+            thinking.resume()
+
+    assert spinner.method_calls == [
+        call.start(),
+        call.stop(),
+        call.stop(),
+        call.start(),
+        call.stop(),
+    ]
+
+
 def test_print_cli_progress_line_pauses_spinner_before_printing():
     """CLI progress output should pause spinner to avoid garbled lines."""
     order: list[str] = []

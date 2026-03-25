@@ -80,7 +80,7 @@ class EmbodiedTool(Tool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
+        params = {
             "type": "object",
             "properties": {
                 "action": {
@@ -165,6 +165,8 @@ class EmbodiedTool(Tool):
             },
             "required": ["action"],
         }
+        params["properties"].pop("port", None)
+        return params
 
     async def execute(self, **kwargs: Any) -> str:
         from roboclaw.embodied.setup import ensure_setup, load_setup

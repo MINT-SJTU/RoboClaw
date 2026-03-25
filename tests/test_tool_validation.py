@@ -134,6 +134,30 @@ def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
+def test_exec_guard_blocks_rm_on_embodied_workspace(tmp_path) -> None:
+    tool = ExecTool()
+    error = tool._guard_command("rm ~/.roboclaw/workspace/embodied/setup.json", str(tmp_path))
+    assert error == "Error: Command blocked by safety guard (embodied workspace path protected)"
+
+
+def test_exec_guard_blocks_mv_on_embodied_workspace(tmp_path) -> None:
+    tool = ExecTool()
+    error = tool._guard_command("mv ~/.roboclaw/workspace/embodied/jobs /tmp/jobs-backup", str(tmp_path))
+    assert error == "Error: Command blocked by safety guard (embodied workspace path protected)"
+
+
+def test_exec_guard_blocks_rmdir_on_embodied_workspace(tmp_path) -> None:
+    tool = ExecTool()
+    error = tool._guard_command("rmdir .roboclaw/workspace/embodied/jobs", str(tmp_path))
+    assert error == "Error: Command blocked by safety guard (embodied workspace path protected)"
+
+
+def test_exec_guard_allows_mv_outside_embodied_workspace(tmp_path) -> None:
+    tool = ExecTool()
+    error = tool._guard_command("mv /tmp/source /tmp/dest", str(tmp_path))
+    assert error is None
+
+
 # --- cast_params tests ---
 
 
