@@ -9,6 +9,7 @@ import json
 import sys
 
 from roboclaw.embodied.scan import restore_stderr, suppress_stderr
+from roboclaw.embodied.setup import _ARM_TYPES
 
 PRESENT_POS_ADDR = 56
 PRESENT_POS_LEN = 2
@@ -16,24 +17,68 @@ MOTOR_IDS = list(range(1, 7))
 DEFAULT_BAUDRATE = 1_000_000
 MOTION_THRESHOLD = 50
 
+# Derive the menu from the canonical _ARM_TYPES tuple in setup.py.
+# _ARM_TYPES order: ("so101_follower", "so101_leader")
+_leader = next(t for t in _ARM_TYPES if "leader" in t)
+_follower = next(t for t in _ARM_TYPES if "follower" in t)
 
-def _configure_stdio() -> None:
-    """Force UTF-8 stdio when streams support reconfiguration."""
-    for stream in (sys.stdin, sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if callable(reconfigure):
-            reconfigure(encoding="utf-8", errors="replace")
+_ARM_TYPE_CHOICES = {
+    "1": _leader,
+    "2": _follower,
+    "leader": _leader,
+    "follower": _follower,
+    _leader: _leader,
+    _follower: _follower,
+    "主": _leader,
+    "从": _follower,
+}
 
 
-def _safe_input(prompt: str) -> str:
-    """Read input with UTF-8 fallback for misconfigured TTY handoff."""
-    try:
-        return input(prompt)
-    except UnicodeDecodeError:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return ""
-        return line.decode("utf-8", errors="replace").rstrip("\r\n")
+def _read_line(prompt: str) -> str:
+    """Write a prompt and read one UTF-8 line from stdin without readline."""
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    line = sys.stdin.buffer.readline()
+    if not line:
+        raise EOFError
+    return line.decode("utf-8").rstrip("\r\n")
+
+
+def _choose_arm_type() -> str:
+    """Prompt until a valid arm type is selected."""
+    print("Choose arm type:")
+    print("  1. leader (主臂)")
+    print("  2. follower (从臂)")
+    while True:
+        choice = _read_line("Select [1/2]: ").strip().casefold()
+        arm_type = _ARM_TYPE_CHOICES.get(choice)
+        if arm_type is not None:
+            return arm_type
+        print("Invalid choice. Enter 1, 2, 主, 从, leader, or follower.")
+
+
+def _choose_alias(existing_aliases: set[str]) -> str:
+    """Prompt until a non-empty, unique alias is provided."""
+    while True:
+        alias = _read_line("Name for this arm: ").strip()
+        if not alias:
+            print("Alias is required.")
+            continue
+        if alias in existing_aliases:
+            print(f"Alias '{alias}' already exists. Choose a different name.")
+            continue
+        return alias
+
+
+def _confirm(prompt: str) -> bool:
+    """Read a Y/n style prompt with validation."""
+    while True:
+        answer = _read_line(prompt).strip().casefold()
+        if answer in ("", "y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+        print("Please enter Y or n.")
 
 
 def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
@@ -139,15 +184,6 @@ def _find_moved_port(ports: list[dict], baselines: dict[str, dict[int, int]]) ->
     return best_port
 
 
-def _ask_arm_details(port: dict) -> tuple[str, str]:
-    """Ask user for arm type and alias. Returns (arm_type, alias)."""
-    port_id = _resolve_port_by_id(port)
-    print(f"\nDetected movement on: {port_id}")
-    arm_type = _safe_input("Type (so101_follower/so101_leader): ").strip()
-    alias = _safe_input("Name for this arm: ").strip()
-    return arm_type, alias
-
-
 def _save_arm(alias: str, arm_type: str, port: dict) -> None:
     """Save arm to setup.json via set_arm."""
     from roboclaw.embodied.setup import set_arm
@@ -157,31 +193,45 @@ def _save_arm(alias: str, arm_type: str, port: dict) -> None:
     print(f"Saved: {alias} ({arm_type}) on {port_id}")
 
 
-def _identify_one_arm(ports: list[dict]) -> dict | None:
-    """Run one round of the identify loop. Returns the identified port or None."""
+def _identify_one_arm(ports: list[dict], existing_aliases: set[str]) -> dict | None:
+    """Run one round of identification. Returns staged arm data or None."""
     baselines = _read_all_baselines(ports)
-    _safe_input("\nMove one arm, then press Enter.")
+    _read_line("\nMove one arm, then press Enter.")
     moved = _find_moved_port(ports, baselines)
     if moved is None:
         print("No movement detected. Try again.")
         return None
-    arm_type, alias = _ask_arm_details(moved)
-    if not alias or not arm_type:
-        print("Skipped (empty alias or type).")
-        return moved
-    _save_arm(alias, arm_type, moved)
-    return moved
+    port_id = _resolve_port_by_id(moved)
+    print(f"\nDetected movement on: {port_id}")
+
+    while True:
+        arm_type = _choose_arm_type()
+        alias = _choose_alias(existing_aliases)
+        print(f"Arm: {alias} ({arm_type}) on {port_id}")
+        if _confirm("OK? (Y/n): "):
+            return {
+                "alias": alias,
+                "arm_type": arm_type,
+                "port": moved,
+                "port_id": port_id,
+            }
+        print("Redoing this arm.")
 
 
 def main() -> None:
     """Interactive identify loop. Expects scanned_ports JSON as argv[1]."""
-    _configure_stdio()
-
     if len(sys.argv) < 2:
         print("Usage: python -m roboclaw.embodied.identify <scanned_ports_json>")
         sys.exit(1)
 
-    scanned_ports: list[dict] = json.loads(sys.argv[1])
+    try:
+        scanned_ports = json.loads(sys.argv[1])
+    except json.JSONDecodeError as exc:
+        print(f"Invalid scanned_ports JSON: {exc}")
+        sys.exit(1)
+    if not isinstance(scanned_ports, list):
+        print("scanned_ports_json must decode to a list.")
+        sys.exit(1)
     if not scanned_ports:
         print("No serial ports provided.")
         sys.exit(1)
@@ -193,23 +243,30 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Found {len(ports)} port(s) with motors.")
-    identified: list[str] = []
+    batch_aliases: set[str] = set()
+    staged: list[dict] = []
 
-    while ports:
-        moved = _identify_one_arm(ports)
-        if moved is None:
-            continue
-        ports.remove(moved)
-        identified.append(_resolve_port_by_id(moved))
-        if not ports:
-            break
-        cont = _safe_input("Continue identifying? (Y/n): ").strip().lower()
-        if cont == "n":
-            break
+    try:
+        while ports:
+            identified = _identify_one_arm(ports, batch_aliases)
+            if identified is None:
+                continue
+            ports.remove(identified["port"])
+            staged.append(identified)
+            batch_aliases.add(identified["alias"])
+            if not ports:
+                break
+            if not _confirm("Continue? (Y/n): "):
+                break
+    except EOFError:
+        print("\nInput closed.")
 
-    print(f"\nDone. Identified {len(identified)} arm(s).")
-    for port_id in identified:
-        print(f"  - {port_id}")
+    for arm in staged:
+        _save_arm(arm["alias"], arm["arm_type"], arm["port"])
+
+    print(f"\nDone. Identified {len(staged)} arm(s).")
+    for arm in staged:
+        print(f"  - {arm['alias']} ({arm['arm_type']}) on {arm['port_id']}")
 
 
 if __name__ == "__main__":
