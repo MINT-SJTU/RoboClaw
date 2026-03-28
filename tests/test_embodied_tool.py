@@ -157,7 +157,7 @@ def test_train_tool_schema() -> None:
     assert "steps" in params["properties"]
     assert "device" in params["properties"]
     assert "job_id" in params["properties"]
-    assert params["properties"]["action"]["enum"] == ["train", "job_status"]
+    assert params["properties"]["action"]["enum"] == ["train", "job_status", "list_datasets", "list_policies"]
 
 
 def test_cross_group_isolation_hardware_rejects_port() -> None:

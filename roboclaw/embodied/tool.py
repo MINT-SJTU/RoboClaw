@@ -172,14 +172,14 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
         },
     },
     "embodied_train": {
-        "description": "Train a policy on a recorded dataset or check training job status.",
-        "actions": ["train", "job_status"],
+        "description": "Train a policy on a recorded dataset, check training job status, or list datasets/policies.",
+        "actions": ["train", "job_status", "list_datasets", "list_policies"],
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["train", "job_status"],
+                    "enum": ["train", "job_status", "list_datasets", "list_policies"],
                     "description": "The action to perform.",
                 },
                 "dataset_name": {
@@ -270,6 +270,7 @@ _NO_SETUP_ACTIONS = frozenset({
     "setup_show", "describe", "set_arm", "rename_arm",
     "remove_arm", "set_camera", "preview_cameras", "remove_camera",
     "set_hand", "remove_hand",
+    "list_datasets", "list_policies",
 })
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from roboclaw.embodied.ops.helpers import _camera_previews_dir
@@ -31,6 +32,8 @@ _ACTION_DESCRIPTIONS = {
     "hand_close": "Close all fingers of a dexterous hand.",
     "hand_pose": "Set individual finger positions on a dexterous hand.",
     "hand_status": "Read current finger angles and forces from a dexterous hand.",
+    "list_datasets": "List recorded datasets with episode counts.",
+    "list_policies": "List trained policy checkpoints.",
 }
 
 
@@ -149,6 +152,62 @@ def _do_remove_hand(kwargs: dict[str, Any]) -> str:
     return f"Hand '{alias}' removed."
 
 
+def _do_list_datasets(kwargs: dict[str, Any]) -> str:
+    from roboclaw.embodied.setup import ensure_setup
+
+    setup = ensure_setup()
+    root = Path(setup.get("datasets", {}).get("root", "")) / "local"
+    if not root.exists():
+        return "No datasets found."
+    datasets = []
+    for d in sorted(root.iterdir()):
+        info_path = d / "meta" / "info.json"
+        if not info_path.exists():
+            continue
+        try:
+            info = json.loads(info_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        datasets.append({
+            "name": d.name,
+            "episodes": info.get("total_episodes", 0),
+            "frames": info.get("total_frames", 0),
+            "fps": info.get("fps", 0),
+        })
+    if not datasets:
+        return "No datasets found."
+    return json.dumps(datasets, indent=2, ensure_ascii=False)
+
+
+def _do_list_policies(kwargs: dict[str, Any]) -> str:
+    from roboclaw.embodied.setup import ensure_setup
+
+    setup = ensure_setup()
+    root = Path(setup.get("policies", {}).get("root", ""))
+    if not root.exists():
+        return "No policies found."
+    policies = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        last = d / "checkpoints" / "last" / "pretrained_model"
+        if not last.exists():
+            continue
+        entry = {"name": d.name, "checkpoint": str(last)}
+        tcfg = last / "train_config.json"
+        if tcfg.exists():
+            try:
+                cfg = json.loads(tcfg.read_text())
+            except (json.JSONDecodeError, OSError):
+                cfg = {}
+            entry["dataset"] = cfg.get("dataset", {}).get("repo_id", "")
+            entry["steps"] = cfg.get("steps", 0)
+        policies.append(entry)
+    if not policies:
+        return "No policies found."
+    return json.dumps(policies, indent=2, ensure_ascii=False)
+
+
 SYNC_DISPATCH: dict[str, Any] = {
     "setup_show": _do_setup_show,
     "describe": _do_describe,
@@ -160,4 +219,6 @@ SYNC_DISPATCH: dict[str, Any] = {
     "remove_camera": _do_remove_camera,
     "set_hand": _do_set_hand,
     "remove_hand": _do_remove_hand,
+    "list_datasets": _do_list_datasets,
+    "list_policies": _do_list_policies,
 }

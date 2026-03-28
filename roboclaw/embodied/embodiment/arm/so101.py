@@ -93,6 +93,7 @@ class SO101Controller:
         push_to_hub: bool = False,
         fps: int = 30, num_episodes: int = 10,
         episode_time_s: int | None = None,
+        resume: bool = False,
     ) -> list[str]:
         """Build recording command (follower + leader + cameras + dataset)."""
         argv = self._wrapper_args("record")
@@ -102,6 +103,7 @@ class SO101Controller:
             argv.append(f"--robot.cameras={json.dumps(cameras)}")
         argv.extend(self._dataset_args(
             repo_id, dataset_root, task, push_to_hub, fps, num_episodes, episode_time_s,
+            resume=resume,
         ))
         return argv
 
@@ -117,6 +119,7 @@ class SO101Controller:
         push_to_hub: bool = False,
         fps: int = 30, num_episodes: int = 10,
         episode_time_s: int | None = None,
+        resume: bool = False,
     ) -> list[str]:
         """Build bimanual recording command (2 followers + 2 leaders + cameras)."""
         argv = [
@@ -131,6 +134,7 @@ class SO101Controller:
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
             *self._dataset_args(
                 repo_id, dataset_root, task, push_to_hub, fps, num_episodes, episode_time_s,
+                resume=resume,
             ),
         ]
         return argv
@@ -188,13 +192,16 @@ class SO101Controller:
         dataset_root: str = "",
         task: str = "eval",
         num_episodes: int = 1,
+        resume: bool = False,
     ) -> list[str]:
         """Build policy execution command (follower only, no teleop)."""
         argv = self._wrapper_args("record")
         argv.extend(self._arm_args("robot", robot_type, robot_port, robot_cal_dir, robot_id))
         if cameras:
             argv.append(f"--robot.cameras={json.dumps(cameras)}")
-        argv.extend(self._policy_args(policy_path, repo_id, task, num_episodes, dataset_root))
+        argv.extend(self._policy_args(
+            policy_path, repo_id, task, num_episodes, dataset_root, resume=resume,
+        ))
         return argv
 
     def run_policy_bimanual(
@@ -207,6 +214,7 @@ class SO101Controller:
         dataset_root: str = "",
         task: str = "eval",
         num_episodes: int = 1,
+        resume: bool = False,
     ) -> list[str]:
         """Build bimanual policy execution command (2 followers, no teleop)."""
         argv = [
@@ -215,7 +223,9 @@ class SO101Controller:
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            *self._policy_args(policy_path, repo_id, task, num_episodes, dataset_root),
+            *self._policy_args(
+                policy_path, repo_id, task, num_episodes, dataset_root, resume=resume,
+            ),
         ]
         return argv
 
@@ -223,6 +233,7 @@ class SO101Controller:
         self,
         policy_path: str, repo_id: str, task: str,
         num_episodes: int, dataset_root: str,
+        resume: bool = False,
     ) -> list[str]:
         """Build --policy.* and --dataset.* args for run_policy commands."""
         args = [
@@ -234,6 +245,8 @@ class SO101Controller:
         ]
         if dataset_root:
             args.append(f"--dataset.root={Path(dataset_root).expanduser()}")
+        if resume:
+            args.append("--resume=true")
         return args
 
     def _dataset_args(
@@ -241,6 +254,7 @@ class SO101Controller:
         repo_id: str, dataset_root: str, task: str,
         push_to_hub: bool, fps: int, num_episodes: int,
         episode_time_s: int | None = None,
+        resume: bool = False,
     ) -> list[str]:
         """Build --dataset.* CLI args shared by record and record_bimanual."""
         args = [
@@ -253,6 +267,8 @@ class SO101Controller:
         ]
         if episode_time_s is not None:
             args.append(f"--dataset.episode_time_s={episode_time_s}")
+        if resume:
+            args.append("--resume=true")
         return args
 
     def _wrapper_args(self, action: str) -> list[str]:

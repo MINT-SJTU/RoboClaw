@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,43 @@ async def _do_identify(setup: dict[str, Any], kwargs: dict[str, Any], tty_handof
     return _format_tty_failure("Arm identification failed", rc, stderr_text)
 
 
+def _sync_calibration_to_motors(arm: dict[str, Any]) -> None:
+    """Write calibration values from file to motor EEPROM.
+
+    Best-effort: failures are logged but never block the calibration result.
+    """
+    cal_dir = arm.get("calibration_dir", "")
+    serial = Path(cal_dir).name
+    cal_path = Path(cal_dir) / f"{serial}.json"
+    if not cal_path.exists():
+        return
+    try:
+        from lerobot.motors.feetech import FeetechMotorsBus
+        from lerobot.motors.motors_bus import Motor, MotorCalibration, MotorNormMode
+    except ImportError:
+        return
+    cal = json.loads(cal_path.read_text())
+    motors, calibration = {}, {}
+    for name, cfg in cal.items():
+        motors[name] = Motor(id=cfg["id"], model="sts3215", norm_mode=MotorNormMode.DEGREES)
+        calibration[name] = MotorCalibration(
+            id=cfg["id"], drive_mode=cfg["drive_mode"],
+            homing_offset=cfg["homing_offset"],
+            range_min=cfg["range_min"], range_max=cfg["range_max"],
+        )
+    bus = FeetechMotorsBus(port=arm["port"], motors=motors, calibration=calibration)
+    try:
+        bus.connect()
+        for name, cfg in cal.items():
+            bus.write("Homing_Offset", name, cfg["homing_offset"], normalize=False)
+            bus.write("Min_Position_Limit", name, cfg["range_min"], normalize=False)
+            bus.write("Max_Position_Limit", name, cfg["range_max"], normalize=False)
+    except (OSError, ConnectionError):
+        pass
+    finally:
+        bus.disconnect()
+
+
 async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
     from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
     from roboclaw.embodied.runner import LocalLeRobotRunner
@@ -87,6 +125,7 @@ async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_hando
         if rc == 0:
             succeeded += 1
             mark_arm_calibrated(arm["alias"])
+            _sync_calibration_to_motors(arm)
             results.append(f"{display}: OK")
             continue
         failed += 1
@@ -173,6 +212,31 @@ async def _teleoperate_bimanual(
     return _format_tty_failure("Teleoperation failed", rc, stderr_text)
 
 
+def _resolve_dataset_name(
+    kwargs: dict[str, Any], prefix: str,
+) -> tuple[str, bool] | str:
+    """Resolve dataset name and whether to resume.
+
+    Returns (dataset_name, user_specified) or an error string.
+    """
+    user_specified = "dataset_name" in kwargs
+    if user_specified:
+        name = kwargs["dataset_name"]
+    else:
+        name = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    error = _validate_dataset_name(name)
+    if error:
+        return error
+    return name, user_specified
+
+
+def _should_resume(
+    user_specified: bool, dataset_root: Path,
+) -> bool:
+    """Resume only when user explicitly named a dataset that already exists."""
+    return user_specified and dataset_root.exists()
+
+
 async def _do_record(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
     if kwargs.get("checkpoint_path"):
         return await _do_run_policy(setup, kwargs, tty_handoff)
@@ -185,13 +249,16 @@ async def _do_record(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     error = _validate_pairing(grouped["followers"], grouped["leaders"])
     if error:
         return error
-    dataset_name = kwargs.get("dataset_name", "default")
-    error = _validate_dataset_name(dataset_name)
-    if error:
-        return error
+    result = _resolve_dataset_name(kwargs, "rec")
+    if isinstance(result, str):
+        return result
+    dataset_name, user_specified = result
     controller = SO101Controller()
     cameras = {} if kwargs.get("use_cameras") is False else resolve_cameras(setup)
     record_kwargs = _build_record_kwargs(setup, kwargs, cameras, dataset_name)
+    dataset_root = Path(record_kwargs["dataset_root"])
+    if _should_resume(user_specified, dataset_root):
+        record_kwargs["resume"] = True
     followers = grouped["followers"]
     leaders = grouped["leaders"]
     if len(followers) == 1:
@@ -293,13 +360,14 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
             checkpoint = ACTPipeline().checkpoint_path(str(Path(policies_root) / source_dataset))
         else:
             checkpoint = ACTPipeline().checkpoint_path(policies_root)
-    dataset_name = kwargs.get("dataset_name", "eval_default")
-    error = _validate_dataset_name(dataset_name)
-    if error:
-        return error
-    if not dataset_name.startswith("eval_"):
+    result = _resolve_dataset_name(kwargs, "eval")
+    if isinstance(result, str):
+        return result
+    dataset_name, user_specified = result
+    if user_specified and not dataset_name.startswith("eval_"):
         dataset_name = f"eval_{dataset_name}"
     dataset_root = _dataset_path(setup, dataset_name)
+    resume = _should_resume(user_specified, dataset_root)
     controller = SO101Controller()
     policy_kwargs = {
         "cameras": cameras,
@@ -308,6 +376,7 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
         "dataset_root": str(dataset_root),
         "task": kwargs.get("task", "eval"),
         "num_episodes": kwargs.get("num_episodes", 1),
+        "resume": resume,
     }
     if len(followers) == 1:
         follower = followers[0]
