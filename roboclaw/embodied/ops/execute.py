@@ -283,11 +283,6 @@ def _build_record_kwargs(
         if episode_time_s <= 0:
             raise ValueError("episode_time_s must be positive.")
         result["episode_time_s"] = episode_time_s
-    reset_time_s = kwargs.get("reset_time_s")
-    if reset_time_s is not None:
-        if reset_time_s < 0:
-            raise ValueError("reset_time_s must be non-negative.")
-        result["reset_time_s"] = reset_time_s
     return result
 
 

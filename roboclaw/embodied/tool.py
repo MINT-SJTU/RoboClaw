@@ -130,10 +130,6 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "type": "integer",
                     "description": "Duration per episode in seconds.",
                 },
-                "reset_time_s": {
-                    "type": "integer",
-                    "description": "Duration of reset period between episodes in seconds.",
-                },
                 "checkpoint_path": {
                     "type": "string",
                     "description": "Path to a trained policy checkpoint (turns record into policy inference).",

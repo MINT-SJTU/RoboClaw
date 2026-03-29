@@ -93,7 +93,6 @@ class SO101Controller:
         push_to_hub: bool = False,
         fps: int = 30, num_episodes: int = 10,
         episode_time_s: int | None = None,
-        reset_time_s: int | None = None,
         resume: bool = False,
     ) -> list[str]:
         """Build recording command (follower + leader + cameras + dataset)."""
@@ -104,7 +103,7 @@ class SO101Controller:
             argv.append(f"--robot.cameras={json.dumps(cameras)}")
         argv.extend(self._dataset_args(
             repo_id, dataset_root, task, push_to_hub, fps, num_episodes, episode_time_s,
-            reset_time_s=reset_time_s, resume=resume,
+            resume=resume,
         ))
         return argv
 
@@ -120,7 +119,6 @@ class SO101Controller:
         push_to_hub: bool = False,
         fps: int = 30, num_episodes: int = 10,
         episode_time_s: int | None = None,
-        reset_time_s: int | None = None,
         resume: bool = False,
     ) -> list[str]:
         """Build bimanual recording command (2 followers + 2 leaders + cameras)."""
@@ -136,7 +134,7 @@ class SO101Controller:
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
             *self._dataset_args(
                 repo_id, dataset_root, task, push_to_hub, fps, num_episodes, episode_time_s,
-                reset_time_s=reset_time_s, resume=resume,
+                resume=resume,
             ),
         ]
         return argv
@@ -256,7 +254,6 @@ class SO101Controller:
         repo_id: str, dataset_root: str, task: str,
         push_to_hub: bool, fps: int, num_episodes: int,
         episode_time_s: int | None = None,
-        reset_time_s: int | None = None,
         resume: bool = False,
     ) -> list[str]:
         """Build --dataset.* CLI args shared by record and record_bimanual."""
@@ -267,13 +264,9 @@ class SO101Controller:
             f"--dataset.single_task={task}",
             f"--dataset.fps={fps}",
             f"--dataset.num_episodes={num_episodes}",
-            "--dataset.vcodec=auto",
-            "--dataset.streaming_encoding=true",
         ]
         if episode_time_s is not None:
             args.append(f"--dataset.episode_time_s={episode_time_s}")
-        if reset_time_s is not None:
-            args.append(f"--dataset.reset_time_s={reset_time_s}")
         if resume:
             args.append("--resume=true")
         return args

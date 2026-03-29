@@ -196,8 +196,6 @@ class AgentLoop:
         iteration = 0
         final_content = None
         tools_used: list[str] = []
-        _consecutive_errors = 0
-        _last_error: str | None = None
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -229,46 +227,14 @@ class AgentLoop:
                     thinking_blocks=response.thinking_blocks,
                 )
 
-                interrupted = False
-                executed_ids: set[str] = set()
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    executed_ids.add(tool_call.id)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
-                    if isinstance(result, str) and result == "interrupted":
-                        interrupted = True
-                        break
-                    # Detect error retry loops — break if same error repeats
-                    if isinstance(result, str) and result.startswith("Error"):
-                        if result == _last_error:
-                            _consecutive_errors += 1
-                        else:
-                            _consecutive_errors = 1
-                            _last_error = result
-                        if _consecutive_errors >= 3:
-                            interrupted = True
-                            break
-                    else:
-                        _consecutive_errors = 0
-                        _last_error = None
-                if interrupted:
-                    # Fill dummy results for unexecuted tool calls to keep
-                    # the message list valid for providers that enforce pairing.
-                    for tc in response.tool_calls:
-                        if tc.id not in executed_ids:
-                            messages = self.context.add_tool_result(
-                                messages, tc.id, tc.name, "cancelled"
-                            )
-                    final_content = "Operation cancelled."
-                    messages = self.context.add_assistant_message(
-                        messages, final_content,
-                    )
-                    break
             else:
                 clean = self._strip_think(response.content)
                 # Don't persist error responses to session history — they can

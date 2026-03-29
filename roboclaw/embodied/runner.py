@@ -52,11 +52,7 @@ class LocalLeRobotRunner:
             return 0, ""
 
         process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=None,   # inherit parent's stdin (TTY)
-            stdout=None,  # inherit parent's stdout (TTY)
-            stderr=asyncio.subprocess.PIPE,
-            env=_utf8_env(),
+            *argv, stderr=asyncio.subprocess.PIPE, env=_utf8_env(),
         )
         chunks: list[bytes] = []
 
@@ -67,12 +63,7 @@ class LocalLeRobotRunner:
                 sys.stderr.buffer.flush()
                 chunks.append(chunk)
 
-        try:
-            await asyncio.gather(_tee_stderr(), process.wait())
-        except KeyboardInterrupt:
-            process.kill()
-            await process.wait()
-            return -2, ""
+        await asyncio.gather(_tee_stderr(), process.wait())
         stderr_text = b"".join(chunks).decode("utf-8", errors="replace")
         return process.returncode or 0, stderr_text
 

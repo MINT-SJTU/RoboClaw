@@ -735,8 +735,6 @@ def agent(
             if _thinking:
                 _thinking.suspend()
             _flush_pending_tty_input()
-            # Restore terminal to cooked mode so subprocess input() works
-            _restore_terminal()
             console.print(f"\n[dim]Executing {label}...[/dim]")
         else:
             _tty_handoff_active = False
