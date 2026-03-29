@@ -294,18 +294,21 @@ def main(
 # ============================================================================
 
 
-def run_onboard_core(*, interactive: bool = True) -> None:
+def run_onboard_core(*, interactive: bool = True, skip_config: bool = False) -> None:
     """Core onboard logic shared by ``roboclaw onboard`` and ``roboclaw dev reset``.
 
     When *interactive* is False the config is always created fresh (no
     overwrite prompt) and the "next steps" banner is suppressed.
+    When *skip_config* is True the config file is left untouched.
     """
     from roboclaw.config.loader import get_config_path, load_config, save_config
     from roboclaw.config.schema import Config
 
     config_path = get_config_path()
 
-    if config_path.exists() and interactive:
+    if skip_config:
+        pass
+    elif config_path.exists() and interactive:
         console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
         console.print("  [bold]y[/bold] = overwrite with defaults (existing values will be lost)")
         console.print("  [bold]N[/bold] = refresh config, keeping existing values and adding new fields")
