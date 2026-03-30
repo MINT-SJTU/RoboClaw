@@ -21,7 +21,13 @@
 
 ## 🎬 Demo
 
-<video src="https://github.com/MINT-SJTU/RoboClaw/releases/download/demo-v0.1/roboclaw_demo.mp4" controls muted style="max-width:100%; max-height:640px;"></video>
+<p align="center">
+  <a href="https://github.com/MINT-SJTU/RoboClaw/releases/download/demo-v0.1/roboclaw_demo.mp4">
+    <img src="roboclaw_demo_preview.gif" alt="RoboClaw Demo" width="800" />
+  </a>
+  <br/>
+  <em>Click to watch the full demo video</em>
+</p>
 
 ## 📢 News
 
