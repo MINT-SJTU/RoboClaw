@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
+import shutil
 import signal
+import subprocess
+import tempfile
 import threading
 from typing import Any
 
@@ -12,7 +14,6 @@ from loguru import logger
 
 from roboclaw.embodied.ops.helpers import (
     _arm_id,
-    _bimanual_cal_dirs,
     _dataset_path,
     _group_arms,
     _resolve_action_arms,
@@ -35,6 +36,7 @@ class RobotSession:
         self._cameras: dict[str, dict] = {}
         self._process_pid: int | None = None
         self._recording_dataset: str = ""
+        self._temp_dirs: list[str] = []
 
     @property
     def state(self) -> str:
@@ -144,18 +146,18 @@ class RobotSession:
                 cameras=self._cameras,
             )
 
-        with _bimanual_cal_dirs(followers, leaders) as (robot_dir, teleop_dir):
-            return controller.teleoperate_bimanual(
-                robot_id="bimanual",
-                robot_cal_dir=robot_dir,
-                left_robot=followers[0],
-                right_robot=followers[1],
-                teleop_id="bimanual",
-                teleop_cal_dir=teleop_dir,
-                left_teleop=leaders[0],
-                right_teleop=leaders[1],
-                cameras=self._cameras,
-            )
+        robot_dir, teleop_dir = self._create_bimanual_cal_dirs(followers, leaders)
+        return controller.teleoperate_bimanual(
+            robot_id="bimanual",
+            robot_cal_dir=robot_dir,
+            left_robot=followers[0],
+            right_robot=followers[1],
+            teleop_id="bimanual",
+            teleop_cal_dir=teleop_dir,
+            left_teleop=leaders[0],
+            right_teleop=leaders[1],
+            cameras=self._cameras,
+        )
 
     def _build_record_argv(
         self, dataset_name: str, task: str, fps: int, num_episodes: int,
@@ -188,35 +190,68 @@ class RobotSession:
                 **record_kwargs,
             )
 
-        with _bimanual_cal_dirs(followers, leaders) as (robot_dir, teleop_dir):
-            return controller.record_bimanual(
-                robot_id="bimanual",
-                robot_cal_dir=robot_dir,
-                left_robot=followers[0],
-                right_robot=followers[1],
-                teleop_id="bimanual",
-                teleop_cal_dir=teleop_dir,
-                left_teleop=leaders[0],
-                right_teleop=leaders[1],
-                **record_kwargs,
-            )
+        robot_dir, teleop_dir = self._create_bimanual_cal_dirs(followers, leaders)
+        return controller.record_bimanual(
+            robot_id="bimanual",
+            robot_cal_dir=robot_dir,
+            left_robot=followers[0],
+            right_robot=followers[1],
+            teleop_id="bimanual",
+            teleop_cal_dir=teleop_dir,
+            left_teleop=leaders[0],
+            right_teleop=leaders[1],
+            **record_kwargs,
+        )
+
+    def _create_bimanual_cal_dirs(
+        self, followers: list[dict], leaders: list[dict],
+    ) -> tuple[str, str]:
+        """Create persistent temp dirs for bimanual calibration (cleaned on stop/disconnect)."""
+        from pathlib import Path
+        robot_dir = tempfile.mkdtemp(prefix="roboclaw-bimanual-robot-")
+        teleop_dir = tempfile.mkdtemp(prefix="roboclaw-bimanual-teleop-")
+        self._temp_dirs.extend([robot_dir, teleop_dir])
+        for side, arm in [("left", followers[0]), ("right", followers[1])]:
+            serial = _arm_id(arm)
+            src = Path(arm["calibration_dir"]).expanduser() / f"{serial}.json"
+            if src.exists():
+                shutil.copy2(src, Path(robot_dir) / f"bimanual_{side}.json")
+        for side, arm in [("left", leaders[0]), ("right", leaders[1])]:
+            serial = _arm_id(arm)
+            src = Path(arm["calibration_dir"]).expanduser() / f"{serial}.json"
+            if src.exists():
+                shutil.copy2(src, Path(teleop_dir) / f"bimanual_{side}.json")
+        return robot_dir, teleop_dir
 
     # -- Subprocess management -----------------------------------------
 
     def _launch_subprocess(self, argv: list[str]) -> None:
-        import subprocess
-
-        proc = subprocess.Popen(argv, start_new_session=True)
+        # Pipe stdin with newlines to auto-confirm LeRobot calibration prompts
+        # ("Press ENTER to use provided calibration file...")
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            start_new_session=True,
+        )
+        # Send enough newlines for bimanual (2 leaders × 1 prompt each)
+        if proc.stdin:
+            proc.stdin.write(b"\n\n\n\n")
+            proc.stdin.close()
         self._process_pid = proc.pid
-        logger.info("Launched subprocess pid={}: {}", proc.pid, " ".join(argv[:4]))
+        logger.info("Launched subprocess pid={}: {}", proc.pid, " ".join(argv[:5]))
 
     def _kill_subprocess(self) -> None:
         pid = self._process_pid
-        if pid is None:
-            return
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGINT)
-            logger.info("Sent SIGINT to process group pid={}", pid)
-        except (ProcessLookupError, PermissionError):
-            pass
-        self._process_pid = None
+        if pid is not None:
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGINT)
+                logger.info("Sent SIGINT to process group pid={}", pid)
+            except (ProcessLookupError, PermissionError):
+                pass
+            self._process_pid = None
+        self._cleanup_temp_dirs()
+
+    def _cleanup_temp_dirs(self) -> None:
+        for d in self._temp_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+        self._temp_dirs.clear()
