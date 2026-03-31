@@ -8,7 +8,7 @@ import sys
 
 
 class ArmCommandBuilder:
-    """Builds LeRobot CLI commands for robot arms.
+    """Build LeRobot CLI commands for robot arms.
 
     All methods take explicit params — the caller (tool.py) resolves
     setup.json into concrete values before calling these.
@@ -41,7 +41,7 @@ class ArmCommandBuilder:
     ) -> list[str]:
         """Build calibration command for one arm.
 
-        arm_type: "so101_follower" or "so101_leader"
+        arm_type: "<family>_follower" or "<family>_leader"
         For follower uses --robot.* prefix, for leader uses --teleop.* prefix.
         """
         prefix = self._arm_prefix(arm_type)

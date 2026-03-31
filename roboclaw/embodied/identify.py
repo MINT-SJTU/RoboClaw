@@ -121,6 +121,30 @@ def read_positions(
     return positions
 
 
+def read_positions_dynamixel(
+    port_path: str, motor_ids: list[int], baudrate: int = DEFAULT_BAUDRATE,
+) -> dict[int, int]:
+    """Read Dynamixel Present_Position (addr=132, len=4) for each motor ID."""
+    from roboclaw.embodied.stub import is_stub_mode
+
+    if is_stub_mode():
+        return {mid: 0 for mid in motor_ids}
+    import dynamixel_sdk as dxl
+
+    handler = dxl.PortHandler(port_path)
+    if not handler.openPort():
+        return {}
+    handler.setBaudRate(baudrate)
+    packet = dxl.PacketHandler(2.0)
+    positions: dict[int, int] = {}
+    for mid in motor_ids:
+        val, result, _ = packet.read4ByteTxRx(handler, mid, 132)
+        if result == dxl.COMM_SUCCESS:
+            positions[mid] = val
+    handler.closePort()
+    return positions
+
+
 def detect_motion(baseline: dict[int, int], current: dict[int, int]) -> int:
     """Compute total absolute delta between baseline and current positions."""
     total = 0
@@ -205,7 +229,10 @@ def _read_all_baselines(ports: list[dict]) -> dict[str, dict[int, int]]:
     baselines: dict[str, dict[int, int]] = {}
     for port in ports:
         path = _resolve_port_path(port)
-        baselines[path] = read_positions(path, port["motor_ids"])
+        if port.get("bus_type") == "dynamixel":
+            baselines[path] = read_positions_dynamixel(path, port["motor_ids"])
+        else:
+            baselines[path] = read_positions(path, port["motor_ids"])
     return baselines
 
 
@@ -220,7 +247,10 @@ def _find_moved_port(ports: list[dict], baselines: dict[str, dict[int, int]]) ->
     best_delta = 0
     for port in ports:
         path = _resolve_port_path(port)
-        current = read_positions(path, port["motor_ids"])
+        if port.get("bus_type") == "dynamixel":
+            current = read_positions_dynamixel(path, port["motor_ids"])
+        else:
+            current = read_positions(path, port["motor_ids"])
         delta = detect_motion(baselines[path], current)
         if delta > MOTION_THRESHOLD and delta > best_delta:
             best_delta = delta
