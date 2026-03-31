@@ -155,6 +155,28 @@ class WebChannel(BaseChannel):
         ]
 
     # ------------------------------------------------------------------
+    # Dashboard broadcast
+    # ------------------------------------------------------------------
+
+    async def broadcast_dashboard_event(self, event: dict[str, Any]) -> None:
+        """Send a dashboard event to all connected WebSocket clients."""
+        all_sockets = [
+            ws
+            for sockets in self._connections.values()
+            for ws in sockets
+        ]
+        if not all_sockets:
+            return
+
+        async def _send_safe(ws: WebSocket) -> None:
+            try:
+                await self._send_json(ws, event)
+            except (ConnectionError, RuntimeError, WebSocketDisconnect):
+                pass
+
+        await asyncio.gather(*[_send_safe(ws) for ws in all_sockets])
+
+    # ------------------------------------------------------------------
     # Outbound
     # ------------------------------------------------------------------
 

@@ -44,6 +44,18 @@ class LocalLeRobotRunner:
             stderr.decode("utf-8", errors="replace"),
         )
 
+    async def run_streaming(self, argv: list[str]) -> asyncio.subprocess.Process:
+        """Launch subprocess with piped stdout/stderr for real-time reading.
+
+        Caller is responsible for reading stdout/stderr and waiting for completion.
+        """
+        return await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_utf8_env(),
+        )
+
     async def run_interactive(self, argv: list[str]) -> tuple[int, str]:
         """Run command with inherited TTY, tee stderr. Returns (exit code, stderr text)."""
         from roboclaw.embodied.stub import is_stub_mode

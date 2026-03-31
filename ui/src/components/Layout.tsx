@@ -1,17 +1,24 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useWebSocket } from '../controllers/connection'
+import { useDashboard } from '../controllers/dashboard'
 
 export default function Layout() {
   const location = useLocation()
   const { connect, disconnect, connected, sessionId } = useWebSocket()
+  const { networkInfo, fetchNetworkInfo } = useDashboard()
 
   useEffect(() => {
     connect()
     return () => disconnect()
   }, [connect, disconnect])
 
+  useEffect(() => {
+    fetchNetworkInfo()
+  }, [fetchNetworkInfo])
+
   const navItems = [
+    { path: '/dashboard', label: '采集' },
     { path: '/chat', label: '对话' },
     { path: '/settings', label: '设置' },
   ]
@@ -19,7 +26,7 @@ export default function Layout() {
   return (
     <div className="flex h-screen bg-gray-900 text-white">
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-800 border-r border-gray-700">
+      <aside className="w-64 bg-gray-800 border-r border-gray-700 flex flex-col">
         <div className="p-4">
           <h1 className="text-2xl font-bold">RoboClaw</h1>
           <div className="mt-2 text-sm">
@@ -33,7 +40,7 @@ export default function Layout() {
           )}
         </div>
 
-        <nav className="mt-8">
+        <nav className="mt-8 flex-1">
           {navItems.map((item) => (
             <Link
               key={item.path}
@@ -46,6 +53,13 @@ export default function Layout() {
             </Link>
           ))}
         </nav>
+
+        {/* LAN info */}
+        {networkInfo && (
+          <div className="p-4 border-t border-gray-700 text-xs text-gray-500">
+            {networkInfo.lan_ip}:{networkInfo.port}
+          </div>
+        )}
       </aside>
 
       {/* Main content */}

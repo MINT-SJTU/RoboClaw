@@ -381,7 +381,7 @@ def create_app(
 
     # 7. Force-enable web channel in config
     web_defaults = WebChannel.default_config()
-    web_cfg = {**web_defaults, "enabled": True}
+    web_cfg = {**web_defaults, "enabled": True, "host": "0.0.0.0"}
     if host is not None:
         web_cfg["host"] = host
     if port is not None:
@@ -414,6 +414,35 @@ def create_app(
         web_ch.register_routes(app)
     _register_system_routes(app, agent)
 
+    # 12b. Dashboard routes + hardware monitor
+    if web_ch is not None:
+        from roboclaw.embodied.hardware_monitor import HardwareMonitor
+        from roboclaw.web.dashboard import register_dashboard_routes
+
+        async def _on_hw_fault(fault: Any) -> None:
+            await web_ch.broadcast_dashboard_event({
+                "type": "dashboard.fault", **fault.to_dict(),
+            })
+
+        async def _on_hw_fault_resolved(fault: Any) -> None:
+            await web_ch.broadcast_dashboard_event({
+                "type": "dashboard.fault.resolved",
+                "fault_type": fault.fault_type.value,
+                "device_alias": fault.device_alias,
+            })
+
+        hw_monitor = HardwareMonitor(
+            on_fault=_on_hw_fault,
+            on_fault_resolved=_on_hw_fault_resolved,
+        )
+        app.state.hardware_monitor = hw_monitor
+
+        register_dashboard_routes(
+            app,
+            web_ch,
+            get_config=lambda: (web_cfg["host"], web_cfg["port"]),
+        )
+
     # 13. Serve built frontend in production (ui/dist/)
     ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
     if ui_dist.is_dir():
@@ -431,10 +460,30 @@ def create_app(
         app.state.channels_task = asyncio.create_task(channel_manager.start_all(), name="roboclaw-channels")
         app.state.cron_task = asyncio.create_task(cron.start(), name="roboclaw-cron")
         app.state.heartbeat_task = asyncio.create_task(heartbeat.start(), name="roboclaw-heartbeat")
+        hw_mon = getattr(app.state, "hardware_monitor", None)
+        if hw_mon is not None:
+            app.state.hardware_monitor_task = asyncio.create_task(
+                hw_mon.run(), name="roboclaw-hw-monitor",
+            )
 
     # 15. Shutdown: tear down gracefully
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        # Stop active recording if any
+        active_rec = getattr(app.state, "active_recording", None)
+        if active_rec is not None and active_rec.active:
+            active_rec.stop()
+
+        # Stop hardware monitor
+        hw_mon = getattr(app.state, "hardware_monitor", None)
+        if hw_mon is not None:
+            hw_mon.stop()
+        hw_task = getattr(app.state, "hardware_monitor_task", None)
+        if hw_task is not None:
+            hw_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await hw_task
+
         agent.stop()
         await channel_manager.stop_all()
         heartbeat.stop()

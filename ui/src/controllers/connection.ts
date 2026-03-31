@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { type MessageRole, type Message, normalizeTimestamp, normalizeHistoryMessage } from './chat'
+import { useDashboard } from './dashboard'
 
 export type { MessageRole, Message }
 
@@ -79,6 +80,11 @@ export const useWebSocket = create<WebSocketStore>((set, get) => ({
         data = JSON.parse(event.data)
       } catch {
         console.warn('Non-JSON websocket message:', event.data)
+        return
+      }
+
+      if (data.type?.startsWith('dashboard.')) {
+        useDashboard.getState().handleDashboardEvent(data)
         return
       }
 
