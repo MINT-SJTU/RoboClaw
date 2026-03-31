@@ -11,23 +11,25 @@
 
 ---
 
+## 前置依赖
+
+建议安装 [Codex 插件](https://github.com/openai/codex-plugin-cc) 以启用 Claude + Codex 并行协作。
+
 ## 工作规范
 
 ### 并行协作（Claude sub-agent + Codex sub-agent）
 
 所有非 trivial 的实现任务，必须起两个并行 **sub-agent** 写完全相同的代码：
 - **Claude sub-agent**：用 Agent tool 启动，`isolation: "worktree"` 在独立 git worktree 中工作。
-- **Codex sub-agent**：手动创建 git worktree（`git worktree add /tmp/roboclaw-codex-xxx HEAD`），然后用 `/codex-dispatch` 在该 worktree 中执行。
+- **Codex sub-agent**：手动创建 git worktree（`git worktree add /tmp/roboclaw-codex-xxx HEAD`），然后用 `/codex:rescue` 在该 worktree 中执行。
 - 两个 sub-agent **同时启动**，写完全相同的任务。完成后对比两个版本，取各自优点合并到主分支。
 - 合并后清理所有 worktree。
-
-规划阶段同样并行：自己出方案 + `/codex-plan` 出独立方案，整合后给用户。
 
 ### 提交前双路审查
 
 commit 前必须跑两个 review（同样用 sub-agent 并行）：
 - **Claude sub-agent** 执行 `/simplify`：检查代码复用、质量、效率。发现问题直接修。
-- **Codex sub-agent** 执行 `/codex-review`：从独立视角审查，发现盲点。
+- **Codex sub-agent** 执行 `/codex:review`：从独立视角审查，发现盲点。大的改动可追加 `/codex:adversarial-review` 挑战设计假设。
 - 审查必须覆盖本文件中的所有代码规范（缩进层数、文件行数、try/except、复用等），不能只看功能正确性。
 
 ### 测试与交互

@@ -41,6 +41,7 @@ app = typer.Typer(
     help=f"{__logo__} RoboClaw - Personal AI Assistant",
     no_args_is_help=True,
 )
+web_app = typer.Typer(name="web", help="Web UI server commands.")
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -49,6 +50,7 @@ EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 from roboclaw.cli.dev import dev_app
 
 app.add_typer(dev_app, name="dev", help="Developer utilities (reset workspace, etc.).")
+app.add_typer(web_app, name="web", help="Web UI server commands.")
 
 
 def _new_cli_session_id() -> str:
@@ -397,86 +399,24 @@ def _onboard_plugins(config_path: Path) -> None:
 
 def _make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
-    # Allow PTY integration tests to inject a stub provider via env var.
-    # Gated behind ROBOCLAW_STUB to prevent accidental use in production.
-    stub_module = os.environ.get("ROBOCLAW_STUB_LLM")
-    if stub_module and os.environ.get("ROBOCLAW_STUB"):
-        import importlib
-        mod = importlib.import_module(stub_module)
-        return mod.create_provider(config)
+    from roboclaw.providers.factory import ProviderConfigurationError, build_provider
 
-    from roboclaw.providers.base import GenerationSettings
-    from roboclaw.providers.openai_codex_provider import OpenAICodexProvider
-    from roboclaw.providers.azure_openai_provider import AzureOpenAIProvider
-
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
-
-    # OpenAI Codex (OAuth)
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
-        provider = OpenAICodexProvider(default_model=model)
-    # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
-    elif provider_name == "custom":
-        from roboclaw.providers.custom_provider import CustomProvider
-        provider = CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base(model) or "http://localhost:8000/v1",
-            default_model=model,
-        )
-    # Azure OpenAI: direct Azure OpenAI endpoint with deployment name
-    elif provider_name == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.roboclaw/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-        provider = AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
-            default_model=model,
-        )
-    else:
-        from roboclaw.providers.litellm_provider import LiteLLMProvider
-        from roboclaw.providers.registry import find_by_name
-        spec = find_by_name(provider_name)
-        if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and (spec.is_oauth or spec.is_local)):
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.roboclaw/config.json under providers section")
-            raise typer.Exit(1)
-        provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-        )
-
-    defaults = config.agents.defaults
-    provider.generation = GenerationSettings(
-        temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
-        reasoning_effort=defaults.reasoning_effort,
-    )
-    return provider
+    try:
+        return build_provider(config)
+    except ProviderConfigurationError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        if exc.hint:
+            console.print(exc.hint)
+        raise typer.Exit(1) from exc
 
 
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
-    from roboclaw.config.loader import load_config, set_config_path
+    from roboclaw.config.loader import load_runtime_config
 
-    config_path = None
+    loaded = load_runtime_config(config, workspace)
     if config:
-        config_path = Path(config).expanduser().resolve()
-        if not config_path.exists():
-            console.print(f"[red]Error: Config file not found: {config_path}[/red]")
-            raise typer.Exit(1)
-        set_config_path(config_path)
-        console.print(f"[dim]Using config: {config_path}[/dim]")
-
-    loaded = load_config(config_path)
-    if workspace:
-        loaded.agents.defaults.workspace = workspace
+        console.print(f"[dim]Using config: {Path(config).expanduser().resolve()}[/dim]")
     return loaded
 
 
@@ -681,6 +621,30 @@ def gateway(
             await channels.stop_all()
 
     asyncio.run(run())
+
+
+@web_app.command("start")
+def web_start(
+    host: str | None = typer.Option(None, "--host", help="Web server host"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Web server port"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Start the RoboClaw web chat server."""
+    if verbose:
+        import logging
+
+        logging.basicConfig(level=logging.DEBUG)
+
+    try:
+        from roboclaw.web.server import main as run_web_server
+    except ImportError as exc:
+        console.print("[red]Error:[/red] Web dependencies are not installed.")
+        console.print('Install them with: [cyan]pip install -e ".[web]"[/cyan]')
+        raise typer.Exit(1) from exc
+
+    run_web_server(config_path=config, workspace=workspace, host=host, port=port)
 
 
 

@@ -65,6 +65,21 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def load_runtime_config(
+    config_path: str | None = None,
+    workspace: str | None = None,
+) -> Config:
+    """Load config, optionally set global config path and override workspace."""
+    resolved = None
+    if config_path:
+        resolved = Path(config_path).expanduser().resolve()
+        set_config_path(resolved)
+    cfg = load_config(resolved)
+    if workspace:
+        cfg.agents.defaults.workspace = workspace
+    return cfg
+
+
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace

@@ -1,0 +1,169 @@
+"""Background hardware health checker.
+
+Periodically checks that configured arms and cameras are reachable,
+fires callbacks when faults appear or resolve.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import time
+from dataclasses import asdict, dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from loguru import logger
+
+from roboclaw.embodied.setup import load_setup
+
+_CHECK_INTERVAL_SECONDS = 5
+
+FaultCallback = Callable[["HardwareFault"], Awaitable[None] | None]
+
+
+class FaultType(str, Enum):
+    ARM_DISCONNECTED = "arm_disconnected"
+    ARM_TIMEOUT = "arm_timeout"
+    ARM_NOT_CALIBRATED = "arm_not_calibrated"
+    CAMERA_DISCONNECTED = "camera_disconnected"
+    CAMERA_FRAME_DROP = "camera_frame_drop"
+    RECORD_CRASHED = "record_crashed"
+
+
+@dataclass
+class HardwareFault:
+    fault_type: FaultType
+    device_alias: str
+    message: str
+    timestamp: float
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["fault_type"] = self.fault_type.value
+        return d
+
+
+def _fault_key(fault: HardwareFault) -> str:
+    """Unique key for deduplicating active faults."""
+    return f"{fault.fault_type.value}:{fault.device_alias}"
+
+
+class HardwareMonitor:
+    """Periodically checks hardware health and fires fault callbacks."""
+
+    def __init__(
+        self,
+        on_fault: FaultCallback,
+        on_fault_resolved: FaultCallback,
+    ) -> None:
+        self._on_fault = on_fault
+        self._on_fault_resolved = on_fault_resolved
+        self._active_faults: dict[str, HardwareFault] = {}
+        self._recording_active = False
+        self._stop_event = asyncio.Event()
+
+    @property
+    def active_faults(self) -> list[HardwareFault]:
+        return list(self._active_faults.values())
+
+    def set_recording_active(self, active: bool) -> None:
+        self._recording_active = active
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    async def run(self) -> None:
+        """Main loop: check hardware every N seconds until stopped."""
+        logger.info("Hardware monitor started")
+        while not self._stop_event.is_set():
+            await self._tick()
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=_CHECK_INTERVAL_SECONDS
+                )
+                break  # stop_event was set
+            except asyncio.TimeoutError:
+                pass  # normal interval elapsed
+        logger.info("Hardware monitor stopped")
+
+    async def _tick(self) -> None:
+        """Run one check cycle, diff against active faults, fire callbacks."""
+        current_faults = self.check_hardware()
+        current_keys = {_fault_key(f): f for f in current_faults}
+
+        # Detect new faults
+        for key, fault in current_keys.items():
+            if key not in self._active_faults:
+                self._active_faults[key] = fault
+                logger.warning("Hardware fault detected: {} — {}", key, fault.message)
+                await _emit(self._on_fault, fault)
+
+        # Detect resolved faults
+        resolved_keys = set(self._active_faults.keys()) - set(current_keys.keys())
+        for key in resolved_keys:
+            resolved_fault = self._active_faults.pop(key)
+            logger.info("Hardware fault resolved: {}", key)
+            await _emit(self._on_fault_resolved, resolved_fault)
+
+    def check_hardware(self) -> list[HardwareFault]:
+        """Check all configured devices and return current faults."""
+        setup = load_setup()
+        now = time.time()
+        faults: list[HardwareFault] = []
+        _check_arms(setup.get("arms", []), now, faults)
+        _check_cameras(setup.get("cameras", []), now, faults, self._recording_active)
+        return faults
+
+
+def _check_arms(
+    arms: list[dict[str, Any]], now: float, faults: list[HardwareFault],
+) -> None:
+    """Check arm connectivity and calibration state."""
+    for arm in arms:
+        alias = arm.get("alias", "unknown")
+        port = arm.get("port", "")
+        if port and not Path(port).exists():
+            faults.append(HardwareFault(
+                fault_type=FaultType.ARM_DISCONNECTED,
+                device_alias=alias,
+                message=f"Arm '{alias}' USB port not found",
+                timestamp=now,
+            ))
+            continue
+        if not arm.get("calibrated", False):
+            faults.append(HardwareFault(
+                fault_type=FaultType.ARM_NOT_CALIBRATED,
+                device_alias=alias,
+                message=f"Arm '{alias}' is not calibrated",
+                timestamp=now,
+            ))
+
+
+def _check_cameras(
+    cameras: list[dict[str, Any]],
+    now: float,
+    faults: list[HardwareFault],
+    recording_active: bool,
+) -> None:
+    """Check camera connectivity (skip during active recording)."""
+    if recording_active:
+        return
+    for cam in cameras:
+        alias = cam.get("alias", "unknown")
+        port = cam.get("port", "")
+        if port and not Path(port).exists():
+            faults.append(HardwareFault(
+                fault_type=FaultType.CAMERA_DISCONNECTED,
+                device_alias=alias,
+                message=f"Camera '{alias}' device not found",
+                timestamp=now,
+            ))
+
+
+async def _emit(callback: FaultCallback, fault: HardwareFault) -> None:
+    """Invoke a callback, awaiting if it returns a coroutine."""
+    result = callback(fault)
+    if inspect.isawaitable(result):
+        await result

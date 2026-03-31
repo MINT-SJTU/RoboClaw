@@ -17,6 +17,9 @@ DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "roboclaw"
 
 
+_token_lock = asyncio.Lock()
+
+
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
@@ -37,7 +40,8 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
-        token = await asyncio.to_thread(get_codex_token)
+        async with _token_lock:
+            token = await asyncio.to_thread(get_codex_token)
         headers = _build_headers(token.account_id, token.access)
 
         body: dict[str, Any] = {

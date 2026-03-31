@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #ffffff;
+  --sf: #f6f8fa;
+  --bd: #d0d7de;
+  --tx: #1f2328;
+  --tx2: #656d76;
+  --ac: #0969da;
+  --gn: #1a7f37;
+  --rd: #cf222e;
+  --yl: #9a6700;
+  --or: #bc4c00;
+}
+
+body {
+  font: 15px/1.6 -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--tx);
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
