@@ -33,12 +33,23 @@ from roboclaw.embodied.ops.helpers import (
 )
 from roboclaw.embodied.sensor.camera import resolve_cameras
 
+_BIMANUAL_FAMILIES: frozenset[str] = frozenset({"so101"})
+
+
+def _arm_family(arms: list[dict]) -> str:
+    """Extract arm family (e.g. 'so101', 'koch') and validate no mixing."""
+    families = {a["type"].rsplit("_", 1)[0] for a in arms}
+    if len(families) > 1:
+        from roboclaw.embodied.ops.helpers import ActionError
+        raise ActionError(f"Cannot mix arm families: {families}")
+    return families.pop()
+
 
 async def _do_doctor(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
-    result = await _run(LocalLeRobotRunner(), SO101Controller().doctor())
+    result = await _run(LocalLeRobotRunner(), ArmCommandBuilder().doctor())
     return result + f"\n\nCurrent setup:\n{json.dumps(setup, indent=2, ensure_ascii=False)}"
 
 
@@ -68,12 +79,20 @@ def _sync_calibration_to_motors(arm: dict[str, Any]) -> None:
     cal_path = Path(cal_dir) / f"{serial}.json"
     if not cal_path.exists():
         return
+    cal = json.loads(cal_path.read_text())
+
+    if arm["type"].startswith("koch_"):
+        _sync_calibration_dynamixel(arm, cal)
+    else:
+        _sync_calibration_feetech(arm, cal)
+
+
+def _sync_calibration_feetech(arm: dict, cal: dict) -> None:
     try:
         from lerobot.motors.feetech import FeetechMotorsBus
         from lerobot.motors.motors_bus import Motor, MotorCalibration, MotorNormMode
     except ImportError:
         return
-    cal = json.loads(cal_path.read_text())
     motors, calibration = {}, {}
     for name, cfg in cal.items():
         motors[name] = Motor(id=cfg["id"], model="sts3215", norm_mode=MotorNormMode.DEGREES)
@@ -95,8 +114,43 @@ def _sync_calibration_to_motors(arm: dict[str, Any]) -> None:
         bus.disconnect()
 
 
+def _sync_calibration_dynamixel(arm: dict, cal: dict) -> None:
+    try:
+        from lerobot.motors.dynamixel import DynamixelMotorsBus
+        from lerobot.motors.motors_bus import Motor, MotorCalibration, MotorNormMode
+    except ImportError:
+        return
+    is_leader = "leader" in arm["type"]
+    model = "xl330-m077" if is_leader else None
+    _FOLLOWER_MODELS = {
+        "shoulder_pan": "xl430-w250", "shoulder_lift": "xl430-w250",
+        "elbow_flex": "xl330-m288", "wrist_flex": "xl330-m288",
+        "wrist_roll": "xl330-m288", "gripper": "xl330-m288",
+    }
+    motors, calibration = {}, {}
+    for name, cfg in cal.items():
+        m = model if is_leader else _FOLLOWER_MODELS.get(name, "xl330-m288")
+        motors[name] = Motor(id=cfg["id"], model=m, norm_mode=MotorNormMode.DEGREES)
+        calibration[name] = MotorCalibration(
+            id=cfg["id"], drive_mode=cfg["drive_mode"],
+            homing_offset=cfg["homing_offset"],
+            range_min=cfg["range_min"], range_max=cfg["range_max"],
+        )
+    bus = DynamixelMotorsBus(port=arm["port"], motors=motors, calibration=calibration)
+    try:
+        bus.connect()
+        for name, cfg in cal.items():
+            bus.write("Homing_Offset", name, cfg["homing_offset"], normalize=False)
+            bus.write("Min_Position_Limit", name, cfg["range_min"], normalize=False)
+            bus.write("Max_Position_Limit", name, cfg["range_max"], normalize=False)
+    except (OSError, ConnectionError):
+        pass
+    finally:
+        bus.disconnect()
+
+
 async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
     from roboclaw.embodied.runner import LocalLeRobotRunner
     from roboclaw.embodied.setup import arm_display_name, mark_arm_calibrated
 
@@ -109,7 +163,7 @@ async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_hando
         return "All arms are already calibrated."
     if not tty_handoff:
         return _NO_TTY_MSG
-    controller = SO101Controller()
+    controller = ArmCommandBuilder()
     runner = LocalLeRobotRunner()
     succeeded = 0
     failed = 0
@@ -138,7 +192,7 @@ async def _do_calibrate(setup: dict[str, Any], kwargs: dict[str, Any], tty_hando
 
 
 async def _do_teleoperate(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
 
     if not tty_handoff:
         return _NO_TTY_MSG
@@ -146,12 +200,15 @@ async def _do_teleoperate(setup: dict[str, Any], kwargs: dict[str, Any], tty_han
     error = _validate_pairing(grouped["followers"], grouped["leaders"])
     if error:
         return error
-    controller = SO101Controller()
     followers = grouped["followers"]
     leaders = grouped["leaders"]
+    family = _arm_family(followers + leaders)
+    controller = ArmCommandBuilder()
     cameras = resolve_cameras(setup)
     if len(followers) == 1:
         return await _teleoperate_single(controller, followers[0], leaders[0], cameras, tty_handoff)
+    if family not in _BIMANUAL_FAMILIES:
+        return f"{family} arms do not support bimanual mode."
     return await _teleoperate_bimanual(controller, followers, leaders, cameras, tty_handoff)
 
 
@@ -241,7 +298,7 @@ async def _do_record(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     if kwargs.get("checkpoint_path"):
         return await _do_run_policy(setup, kwargs, tty_handoff)
 
-    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
 
     if not tty_handoff:
         return _NO_TTY_MSG
@@ -253,16 +310,19 @@ async def _do_record(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     if isinstance(result, str):
         return result
     dataset_name, user_specified = result
-    controller = SO101Controller()
+    followers = grouped["followers"]
+    leaders = grouped["leaders"]
+    family = _arm_family(followers + leaders)
+    controller = ArmCommandBuilder()
     cameras = {} if kwargs.get("use_cameras") is False else resolve_cameras(setup)
     record_kwargs = _build_record_kwargs(setup, kwargs, cameras, dataset_name)
     dataset_root = Path(record_kwargs["dataset_root"])
     if _should_resume(user_specified, dataset_root):
         record_kwargs["resume"] = True
-    followers = grouped["followers"]
-    leaders = grouped["leaders"]
     if len(followers) == 1:
         return await _record_single(controller, followers[0], leaders[0], record_kwargs, tty_handoff)
+    if family not in _BIMANUAL_FAMILIES:
+        return f"{family} arms do not support bimanual mode."
     return await _record_bimanual(controller, followers, leaders, record_kwargs, tty_handoff)
 
 
@@ -346,7 +406,7 @@ async def _record_bimanual(
 
 async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
     """Run a trained policy - called from record when checkpoint_path is set."""
-    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
     from roboclaw.embodied.learning.act import ACTPipeline
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
@@ -373,7 +433,8 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
         dataset_name = f"eval_{dataset_name}"
     dataset_root = _dataset_path(setup, dataset_name)
     resume = _should_resume(user_specified, dataset_root)
-    controller = SO101Controller()
+    family = _arm_family(followers)
+    controller = ArmCommandBuilder()
     policy_kwargs = {
         "cameras": cameras,
         "policy_path": checkpoint,
@@ -393,6 +454,8 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
             **policy_kwargs,
         )
         return await _run(LocalLeRobotRunner(), argv)
+    if family not in _BIMANUAL_FAMILIES:
+        return f"{family} arms do not support bimanual mode."
     with _bimanual_cal_dirs(followers, []) as (robot_dir, _):
         argv = controller.run_policy_bimanual(
             robot_id=_BIMANUAL_ID,
@@ -405,7 +468,7 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
 
 
 async def _do_replay(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
-    from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
 
     if not tty_handoff:
         return _NO_TTY_MSG
@@ -425,9 +488,12 @@ async def _do_replay(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     dataset_root = _dataset_path(setup, dataset_name, fallback=_DEFAULT_REPLAY_ROOT)
     episode = kwargs.get("episode", 0)
     fps = kwargs.get("fps", 30)
-    controller = SO101Controller()
+    family = _arm_family(followers)
+    controller = ArmCommandBuilder()
     if len(followers) == 1:
         return await _replay_single(controller, followers[0], dataset_name, dataset_root, episode, fps, tty_handoff)
+    if family not in _BIMANUAL_FAMILIES:
+        return f"{family} arms do not support bimanual mode."
     return await _replay_bimanual(controller, followers, dataset_name, dataset_root, episode, fps, tty_handoff)
 
 

@@ -920,3 +920,39 @@ def test_resolve_cameras_defaults_and_passthrough() -> None:
 
 def test_dataset_path_appends_local_and_dataset_name() -> None:
     assert _dataset_path(_MOCK_SETUP, "demo") == Path("/data/local/demo")
+
+
+# ── Koch arm type validation tests ─────────────────────────────────
+
+
+def test_arm_type_enum_includes_koch() -> None:
+    tool = _find_tool(create_embodied_tools(), "embodied_setup")
+    enum = tool.parameters["properties"]["arm_type"]["enum"]
+    assert "koch_follower" in enum
+    assert "koch_leader" in enum
+    assert "so101_follower" in enum
+    assert "so101_leader" in enum
+
+
+def test_set_arm_koch_follower(setup_file: Path) -> None:
+    with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+        result = set_arm("my_koch", "koch_follower", "/dev/ttyACM0", path=setup_file)
+    arm = find_arm(result["arms"], "my_koch")
+    assert arm is not None
+    assert arm["type"] == "koch_follower"
+
+
+def test_set_arm_koch_leader(setup_file: Path) -> None:
+    with std_patch("roboclaw.embodied.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+        result = set_arm("my_koch_leader", "koch_leader", "/dev/ttyACM1", path=setup_file)
+    arm = find_arm(result["arms"], "my_koch_leader")
+    assert arm is not None
+    assert arm["type"] == "koch_leader"
+
+
+def test_validation_accepts_koch_arm_type(setup_file: Path) -> None:
+    setup = load_setup(setup_file)
+    setup["arms"] = [{"alias": "k", "type": "koch_follower", "port": "/dev/x"}]
+    save_setup(setup, setup_file)
+    reloaded = load_setup(setup_file)
+    assert reloaded["arms"][0]["type"] == "koch_follower"

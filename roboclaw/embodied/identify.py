@@ -18,20 +18,13 @@ DEFAULT_BAUDRATE = 1_000_000
 MOTION_THRESHOLD = 50
 
 # Derive the menu from the canonical _ARM_TYPES tuple in setup.py.
-# _ARM_TYPES order: ("so101_follower", "so101_leader")
+_ARM_TYPE_CHOICES: dict[str, str] = {}
+for _idx, _t in enumerate(_ARM_TYPES, 1):
+    _ARM_TYPE_CHOICES[str(_idx)] = _t
+    _ARM_TYPE_CHOICES[_t] = _t
 _leader = next(t for t in _ARM_TYPES if "leader" in t)
 _follower = next(t for t in _ARM_TYPES if "follower" in t)
-
-_ARM_TYPE_CHOICES = {
-    "1": _leader,
-    "2": _follower,
-    "leader": _leader,
-    "follower": _follower,
-    _leader: _leader,
-    _follower: _follower,
-    "主": _leader,
-    "从": _follower,
-}
+_ARM_TYPE_CHOICES.update({"leader": _leader, "follower": _follower, "主": _leader, "从": _follower})
 
 
 def _read_line(prompt: str) -> str:
@@ -47,14 +40,15 @@ def _read_line(prompt: str) -> str:
 def _choose_arm_type() -> str:
     """Prompt until a valid arm type is selected."""
     print("Choose arm type:")
-    print("  1. leader (主臂)")
-    print("  2. follower (从臂)")
+    for i, t in enumerate(_ARM_TYPES, 1):
+        label = "主臂" if "leader" in t else "从臂"
+        print(f"  {i}. {t} ({label})")
     while True:
-        choice = _read_line("Select [1/2]: ").strip().casefold()
+        choice = _read_line("Select: ").strip().casefold()
         arm_type = _ARM_TYPE_CHOICES.get(choice)
         if arm_type is not None:
             return arm_type
-        print("Invalid choice. Enter 1, 2, 主, 从, leader, or follower.")
+        print(f"Invalid choice. Enter 1-{len(_ARM_TYPES)} or a type name.")
 
 
 def _choose_alias(existing_aliases: set[str]) -> str:
@@ -148,6 +142,28 @@ def _resolve_port_by_id(port: dict) -> str:
     return port.get("by_id") or port.get("dev") or port.get("by_path", "")
 
 
+def probe_port_dynamixel(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
+    """Try reading Present_Position for Dynamixel motor IDs 1-6. Return responding IDs."""
+    from roboclaw.embodied.stub import is_stub_mode, stub_motor_ids
+
+    if is_stub_mode():
+        return stub_motor_ids(port_path)
+    import dynamixel_sdk as dxl
+
+    handler = dxl.PortHandler(port_path)
+    if not handler.openPort():
+        return []
+    handler.setBaudRate(baudrate)
+    packet = dxl.PacketHandler(2.0)
+    found = []
+    for mid in MOTOR_IDS:
+        val, result, _ = packet.read4ByteTxRx(handler, mid, 132)
+        if result == dxl.COMM_SUCCESS:
+            found.append(mid)
+    handler.closePort()
+    return found
+
+
 def _probe_single_port(port: dict) -> dict | None:
     """Probe one port for Feetech motors. Returns enriched dict or None."""
     path = _resolve_port_path(port)
@@ -156,17 +172,32 @@ def _probe_single_port(port: dict) -> dict | None:
     ids = probe_port(path)
     if not ids:
         return None
-    return {**port, "motor_ids": ids}
+    return {**port, "motor_ids": ids, "bus_type": "feetech"}
 
 
-def _filter_feetech_ports(scanned_ports: list[dict]) -> list[dict]:
-    """Probe each port, keep only those with Feetech motors. Attach motor_ids."""
+def _probe_single_port_dynamixel(port: dict) -> dict | None:
+    """Probe one port for Dynamixel motors. Returns enriched dict or None."""
+    path = _resolve_port_path(port)
+    if not path:
+        return None
+    ids = probe_port_dynamixel(path)
+    if not ids:
+        return None
+    return {**port, "motor_ids": ids, "bus_type": "dynamixel"}
+
+
+def _filter_motor_ports(scanned_ports: list[dict]) -> list[dict]:
+    """Probe each port for Feetech then Dynamixel motors. Attach motor_ids and bus_type."""
     saved = suppress_stderr()
     try:
-        results = [_probe_single_port(p) for p in scanned_ports]
+        feetech = [_probe_single_port(p) for p in scanned_ports]
+        feetech = [r for r in feetech if r is not None]
+        if feetech:
+            return feetech
+        dxl = [_probe_single_port_dynamixel(p) for p in scanned_ports]
+        return [r for r in dxl if r is not None]
     finally:
         restore_stderr(saved)
-    return [r for r in results if r is not None]
 
 
 def _read_all_baselines(ports: list[dict]) -> dict[str, dict[int, int]]:
@@ -249,10 +280,10 @@ def main() -> None:
         print("No serial ports provided.")
         sys.exit(1)
 
-    print("Probing ports for Feetech motors...")
-    ports = _filter_feetech_ports(scanned_ports)
+    print("Probing ports for motors...")
+    ports = _filter_motor_ports(scanned_ports)
     if not ports:
-        print("No Feetech motors found on any port.")
+        print("No motors found on any port.")
         sys.exit(1)
 
     print(f"Found {len(ports)} port(s) with motors.")

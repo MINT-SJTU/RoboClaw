@@ -1,19 +1,19 @@
-"""Tests for SO101Controller and ACTPipeline CLI arg generation."""
+"""Tests for ArmCommandBuilder and ACTPipeline CLI arg generation."""
 
 import sys
 
-from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
 from roboclaw.embodied.learning.act import ACTPipeline
 
 
 def test_doctor_command() -> None:
-    argv = SO101Controller().doctor()
+    argv = ArmCommandBuilder().doctor()
     assert argv[0] == "python3"
     assert "import lerobot" in argv[2]
 
 
 def test_calibrate_follower() -> None:
-    argv = SO101Controller().calibrate(
+    argv = ArmCommandBuilder().calibrate(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/follower",
@@ -27,7 +27,7 @@ def test_calibrate_follower() -> None:
 
 
 def test_calibrate_leader() -> None:
-    argv = SO101Controller().calibrate(
+    argv = ArmCommandBuilder().calibrate(
         "so101_leader",
         "/dev/ttyACM1",
         "/cal/leader",
@@ -41,7 +41,7 @@ def test_calibrate_leader() -> None:
 
 
 def test_teleoperate() -> None:
-    argv = SO101Controller().teleoperate(
+    argv = ArmCommandBuilder().teleoperate(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -59,7 +59,7 @@ def test_teleoperate() -> None:
 
 
 def test_teleoperate_bimanual() -> None:
-    argv = SO101Controller().teleoperate_bimanual(
+    argv = ArmCommandBuilder().teleoperate_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -84,7 +84,7 @@ def test_teleoperate_bimanual() -> None:
 
 def test_record() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().record(
+    argv = ArmCommandBuilder().record(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -116,7 +116,7 @@ def test_record() -> None:
 
 
 def test_record_with_episode_time_s() -> None:
-    argv = SO101Controller().record(
+    argv = ArmCommandBuilder().record(
         "so101_follower", "/dev/ttyACM0", "/cal/f", "5B14032630",
         "so101_leader", "/dev/ttyACM1", "/cal/l", "5B14030892",
         cameras={}, repo_id="local/test", task="grasp",
@@ -126,7 +126,7 @@ def test_record_with_episode_time_s() -> None:
 
 
 def test_record_omits_episode_time_s_when_none() -> None:
-    argv = SO101Controller().record(
+    argv = ArmCommandBuilder().record(
         "so101_follower", "/dev/ttyACM0", "/cal/f", "5B14032630",
         "so101_leader", "/dev/ttyACM1", "/cal/l", "5B14030892",
         cameras={}, repo_id="local/test", task="grasp",
@@ -136,7 +136,7 @@ def test_record_omits_episode_time_s_when_none() -> None:
 
 
 def test_record_skips_empty_cameras() -> None:
-    argv = SO101Controller().record(
+    argv = ArmCommandBuilder().record(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -155,7 +155,7 @@ def test_record_skips_empty_cameras() -> None:
 
 def test_record_bimanual_uses_per_arm_cameras() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().record_bimanual(
+    argv = ArmCommandBuilder().record_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -181,7 +181,7 @@ def test_record_bimanual_uses_per_arm_cameras() -> None:
 
 
 def test_replay() -> None:
-    argv = SO101Controller().replay(
+    argv = ArmCommandBuilder().replay(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -199,7 +199,7 @@ def test_replay() -> None:
 
 
 def test_replay_bimanual() -> None:
-    argv = SO101Controller().replay_bimanual(
+    argv = ArmCommandBuilder().replay_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -219,7 +219,7 @@ def test_replay_bimanual() -> None:
 
 def test_run_policy() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().run_policy(
+    argv = ArmCommandBuilder().run_policy(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -237,7 +237,7 @@ def test_run_policy() -> None:
 
 def test_run_policy_bimanual() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().run_policy_bimanual(
+    argv = ArmCommandBuilder().run_policy_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -257,7 +257,7 @@ def test_run_policy_bimanual() -> None:
 
 
 def test_run_policy_skips_empty_cameras() -> None:
-    argv = SO101Controller().run_policy(
+    argv = ArmCommandBuilder().run_policy(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -289,3 +289,47 @@ def test_train() -> None:
 def test_checkpoint_path() -> None:
     path = ACTPipeline().checkpoint_path("/output")
     assert "checkpoints/last/pretrained_model" in path
+
+
+# ── Koch arm tests ─────────────────────────────────────────────────
+
+
+def test_calibrate_koch_follower() -> None:
+    argv = ArmCommandBuilder().calibrate(
+        "koch_follower",
+        "/dev/ttyACM0",
+        "/cal/follower",
+        "DXL001",
+    )
+    assert argv[:4] == [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", "calibrate"]
+    assert "--robot.type=koch_follower" in argv
+    assert "--robot.id=DXL001" in argv
+    assert "--robot.port=/dev/ttyACM0" in argv
+
+
+def test_calibrate_koch_leader() -> None:
+    argv = ArmCommandBuilder().calibrate(
+        "koch_leader",
+        "/dev/ttyACM1",
+        "/cal/leader",
+        "DXL002",
+    )
+    assert argv[:4] == [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", "calibrate"]
+    assert "--teleop.type=koch_leader" in argv
+    assert "--teleop.id=DXL002" in argv
+
+
+def test_teleoperate_koch() -> None:
+    argv = ArmCommandBuilder().teleoperate(
+        "koch_follower",
+        "/dev/ttyACM0",
+        "/cal/f",
+        "DXL001",
+        "koch_leader",
+        "/dev/ttyACM1",
+        "/cal/l",
+        "DXL002",
+    )
+    assert argv[:4] == [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", "teleoperate"]
+    assert "--robot.type=koch_follower" in argv
+    assert "--teleop.type=koch_leader" in argv

@@ -1,4 +1,4 @@
-"""SO101 LeRobot 0.5.0 command builder."""
+"""LeRobot CLI command builder for robot arms."""
 
 from __future__ import annotations
 
@@ -7,12 +7,20 @@ from pathlib import Path
 import sys
 
 
-class SO101Controller:
-    """Builds LeRobot CLI commands for SO101 robot arm.
+class ArmCommandBuilder:
+    """Builds LeRobot CLI commands for robot arms.
 
     All methods take explicit params — the caller (tool.py) resolves
     setup.json into concrete values before calling these.
     """
+
+    def __init__(
+        self,
+        bimanual_robot_type: str = "bi_so_follower",
+        bimanual_teleop_type: str = "bi_so_leader",
+    ) -> None:
+        self._bimanual_robot_type = bimanual_robot_type
+        self._bimanual_teleop_type = bimanual_teleop_type
 
     def doctor(self) -> list[str]:
         """Check lerobot, list supported robots, motors, and connected devices."""
@@ -71,11 +79,11 @@ class SO101Controller:
         """Build bimanual teleoperation command (2 followers + 2 leaders)."""
         return [
             *self._wrapper_args("teleoperate"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={self._bimanual_robot_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            "--teleop.type=bi_so_leader",
+            f"--teleop.type={self._bimanual_teleop_type}",
             f"--teleop.id={teleop_id}",
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
@@ -126,11 +134,11 @@ class SO101Controller:
         """Build bimanual recording command (2 followers + 2 leaders + cameras)."""
         argv = [
             *self._wrapper_args("record"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={self._bimanual_robot_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            "--teleop.type=bi_so_leader",
+            f"--teleop.type={self._bimanual_teleop_type}",
             f"--teleop.id={teleop_id}",
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
@@ -174,7 +182,7 @@ class SO101Controller:
         """Build replay command for two follower arms."""
         return [
             *self._wrapper_args("replay"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={self._bimanual_robot_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot),
@@ -221,7 +229,7 @@ class SO101Controller:
         """Build bimanual policy execution command (2 followers, no teleop)."""
         argv = [
             *self._wrapper_args("record"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={self._bimanual_robot_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),

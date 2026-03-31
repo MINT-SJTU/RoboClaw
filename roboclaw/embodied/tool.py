@@ -34,7 +34,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "arm_type": {
                     "type": "string",
-                    "enum": ["so101_follower", "so101_leader"],
+                    "enum": ["so101_follower", "so101_leader", "koch_follower", "koch_leader"],
                     "description": "Arm hardware type for set_arm.",
                 },
                 "port": {
