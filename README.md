@@ -48,20 +48,6 @@
 
 ## 📦 Installation
 
-- `Preferred local workflow`:
-
-```bash
-uv venv
-uv sync --extra dev
-uv run roboclaw onboard
-```
-
-- `Embodied learning stack`:
-
-```bash
-uv sync --extra dev --extra learning
-```
-
 - `AI-assisted setup`: ask your coding assistant:
 
 ```text

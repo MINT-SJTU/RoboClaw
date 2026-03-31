@@ -16,16 +16,12 @@ build/
 *.pyzz
 .venv/
 venv/
-node_modules/
 __pycache__/
 poetry.lock
 .pytest_cache/
-/.omc/
-/.omx/
-.omc/
-.omx/
 botpy.log
 nano.*.save
 .DS_Store
+uv.lock
 .claude/scheduled_tasks.lock
 .claude/worktrees/

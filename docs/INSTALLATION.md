@@ -6,7 +6,7 @@ This guide is the native host installation path. If you want Docker-based workfl
 
 ## 1. Prerequisites
 
-Start from a clean clone on Python 3.12+:
+Start from a clean clone:
 
 ```bash
 git clone https://github.com/MINT-SJTU/RoboClaw.git
@@ -15,24 +15,16 @@ cd RoboClaw
 
 ## 2. Install RoboClaw
 
-Create a local Python environment and sync dependencies with `uv`:
+Install the package in editable mode:
 
 ```bash
-uv venv
-uv sync --extra dev
-```
-
-If you want embodied data collection, replay, or training support, include the
-learning stack as well:
-
-```bash
-uv sync --extra dev --extra learning
+pip install -e ".[dev]"
 ```
 
 After installation, the `roboclaw` command should be available:
 
 ```bash
-uv run roboclaw --help
+roboclaw --help
 ```
 
 Expected result:
@@ -44,7 +36,7 @@ Expected result:
 Run:
 
 ```bash
-uv run roboclaw onboard
+roboclaw onboard
 ```
 
 This should create `~/.roboclaw/config.json`, `~/.roboclaw/workspace/`, and the initial workspace scaffold. You can verify it with:
@@ -70,7 +62,7 @@ You should see at least:
 Run:
 
 ```bash
-uv run roboclaw status
+roboclaw status
 ```
 
 Check that:
@@ -87,7 +79,7 @@ Before testing `roboclaw agent`, make sure the model provider is configured.
 First run:
 
 ```bash
-uv run roboclaw status
+roboclaw status
 ```
 
 This tells you which providers are already available on the current machine.
@@ -101,8 +93,8 @@ If you are using an OAuth-based provider, log in directly.
 The current codebase supports:
 
 ```bash
-uv run roboclaw provider login openai-codex
-uv run roboclaw provider login github-copilot
+roboclaw provider login openai-codex
+roboclaw provider login github-copilot
 ```
 
 ### 5.2 API key provider
@@ -135,7 +127,7 @@ Common API key providers include:
 Then run:
 
 ```bash
-uv run roboclaw status
+roboclaw status
 ```
 
 Check that:
@@ -148,7 +140,7 @@ Check that:
 Run one minimal message to confirm that RoboClaw can respond:
 
 ```bash
-uv run roboclaw agent -m "hello"
+roboclaw agent -m "hello"
 ```
 
 Check that:
