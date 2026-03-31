@@ -171,7 +171,7 @@ class RobotSession:
         record_kwargs: dict[str, Any] = {
             "cameras": self._cameras,
             "repo_id": f"local/{dataset_name}",
-            "dataset_root": str(ds_path.parent),
+            "dataset_root": str(ds_path),
             "task": task,
             "fps": fps,
             "num_episodes": num_episodes,
