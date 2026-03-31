@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RoboClaw Data Collection</title>
+<style>
+  :root{--bg:#0d1117;--sf:#161b22;--bd:#30363d;--tx:#c9d1d9;--tx2:#8b949e;--ac:#58a6ff;--gn:#3fb950;--rd:#f85149;--yl:#d29922;--or:#f0883e}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font:13px/1.5 -apple-system,'Segoe UI',Roboto,monospace;background:var(--bg);color:var(--tx);overflow-x:hidden}
+
+  /* Header / Status bar */
+  .hdr{padding:8px 16px;background:var(--sf);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .hdr h1{font-size:15px;color:var(--ac);white-space:nowrap}
+  .hdr-stats{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--tx2)}
+  .hdr-stats span{white-space:nowrap}
+  .tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:.3px}
+  .tag-gn{background:rgba(63,185,80,.15);color:var(--gn)}
+  .tag-rd{background:rgba(248,81,73,.15);color:var(--rd)}
+  .tag-yl{background:rgba(210,153,34,.15);color:var(--yl)}
+  .tag-ac{background:rgba(88,166,255,.15);color:var(--ac)}
+
+  /* Layout */
+  .container{display:grid;grid-template-columns:1fr 320px;height:calc(100vh - 44px)}
+  .main{display:flex;flex-direction:column;overflow-y:auto}
+  .side{background:var(--sf);border-left:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+
+  /* Camera panel */
+  .cam-panel{background:#000;padding:8px;min-height:200px;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px}
+  .cam-box{flex:1;min-width:280px;max-width:520px;position:relative;background:#111;border-radius:6px;overflow:hidden}
+  .cam-box img{width:100%;display:block;object-fit:contain;background:#000}
+  .cam-label{position:absolute;top:6px;left:8px;background:rgba(0,0,0,.7);color:#fff;font-size:10px;padding:2px 8px;border-radius:4px}
+  .cam-placeholder{color:var(--tx2);font-size:12px}
+
+  /* Sections */
+  .sec{padding:10px 14px;border-bottom:1px solid var(--bd)}
+  .sec h3{font-size:11px;color:var(--tx2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.6px}
+
+  /* Buttons */
+  .b{padding:6px 14px;border:1px solid var(--bd);border-radius:6px;cursor:pointer;font:inherit;font-size:12px;color:var(--tx);background:var(--sf);transition:background .15s,opacity .15s}
+  .b:hover{background:var(--bd)}
+  .b:disabled{opacity:.3;cursor:not-allowed}
+  .b:active:not(:disabled){transform:scale(.97)}
+  .bs{border-color:var(--gn);color:var(--gn)}
+  .bd{border-color:var(--rd);color:var(--rd)}
+  .bw{border-color:var(--yl);color:var(--yl)}
+  .bp{border-color:var(--ac);color:var(--ac)}
+
+  /* Row / form */
+  .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  input,select{background:var(--bg);border:1px solid var(--bd);color:var(--tx);padding:5px 8px;border-radius:5px;font:inherit;font-size:12px;width:100%}
+  input:focus{outline:none;border-color:var(--ac)}
+  label.field{display:flex;flex-direction:column;gap:2px;font-size:10px;color:var(--tx2);flex:1;min-width:120px}
+  label.field input{font-size:12px}
+
+  /* Control panel cards */
+  .ctrl-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 14px}
+  .ctrl-card{background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:10px 12px}
+  .ctrl-card h3{font-size:11px;color:var(--tx2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+  .ctrl-card.full{grid-column:1/-1}
+
+  /* Episode counter */
+  .ep-counter{text-align:center;padding:16px;background:var(--bg);border-radius:8px;margin-bottom:8px}
+  .ep-counter .num{font-size:36px;font-weight:700;color:var(--ac);line-height:1.1}
+  .ep-counter .lbl{font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+
+  /* Side panels */
+  .side-sec{padding:10px;border-bottom:1px solid var(--bd)}
+  .side-sec h3{font-size:11px;color:var(--tx2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;justify-content:space-between}
+
+  /* Dataset list */
+  .ds-list{overflow-y:auto;flex:1;padding:6px}
+  .ds-item{background:var(--bg);border:1px solid var(--bd);border-radius:6px;margin-bottom:4px;padding:8px 10px;display:flex;align-items:center;gap:8px;font-size:11px}
+  .ds-item .ds-name{flex:1;font-weight:600;color:var(--tx)}
+  .ds-item .ds-meta{color:var(--tx2);font-size:10px;white-space:nowrap}
+  .ds-item .ds-del{padding:2px 8px;font-size:10px;cursor:pointer;border:1px solid var(--rd);border-radius:4px;background:transparent;color:var(--rd)}
+  .ds-item .ds-del:hover{background:rgba(248,81,73,.15)}
+
+  /* Log panel */
+  .log-panel{flex:1;overflow-y:auto;padding:6px 10px;font-size:11px;font-family:'SF Mono',Consolas,monospace}
+  .log-entry{padding:3px 0;border-bottom:1px solid rgba(48,54,61,.4)}
+  .log-entry.err{color:var(--rd)}
+  .log-entry.ok{color:var(--gn)}
+  .log-entry.info{color:var(--tx2)}
+  .log-time{color:var(--tx2);margin-right:6px;font-size:10px}
+
+  /* Toast */
+  .toast-c{position:fixed;top:52px;right:12px;z-index:999;display:flex;flex-direction:column;gap:4px;pointer-events:none}
+  .toast{padding:8px 14px;border-radius:6px;font-size:12px;animation:fadeIn .2s;pointer-events:auto}
+  .toast-s{background:#0d3320;border:1px solid var(--gn);color:var(--gn)}
+  .toast-e{background:#3d1214;border:1px solid var(--rd);color:var(--rd)}
+  .toast-i{background:#1a2332;border:1px solid var(--ac);color:var(--ac)}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+
+  /* Responsive */
+  @media(max-width:900px){
+    .container{grid-template-columns:1fr;height:auto}
+    .side{border-left:none;border-top:1px solid var(--bd);max-height:50vh}
+    .ctrl-grid{grid-template-columns:1fr}
+    .ctrl-card.full{grid-column:auto}
+    .cam-box{max-width:100%}
+    .hdr{padding:6px 10px;gap:8px}
+    .hdr h1{font-size:13px}
+  }
+  @media(max-width:500px){
+    .cam-panel{min-height:140px;padding:4px}
+    .ctrl-grid{padding:6px 8px;gap:6px}
+    .ctrl-card{padding:8px}
+    .ep-counter .num{font-size:28px}
+  }
+</style></head><body>
+
+<!-- Header / Status bar -->
+<div class="hdr">
+  <h1>RoboClaw</h1>
+  <span id="connBadge" class="tag tag-rd">Disconnected</span>
+  <div class="hdr-stats">
+    <span id="hdrArms">Arms: --</span>
+    <span id="hdrFps">FPS: --</span>
+    <span id="hdrFrames">Frames: 0</span>
+    <span id="hdrEpisodes">Episodes: 0</span>
+  </div>
+  <div style="flex:1"></div>
+</div>
+
+<div class="container">
+<!-- Main area -->
+<div class="main">
+
+  <!-- Camera preview -->
+  <div class="cam-panel" id="camArea">
+    <span class="cam-placeholder">No camera feed</span>
+  </div>
+
+  <!-- Control panel -->
+  <div class="ctrl-grid">
+
+    <!-- Connection card -->
+    <div class="ctrl-card">
+      <h3>Connection</h3>
+      <div class="row">
+        <button class="b bs" id="bConn" onclick="doConnect()">Connect</button>
+        <button class="b bd" id="bDisc" onclick="doDisconnect()" disabled>Disconnect</button>
+      </div>
+    </div>
+
+    <!-- Teleoperation card -->
+    <div class="ctrl-card">
+      <h3>Teleoperation</h3>
+      <div class="row">
+        <button class="b bp" id="bTelStart" onclick="doTeleopStart()" disabled>Start Teleop</button>
+        <button class="b bw" id="bTelStop" onclick="doTeleopStop()" disabled>Stop Teleop</button>
+      </div>
+    </div>
+
+    <!-- Recording card -->
+    <div class="ctrl-card full">
+      <h3>Recording</h3>
+      <div class="row">
+        <label class="field">Dataset Name
+          <input id="iDataset" placeholder="my_dataset">
+        </label>
+        <label class="field">Task Description
+          <input id="iTask" placeholder="Pick up the red block">
+        </label>
+      </div>
+      <div class="row">
+        <label class="field" style="max-width:100px">FPS
+          <input id="iFps" type="number" value="30" min="1" max="120">
+        </label>
+        <label class="field" style="max-width:120px">Num Episodes
+          <input id="iNumEp" type="number" value="10" min="1">
+        </label>
+        <div style="flex:1;display:flex;align-items:flex-end;gap:6px">
+          <button class="b bs" id="bRecStart" onclick="doRecordStart()" disabled>Start Recording</button>
+          <button class="b bd" id="bRecStop" onclick="doRecordStop()" disabled>Stop Recording</button>
+        </div>
+      </div>
+      <div class="row">
+        <button class="b bs" id="bSaveEp" onclick="doSaveEpisode()" disabled>Save Episode</button>
+        <button class="b bd" id="bDiscardEp" onclick="doDiscardEpisode()" disabled>Discard Episode</button>
+      </div>
+
+      <!-- Episode counter -->
+      <div class="ep-counter" id="epCounter" style="display:none">
+        <div class="num" id="epNum">0 / 0</div>
+        <div class="lbl">Episodes Recorded</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Sidebar -->
+<div class="side">
+
+  <!-- Datasets -->
+  <div class="side-sec">
+    <h3>Datasets <button class="b bp" style="padding:2px 8px;font-size:10px" onclick="loadDatasets()">Refresh</button></h3>
+  </div>
+  <div class="ds-list" id="dsList">
+    <div style="color:var(--tx2);text-align:center;padding:16px;font-size:11px">No datasets</div>
+  </div>
+
+  <!-- Log -->
+  <div class="side-sec" style="border-top:1px solid var(--bd)">
+    <h3>Log <button class="b" style="padding:2px 8px;font-size:10px" onclick="clearLog()">Clear</button></h3>
+  </div>
+  <div class="log-panel" id="logPanel"></div>
+
+</div>
+</div>
+
+<div class="toast-c" id="toastC"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+const State = {
+  DISCONNECTED: 'disconnected',
+  CONNECTED: 'connected',
+  TELEOPERATING: 'teleoperating',
+  RECORDING: 'recording'
+};
+
+let currentState = State.DISCONNECTED;
+let statusWs = null;
+let cameraWs = null;
+let statusReconnectTimer = null;
+let cameraReconnectTimer = null;
+
+// ── Utilities ──────────────────────────────────────────────────
+function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+function toast(msg, type) {
+  type = type || 'i';
+  const d = document.createElement('div');
+  d.className = 'toast toast-' + type;
+  d.textContent = msg;
+  document.getElementById('toastC').appendChild(d);
+  setTimeout(() => d.remove(), 3500);
+}
+
+function logMsg(msg, cls) {
+  const panel = document.getElementById('logPanel');
+  const t = new Date().toLocaleTimeString();
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + (cls || 'info');
+  entry.innerHTML = '<span class="log-time">' + t + '</span>' + esc(msg);
+  panel.appendChild(entry);
+  // Keep max 200 entries
+  while (panel.children.length > 200) panel.removeChild(panel.firstChild);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('logPanel').innerHTML = '';
+}
+
+// ── API helper ─────────────────────────────────────────────────
+async function api(url, opts) {
+  try {
+    const r = await fetch(url, opts);
+    const j = await r.json();
+    if (!r.ok || j.error) {
+      const msg = j.error || j.message || ('HTTP ' + r.status);
+      toast(msg, 'e');
+      logMsg(msg, 'err');
+    }
+    return j;
+  } catch (e) {
+    toast('Network error: ' + e.message, 'e');
+    logMsg('Network error: ' + e.message, 'err');
+    return { error: e.message };
+  }
+}
+
+function postJson(url, body) {
+  return api(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+}
+
+// ── UI State Management ────────────────────────────────────────
+function setState(state) {
+  currentState = state;
+  updateButtons();
+}
+
+function updateButtons() {
+  const s = currentState;
+  const disc = s === State.DISCONNECTED;
+  const conn = s === State.CONNECTED;
+  const tele = s === State.TELEOPERATING;
+  const rec = s === State.RECORDING;
+
+  document.getElementById('bConn').disabled = !disc;
+  document.getElementById('bDisc').disabled = disc;
+  document.getElementById('bTelStart').disabled = !(conn);
+  document.getElementById('bTelStop').disabled = !tele;
+  document.getElementById('bRecStart').disabled = !tele;
+  document.getElementById('bRecStop').disabled = !rec;
+  document.getElementById('bSaveEp').disabled = !rec;
+  document.getElementById('bDiscardEp').disabled = !rec;
+
+  // Badge
+  const badge = document.getElementById('connBadge');
+  if (disc) { badge.className = 'tag tag-rd'; badge.textContent = 'Disconnected'; }
+  else if (conn) { badge.className = 'tag tag-gn'; badge.textContent = 'Connected'; }
+  else if (tele) { badge.className = 'tag tag-ac'; badge.textContent = 'Teleoperating'; }
+  else if (rec) { badge.className = 'tag tag-yl'; badge.textContent = 'Recording'; }
+
+  // Episode counter visibility
+  document.getElementById('epCounter').style.display = rec ? '' : 'none';
+}
+
+function updateStatusDisplay(s) {
+  // Determine state from server status
+  if (s.state) {
+    const stateMap = {
+      'disconnected': State.DISCONNECTED,
+      'connected': State.CONNECTED,
+      'teleoperating': State.TELEOPERATING,
+      'recording': State.RECORDING
+    };
+    const mapped = stateMap[s.state] || State.DISCONNECTED;
+    if (mapped !== currentState) setState(mapped);
+    else updateButtons();
+  }
+
+  // Header stats
+  const arms = s.arms;
+  if (arms && Array.isArray(arms) && arms.length) {
+    document.getElementById('hdrArms').textContent = 'Arms: ' + arms.join(', ');
+  } else {
+    document.getElementById('hdrArms').textContent = 'Arms: --';
+  }
+
+  const fps = s.fps;
+  document.getElementById('hdrFps').textContent = 'FPS: ' + (fps != null ? Number(fps).toFixed(1) : '--');
+  document.getElementById('hdrFrames').textContent = 'Frames: ' + (s.frame_count || 0);
+  document.getElementById('hdrEpisodes').textContent = 'Episodes: ' + (s.episode_index != null ? s.episode_index : 0);
+
+  // Episode counter
+  if (currentState === State.RECORDING && s.episode_index != null) {
+    const total = s.num_episodes || '?';
+    document.getElementById('epNum').textContent = s.episode_index + ' / ' + total;
+  }
+
+  // Cameras in header (informational)
+  const cameras = s.cameras;
+  if (cameras && Array.isArray(cameras) && cameras.length && !document.querySelector('.cam-box')) {
+    // Camera boxes will be created by the camera WebSocket
+  }
+}
+
+// ── Actions ────────────────────────────────────────────────────
+async function doConnect() {
+  logMsg('Connecting robot...');
+  const r = await postJson('/api/connect');
+  if (!r.error) { toast('Connected', 's'); logMsg('Robot connected', 'ok'); }
+}
+
+async function doDisconnect() {
+  logMsg('Disconnecting robot...');
+  const r = await postJson('/api/disconnect');
+  if (!r.error) { toast('Disconnected', 'i'); logMsg('Robot disconnected', 'info'); }
+}
+
+async function doTeleopStart() {
+  logMsg('Starting teleoperation...');
+  const r = await postJson('/api/teleop/start');
+  if (!r.error) { toast('Teleop started', 's'); logMsg('Teleoperation started', 'ok'); }
+}
+
+async function doTeleopStop() {
+  logMsg('Stopping teleoperation...');
+  const r = await postJson('/api/teleop/stop');
+  if (!r.error) { toast('Teleop stopped', 'i'); logMsg('Teleoperation stopped', 'info'); }
+}
+
+async function doRecordStart() {
+  const dataset = document.getElementById('iDataset').value.trim();
+  const task = document.getElementById('iTask').value.trim();
+  const fps = parseInt(document.getElementById('iFps').value) || 30;
+  const numEp = parseInt(document.getElementById('iNumEp').value) || 10;
+
+  if (!dataset) { toast('Enter a dataset name', 'e'); return; }
+  if (!task) { toast('Enter a task description', 'e'); return; }
+
+  logMsg('Starting recording: ' + dataset + ' (' + numEp + ' episodes @ ' + fps + ' fps)');
+  const r = await postJson('/api/record/start', {
+    dataset_name: dataset,
+    task: task,
+    fps: fps,
+    num_episodes: numEp
+  });
+  if (!r.error) { toast('Recording started', 's'); logMsg('Recording started', 'ok'); }
+}
+
+async function doRecordStop() {
+  logMsg('Stopping recording...');
+  const r = await postJson('/api/record/stop');
+  if (!r.error) { toast('Recording stopped', 'i'); logMsg('Recording stopped', 'info'); }
+}
+
+async function doSaveEpisode() {
+  logMsg('Saving episode...');
+  const r = await postJson('/api/record/save');
+  if (!r.error) { toast('Episode saved', 's'); logMsg('Episode saved', 'ok'); }
+}
+
+async function doDiscardEpisode() {
+  logMsg('Discarding episode...');
+  const r = await postJson('/api/record/discard');
+  if (!r.error) { toast('Episode discarded', 'i'); logMsg('Episode discarded', 'info'); }
+}
+
+// ── Datasets ───────────────────────────────────────────────────
+async function loadDatasets() {
+  const r = await api('/api/datasets');
+  const list = document.getElementById('dsList');
+  const datasets = r.datasets || r || [];
+  if (!Array.isArray(datasets) || !datasets.length) {
+    list.innerHTML = '<div style="color:var(--tx2);text-align:center;padding:16px;font-size:11px">No datasets</div>';
+    return;
+  }
+  list.innerHTML = datasets.map(d => {
+    const name = esc(d.name);
+    const meta = [];
+    if (d.episodes != null) meta.push(d.episodes + ' ep');
+    if (d.frames != null) meta.push(d.frames + ' fr');
+    if (d.created) meta.push(d.created);
+    return '<div class="ds-item">' +
+      '<span class="ds-name">' + name + '</span>' +
+      '<span class="ds-meta">' + meta.join(' | ') + '</span>' +
+      '<button class="ds-del" onclick="deleteDataset(\'' + name.replace(/'/g, "\\'") + '\')">Del</button>' +
+      '</div>';
+  }).join('');
+}
+
+async function deleteDataset(name) {
+  if (!confirm('Delete dataset "' + name + '"?')) return;
+  const r = await api('/api/datasets/' + encodeURIComponent(name), { method: 'DELETE' });
+  if (!r.error) {
+    toast('Deleted: ' + name, 's');
+    logMsg('Dataset deleted: ' + name, 'info');
+    loadDatasets();
+  }
+}
+
+// ── Status WebSocket ───────────────────────────────────────────
+function connectStatusWs() {
+  if (statusWs && statusWs.readyState <= WebSocket.OPEN) return;
+  if (statusReconnectTimer) { clearTimeout(statusReconnectTimer); statusReconnectTimer = null; }
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  statusWs = new WebSocket(proto + '//' + location.host + '/ws/status');
+
+  statusWs.onopen = function() {
+    logMsg('Status WebSocket connected', 'ok');
+  };
+
+  statusWs.onmessage = function(ev) {
+    try {
+      const data = JSON.parse(ev.data);
+      updateStatusDisplay(data);
+    } catch (e) { /* ignore parse errors */ }
+  };
+
+  statusWs.onclose = function() {
+    logMsg('Status WebSocket disconnected, reconnecting...', 'err');
+    statusReconnectTimer = setTimeout(connectStatusWs, 2000);
+  };
+
+  statusWs.onerror = function() {
+    statusWs.close();
+  };
+}
+
+// ── Camera WebSocket ───────────────────────────────────────────
+function connectCameraWs() {
+  if (cameraWs && cameraWs.readyState <= WebSocket.OPEN) return;
+  if (cameraReconnectTimer) { clearTimeout(cameraReconnectTimer); cameraReconnectTimer = null; }
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  cameraWs = new WebSocket(proto + '//' + location.host + '/ws/camera');
+
+  cameraWs.onmessage = function(ev) {
+    try {
+      const data = JSON.parse(ev.data);
+      const area = document.getElementById('camArea');
+
+      // data can be {camera_alias: base64, ...} or {cameras: {...}}
+      const feeds = data.cameras || data;
+      if (!feeds || typeof feeds !== 'object') return;
+
+      for (const [name, b64] of Object.entries(feeds)) {
+        if (typeof b64 !== 'string') continue;
+        let box = document.getElementById('cam-' + name);
+        if (!box) {
+          // Remove placeholder
+          const ph = area.querySelector('.cam-placeholder');
+          if (ph) ph.remove();
+          box = document.createElement('div');
+          box.className = 'cam-box';
+          box.id = 'cam-' + name;
+          box.innerHTML = '<div class="cam-label">' + esc(name) + '</div><img alt="' + esc(name) + '">';
+          area.appendChild(box);
+        }
+        box.querySelector('img').src = 'data:image/jpeg;base64,' + b64;
+      }
+    } catch (e) { /* ignore */ }
+  };
+
+  cameraWs.onclose = function() {
+    document.getElementById('camArea').innerHTML = '<span class="cam-placeholder">No camera feed</span>';
+    cameraReconnectTimer = setTimeout(connectCameraWs, 2000);
+  };
+
+  cameraWs.onerror = function() {
+    cameraWs.close();
+  };
+}
+
+// ── Fallback status polling (if WebSocket not available) ───────
+let pollFallbackTimer = null;
+
+async function pollStatus() {
+  // Only poll if status WS is not connected
+  if (statusWs && statusWs.readyState === WebSocket.OPEN) return;
+  try {
+    const r = await fetch('/api/status');
+    const data = await r.json();
+    updateStatusDisplay(data);
+  } catch (e) { /* ignore */ }
+}
+
+// Poll every 2s as fallback
+pollFallbackTimer = setInterval(pollStatus, 2000);
+
+// ── Init ───────────────────────────────────────────────────────
+updateButtons();
+logMsg('RoboClaw UI loaded');
+connectStatusWs();
+connectCameraWs();
+loadDatasets();
+
+// Initial status fetch
+pollStatus();
+</script>
+</body></html>

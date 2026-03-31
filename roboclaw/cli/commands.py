@@ -1222,5 +1222,18 @@ def _login_github_copilot(force: bool = False) -> None:
         raise typer.Exit(1)
 
 
+@app.command()
+def web(
+    port: int = typer.Option(8000, "--port", "-p", help="Server port"),
+    host: str = typer.Option("0.0.0.0", "--host", "-H", help="Bind address"),
+):
+    """Launch web UI for data collection."""
+    import uvicorn
+    from roboclaw.embodied.web.app import create_app
+
+    console.print(f"{__logo__} Starting data-collection web UI on http://{host}:{port}")
+    uvicorn.run(create_app(), host=host, port=port)
+
+
 if __name__ == "__main__":
     app()
