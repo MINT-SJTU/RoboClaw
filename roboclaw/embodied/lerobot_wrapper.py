@@ -6,6 +6,8 @@ import sys
 
 from roboclaw.embodied.headless_patch import apply_headless_patch
 
+_HEADLESS_PATCH_ACTIONS = frozenset({"record"})
+
 
 def record(argv: list[str] | None = None) -> None:
     _run("record", argv)
@@ -38,7 +40,8 @@ def main(argv: list[str] | None = None) -> None:
 
 def _run(action: str, argv: list[str] | None = None) -> None:
     args = list([] if argv is None else argv)
-    apply_headless_patch()
+    if action in _HEADLESS_PATCH_ACTIONS:
+        apply_headless_patch()
     original_argv = sys.argv[:]
     try:
         sys.argv = [f"lerobot-{action}", *args]
