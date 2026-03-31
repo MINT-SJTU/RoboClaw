@@ -102,6 +102,9 @@ class RobotSession:
         fps: int = 30,
         num_episodes: int = 10,
     ) -> None:
+        from datetime import datetime
+        dataset_name = f"{dataset_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         with self._lock:
             self._require_state("connected", "teleoperating")
             if self._state == "teleoperating":
