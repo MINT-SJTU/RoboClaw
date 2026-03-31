@@ -148,3 +148,59 @@ Check that:
 - the agent starts successfully
 - the agent returns a normal reply
 - failures point clearly to model configuration, provider setup, network, or permissions
+
+## 7. Launch the Web Dashboard
+
+The web dashboard provides a browser-based UI for chatting with RoboClaw.
+
+### Prerequisites
+
+Install the web optional dependency (if not already included in `.[dev]`):
+
+```bash
+pip install -e ".[web]"
+```
+
+Install the frontend dependencies:
+
+```bash
+cd ui
+npm install
+```
+
+### Production Mode
+
+Build the frontend and start the server:
+
+```bash
+cd ui && npm run build && cd ..
+roboclaw web start
+```
+
+Open **http://127.0.0.1:8765** in your browser.
+
+### Development Mode (with hot reload)
+
+```bash
+# Terminal 1: start backend
+roboclaw web start
+
+# Terminal 2: start frontend dev server
+cd ui
+npm run dev
+```
+
+Open **http://localhost:5173** in your browser. The Vite dev server proxies `/api` and `/ws` to the backend automatically.
+
+### Options
+
+```bash
+roboclaw web start --host 0.0.0.0 --port 9000
+```
+
+| Flag          | Default       | Description                |
+|---------------|---------------|----------------------------|
+| `--host`      | `127.0.0.1`  | Bind address               |
+| `--port`      | `8765`        | Port number                |
+| `--workspace` | `~/.roboclaw/workspace` | Workspace directory |
+| `--verbose`   | off           | Enable debug logging       |
