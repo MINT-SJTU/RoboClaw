@@ -63,6 +63,12 @@ def _group_arms(arms: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
             continue
         if "leader" in arm_type:
             grouped["leaders"].append(arm)
+    # Sort by alias so that "left_*" comes before "right_*".
+    # Bimanual callers rely on [0]=left, [1]=right; without sorting,
+    # the order depends on setup.json array position which is fragile.
+    for role in ("followers", "leaders"):
+        if len(grouped[role]) == 2:
+            grouped[role].sort(key=lambda a: (0 if "left" in a.get("alias", "") else 1))
     return grouped
 
 
