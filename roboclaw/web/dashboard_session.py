@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-import shutil
 import signal
 import time
 from typing import Any, Awaitable, Callable
@@ -53,7 +52,6 @@ class DashboardSession:
         self._stdout_task: asyncio.Task | None = None
         self._wait_task: asyncio.Task | None = None
         self._cancel_prepare = asyncio.Event()
-        self._temp_dirs: list[str] = []
         self._held_port_locks: list[str] = []
         self._rerun_process: asyncio.subprocess.Process | None = None
         self._rerun_grpc_port = 0
@@ -100,12 +98,11 @@ class DashboardSession:
         setup = load_setup()
         await self._start_rerun_server()
         try:
-            argv, temp_dirs = prepare_teleop(setup, **self._rerun_display_kwargs())
+            argv = prepare_teleop(setup, **self._rerun_display_kwargs())
         except ActionError as exc:
             await self._stop_rerun_server()
             raise RuntimeError(str(exc)) from exc
 
-        self._temp_dirs = temp_dirs
         await self._transition_through_preparing("teleoperating", argv)
 
     async def start_recording(
@@ -132,7 +129,7 @@ class DashboardSession:
             "reset_time_s": reset_time_s,
         }
         try:
-            argv, dataset_name, dataset_root, temp_dirs = prepare_record(
+            argv, dataset_name, dataset_root = prepare_record(
                 setup, kwargs, **self._rerun_display_kwargs(),
             )
         except ActionError as exc:
@@ -146,7 +143,6 @@ class DashboardSession:
         self._current_episode = 0
         self._total_frames = 0
         self._episode_phase = ""
-        self._temp_dirs = temp_dirs
 
         await self._transition_through_preparing("recording", argv)
         return dataset_name
@@ -253,14 +249,12 @@ class DashboardSession:
         try:
             await asyncio.wait_for(self._cancel_prepare.wait(), timeout=_DRAIN_SECONDS)
             # If we get here, cancel was requested
-            self._cleanup_temp_dirs()
             self._set_state("idle")
             return
         except asyncio.TimeoutError:
             pass  # Normal: drain period elapsed without cancellation
         # Re-check: stop() may have run during sleep
         if self._cancel_prepare.is_set():
-            self._cleanup_temp_dirs()
             self._set_state("idle")
             return
         # Acquire port locks for all arm serial ports before launching subprocess
@@ -315,7 +309,6 @@ class DashboardSession:
         self._process = None
         self._release_port_locks()
         await self._stop_rerun_server()
-        self._cleanup_temp_dirs()
         self._episode_phase = ""
         self._set_state("idle")
 
@@ -386,7 +379,6 @@ class DashboardSession:
         self._process = None
         self._release_port_locks()
         await self._stop_rerun_server()
-        self._cleanup_temp_dirs()
 
     async def _kill_subprocess(self) -> None:
         if self._process is None:
@@ -401,7 +393,6 @@ class DashboardSession:
         self._process = None
         self._release_port_locks()
         await self._stop_rerun_server()
-        self._cleanup_temp_dirs()
 
     async def _await_stdout_task(self) -> None:
         """Wait for the stdout reader to finish before resetting state."""
@@ -434,11 +425,6 @@ class DashboardSession:
                 self._process.stdin.close()
             except OSError:
                 pass
-
-    def _cleanup_temp_dirs(self) -> None:
-        for d in self._temp_dirs:
-            shutil.rmtree(d, ignore_errors=True)
-        self._temp_dirs.clear()
 
     def _release_port_locks(self) -> None:
         for port in self._held_port_locks:

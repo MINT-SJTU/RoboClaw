@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
-from roboclaw.embodied.hardware_monitor import HardwareMonitor
+from roboclaw.embodied.hardware_monitor import ArmStatus, CameraStatus, HardwareMonitor, check_arm_status, check_camera_status
 from roboclaw.embodied.setup import load_setup
 from roboclaw.web.dashboard_datasets import delete_dataset, get_dataset_info, list_datasets
 from roboclaw.web.dashboard_session import DashboardSession
@@ -56,48 +56,27 @@ def _get_lan_ip() -> str:
         return "127.0.0.1"
 
 
-def _check_arm_status(arm: dict[str, Any]) -> dict[str, Any]:
-    alias = arm.get("alias", "unknown")
-    port = arm.get("port", "")
-    connected = bool(port and Path(port).exists())
-    calibrated = bool(arm.get("calibrated", False))
-    arm_type = arm.get("type", "")
-    role = "follower" if "follower" in arm_type else "leader" if "leader" in arm_type else ""
-    return {
-        "alias": alias, "type": arm_type, "role": role,
-        "connected": connected, "calibrated": calibrated,
-    }
-
-
-def _check_camera_status(cam: dict[str, Any]) -> dict[str, Any]:
-    alias = cam.get("alias", "unknown")
-    port = cam.get("port", "")
-    connected = bool(port and Path(port).exists())
-    return {"alias": alias, "connected": connected,
-            "width": cam.get("width", 640), "height": cam.get("height", 480)}
-
-
 def _compute_readiness(
     arms: list[dict[str, Any]],
-    arm_statuses: list[dict[str, Any]],
-    camera_statuses: list[dict[str, Any]],
+    arm_statuses: list[ArmStatus],
+    camera_statuses: list[CameraStatus],
 ) -> tuple[bool, list[str]]:
-    from roboclaw.embodied.ops.helpers import _group_arms
+    from roboclaw.embodied.ops.helpers import group_arms
 
     missing: list[str] = []
-    grouped = _group_arms(arms)
+    grouped = group_arms(arms)
     if not grouped["followers"]:
         missing.append("No follower arm configured")
     if not grouped["leaders"]:
         missing.append("No leader arm configured")
     for s in arm_statuses:
-        if not s["connected"]:
-            missing.append(f"Arm '{s['alias']}' is disconnected")
-        elif not s["calibrated"]:
-            missing.append(f"Arm '{s['alias']}' is not calibrated")
+        if not s.connected:
+            missing.append(f"Arm '{s.alias}' is disconnected")
+        elif not s.calibrated:
+            missing.append(f"Arm '{s.alias}' is not calibrated")
     for s in camera_statuses:
-        if not s["connected"]:
-            missing.append(f"Camera '{s['alias']}' is disconnected")
+        if not s.connected:
+            missing.append(f"Camera '{s.alias}' is disconnected")
     f, l = grouped["followers"], grouped["leaders"]
     if f and l and len(f) != len(l):
         missing.append(f"Follower/leader count mismatch: {len(f)} vs {len(l)}")
@@ -105,40 +84,8 @@ def _compute_readiness(
 
 
 def _datasets_root() -> Path:
-    from roboclaw.embodied.ops.helpers import _dataset_root
-    return _dataset_root(load_setup())
-
-
-# ---------------------------------------------------------------------------
-# Servo position reading (blocking — run in thread)
-# ---------------------------------------------------------------------------
-
-_MOTOR_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
-
-
-def _read_one_arm(arm: dict[str, Any]) -> dict[str, Any]:
-    """Read servo positions for a single follower arm. Blocking — run in thread."""
-    port = arm.get("port", "")
-    try:
-        from lerobot.motors.feetech import FeetechMotorsBus
-        from lerobot.motors.motors_bus import Motor, MotorNormMode
-
-        motors = {
-            name: Motor(id=i + 1, model="sts3215", norm_mode=MotorNormMode.RANGE_M100_100)
-            for i, name in enumerate(_MOTOR_NAMES)
-        }
-        bus = FeetechMotorsBus(port=port, motors=motors)
-        bus.connect()
-        positions = {}
-        for name in _MOTOR_NAMES:
-            try:
-                positions[name] = int(bus.read("Present_Position", name, normalize=False))
-            except Exception:
-                positions[name] = None
-        bus.disconnect()
-        return positions
-    except Exception as e:
-        return {"error": str(e)}
+    from roboclaw.embodied.ops.helpers import dataset_root
+    return dataset_root(load_setup())
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +100,7 @@ def register_dashboard_routes(
     """Register all dashboard API endpoints on the FastAPI app."""
 
     async def _on_state_change(status: dict[str, Any]) -> None:
-        await web_channel.broadcast_dashboard_event({
+        await web_channel.broadcast({
             "type": "dashboard.session.state_changed", **status,
         })
 
@@ -167,12 +114,13 @@ def register_dashboard_routes(
         setup = load_setup()
         arms = setup.get("arms", [])
         cameras = setup.get("cameras", [])
-        arm_statuses = [_check_arm_status(a) for a in arms]
-        camera_statuses = [_check_camera_status(c) for c in cameras]
+        arm_statuses = [check_arm_status(a) for a in arms]
+        camera_statuses = [check_camera_status(c) for c in cameras]
         ready, missing = _compute_readiness(arms, arm_statuses, camera_statuses)
         return {
             "ready": ready, "missing": missing,
-            "arms": arm_statuses, "cameras": camera_statuses,
+            "arms": [s.to_dict() for s in arm_statuses],
+            "cameras": [s.to_dict() for s in camera_statuses],
             "session_busy": session.busy,
         }
 
@@ -253,20 +201,8 @@ def register_dashboard_routes(
     async def servo_positions() -> dict[str, Any]:
         if session.busy:
             return {"error": "busy", "arms": {}}
-        from roboclaw.embodied.port_lock import port_locks
-        setup = load_setup()
-        result: dict[str, Any] = {"error": None, "arms": {}}
-        for arm in setup.get("arms", []):
-            if "follower" not in arm.get("type", ""):
-                continue
-            port = arm.get("port", "")
-            alias = arm.get("alias", "")
-            if not port:
-                continue
-            async with port_locks.acquire(port):
-                positions = await asyncio.to_thread(_read_one_arm, arm)
-            result["arms"][alias] = positions
-        return result
+        from roboclaw.embodied.motors import read_servo_positions
+        return await asyncio.to_thread(read_servo_positions)
 
     # -- Troubleshooting ---------------------------------------------------
 

@@ -50,10 +50,8 @@ export interface Fault {
 }
 
 export interface TroubleshootEntry {
-  title: string
-  description: string
-  steps: string[]
   can_recheck: boolean
+  step_count: number
 }
 
 export interface Dataset {

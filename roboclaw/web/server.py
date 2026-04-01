@@ -420,12 +420,12 @@ def create_app(
         from roboclaw.web.dashboard import register_dashboard_routes
 
         async def _on_hw_fault(fault: Any) -> None:
-            await web_ch.broadcast_dashboard_event({
+            await web_ch.broadcast({
                 "type": "dashboard.fault", **fault.to_dict(),
             })
 
         async def _on_hw_fault_resolved(fault: Any) -> None:
-            await web_ch.broadcast_dashboard_event({
+            await web_ch.broadcast({
                 "type": "dashboard.fault.resolved",
                 "fault_type": fault.fault_type.value,
                 "device_alias": fault.device_alias,

@@ -21,7 +21,7 @@ def app():
         pass
 
     class FakeChannel:
-        async def broadcast_dashboard_event(self, event):
+        async def broadcast(self, event):
             pass
 
     from roboclaw.embodied.hardware_monitor import HardwareMonitor
@@ -137,7 +137,7 @@ class TestDatasets:
 class TestServoPositions:
     def test_servo_when_idle(self, client, monkeypatch):
         monkeypatch.setattr(
-            "roboclaw.web.dashboard.load_setup",
+            "roboclaw.embodied.motors.load_setup",
             lambda: {"arms": []},
         )
         resp = client.get("/api/dashboard/servo-positions")

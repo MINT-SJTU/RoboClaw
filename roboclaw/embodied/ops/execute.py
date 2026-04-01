@@ -18,10 +18,9 @@ from roboclaw.embodied.ops.helpers import (
     _DEFAULT_REPLAY_ROOT,
     _NO_TTY_MSG,
     _arm_id,
-    _bimanual_cal_dirs,
-    _dataset_path,
+    dataset_path,
     _format_tty_failure,
-    _group_arms,
+    group_arms,
     _is_interrupted,
     _logs_dir,
     _resolve_action_arms,
@@ -143,17 +142,12 @@ async def _do_teleoperate(setup: dict[str, Any], kwargs: dict[str, Any], tty_han
     if not tty_handoff:
         return _NO_TTY_MSG
     try:
-        argv, temp_dirs = prepare_teleop(setup, kwargs)
+        argv = prepare_teleop(setup, kwargs)
     except ActionError as exc:
         return str(exc)
-    try:
-        rc, stderr_text = await _run_tty(
-            tty_handoff, LocalLeRobotRunner(), argv, "lerobot-teleoperate",
-        )
-    finally:
-        import shutil
-        for d in temp_dirs:
-            shutil.rmtree(d, ignore_errors=True)
+    rc, stderr_text = await _run_tty(
+        tty_handoff, LocalLeRobotRunner(), argv, "lerobot-teleoperate",
+    )
     if _is_interrupted(rc):
         return "interrupted"
     if rc == 0:
@@ -171,17 +165,12 @@ async def _do_record(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     if not tty_handoff:
         return _NO_TTY_MSG
     try:
-        argv, dataset_name, dataset_root, temp_dirs = prepare_record(setup, kwargs)
+        argv, dataset_name, dataset_root = prepare_record(setup, kwargs)
     except ActionError as exc:
         return str(exc)
-    try:
-        rc, stderr_text = await _run_tty(
-            tty_handoff, LocalLeRobotRunner(), argv, "lerobot-record",
-        )
-    finally:
-        import shutil
-        for d in temp_dirs:
-            shutil.rmtree(d, ignore_errors=True)
+    rc, stderr_text = await _run_tty(
+        tty_handoff, LocalLeRobotRunner(), argv, "lerobot-record",
+    )
     if _is_interrupted(rc):
         return "interrupted"
     if rc == 0:
@@ -214,7 +203,7 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
     from roboclaw.embodied.learning.act import ACTPipeline
     from roboclaw.embodied.runner import LocalLeRobotRunner
 
-    grouped = _group_arms(_resolve_action_arms(setup, kwargs))
+    grouped = group_arms(_resolve_action_arms(setup, kwargs))
     followers = grouped["followers"]
     if not followers:
         return "No follower arm configured."
@@ -235,7 +224,7 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
     dataset_name, user_specified = result
     if user_specified and not dataset_name.startswith("eval_"):
         dataset_name = f"eval_{dataset_name}"
-    dataset_root = _dataset_path(setup, dataset_name)
+    dataset_root = dataset_path(setup, dataset_name)
     resume = _should_resume(user_specified, dataset_root)
     controller = SO101Controller()
     policy_kwargs = {
@@ -257,15 +246,16 @@ async def _do_run_policy(setup: dict[str, Any], kwargs: dict[str, Any], tty_hand
             **policy_kwargs,
         )
         return await _run(LocalLeRobotRunner(), argv)
-    with _bimanual_cal_dirs(followers, []) as (robot_dir, _):
-        argv = controller.run_policy_bimanual(
-            robot_id=_BIMANUAL_ID,
-            robot_cal_dir=robot_dir,
-            left_robot=followers[0],
-            right_robot=followers[1],
-            **policy_kwargs,
-        )
-        return await _run(LocalLeRobotRunner(), argv)
+    from roboclaw.embodied.setup import ensure_bimanual_cal_dir
+    robot_dir = ensure_bimanual_cal_dir(followers[0], followers[1], "followers")
+    argv = controller.run_policy_bimanual(
+        robot_id=_BIMANUAL_ID,
+        robot_cal_dir=robot_dir,
+        left_robot=followers[0],
+        right_robot=followers[1],
+        **policy_kwargs,
+    )
+    return await _run(LocalLeRobotRunner(), argv)
 
 
 async def _do_replay(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: Any) -> str:
@@ -274,7 +264,7 @@ async def _do_replay(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     if not tty_handoff:
         return _NO_TTY_MSG
     selected = _resolve_action_arms(setup, kwargs)
-    grouped = _group_arms(selected)
+    grouped = group_arms(selected)
     if kwargs.get("arms", "") and grouped["leaders"]:
         return "Replay only supports follower arms. Remove leader arm ports from arms."
     followers = grouped["followers"]
@@ -286,7 +276,7 @@ async def _do_replay(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff:
     error = _validate_dataset_name(dataset_name)
     if error:
         return error
-    dataset_root = _dataset_path(setup, dataset_name, fallback=_DEFAULT_REPLAY_ROOT)
+    dataset_root = dataset_path(setup, dataset_name, fallback=_DEFAULT_REPLAY_ROOT)
     episode = kwargs.get("episode", 0)
     fps = kwargs.get("fps", 30)
     controller = SO101Controller()
@@ -326,21 +316,22 @@ async def _replay_bimanual(
     tty_handoff: Any,
 ) -> str:
     from roboclaw.embodied.runner import LocalLeRobotRunner
+    from roboclaw.embodied.setup import ensure_bimanual_cal_dir
 
-    with _bimanual_cal_dirs(followers, []) as (robot_dir, _):
-        argv = controller.replay_bimanual(
-            robot_id=_BIMANUAL_ID,
-            robot_cal_dir=robot_dir,
-            left_robot=followers[0],
-            right_robot=followers[1],
-            repo_id=f"local/{dataset_name}",
-            dataset_root=str(dataset_root),
-            episode=episode,
-            fps=fps,
-        )
-        rc, stderr_text = await _run_tty(
-            tty_handoff, LocalLeRobotRunner(), argv, "lerobot-replay (bimanual)",
-        )
+    robot_dir = ensure_bimanual_cal_dir(followers[0], followers[1], "followers")
+    argv = controller.replay_bimanual(
+        robot_id=_BIMANUAL_ID,
+        robot_cal_dir=robot_dir,
+        left_robot=followers[0],
+        right_robot=followers[1],
+        repo_id=f"local/{dataset_name}",
+        dataset_root=str(dataset_root),
+        episode=episode,
+        fps=fps,
+    )
+    rc, stderr_text = await _run_tty(
+        tty_handoff, LocalLeRobotRunner(), argv, "lerobot-replay (bimanual)",
+    )
     if _is_interrupted(rc):
         return "interrupted"
     if rc == 0:
@@ -356,7 +347,7 @@ async def _do_train(setup: dict[str, Any], kwargs: dict[str, Any], tty_handoff: 
     error = _validate_dataset_name(dataset_name)
     if error:
         return error
-    dataset_root = _dataset_path(setup, dataset_name)
+    dataset_root = dataset_path(setup, dataset_name)
     policies_root = setup.get("policies", {}).get("root", "")
     output_dir = Path(policies_root).expanduser() / dataset_name
     resume = output_dir.is_dir()
