@@ -36,7 +36,7 @@ _RE_FRAME_COUNT = re.compile(r"frame[s]?\s*[:=]\s*(\d+)", re.IGNORECASE)
 _DRAIN_SECONDS = 5
 _GRACEFUL_STOP_TIMEOUT = 15
 _RERUN_GRPC_PORT = 9876
-_RERUN_WEB_PORT = 9090
+_RERUN_WEB_PORT = 9877
 _RERUN_BIND = "0.0.0.0"
 
 StatusCallback = Callable[[dict[str, Any]], Awaitable[None] | None]

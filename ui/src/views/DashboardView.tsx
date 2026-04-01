@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDashboard, type SessionState } from '../controllers/dashboard'
 import { useI18n } from '../controllers/i18n'
+import { postJson } from '../controllers/api'
 
 // ── Servo chart colors ────────────────────────────────────────
 const SERVO_COLORS = [
@@ -167,14 +168,65 @@ function ServoChartPanel({ state, t }: { state: SessionState; t: (key: any) => s
   )
 }
 
-function canDo(state: SessionState) {
+function CameraPreviewPanel({ cameras, busy }: { cameras: any[]; busy: boolean }) {
+  const [previews, setPreviews] = useState<Record<number, string>>({})
+  const [capturing, setCapturing] = useState(false)
+  const { t } = useI18n()
+
+  const capture = useCallback(async () => {
+    if (busy || capturing) return
+    setCapturing(true)
+    try {
+      await postJson('/api/dashboard/setup/camera-previews')
+      const ts = Date.now()
+      const map: Record<number, string> = {}
+      cameras.forEach((_: any, i: number) => {
+        map[i] = `/api/dashboard/setup/camera-preview/${i}?t=${ts}`
+      })
+      setPreviews(map)
+    } catch { /* ignore */ }
+    setCapturing(false)
+  }, [busy, capturing, cameras])
+
+  return (
+    <div className="bg-sf border border-bd rounded-lg p-4 col-span-2 max-[900px]:col-span-1">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('cameras')}</h3>
+        <button
+          onClick={capture}
+          disabled={busy || capturing}
+          className="px-2.5 py-0.5 border border-ac text-ac rounded-sm text-xs hover:bg-ac/10 disabled:opacity-30"
+        >
+          {capturing ? '...' : t('refresh')}
+        </button>
+      </div>
+      {Object.keys(previews).length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {cameras.filter((c: any) => c.connected).map((_: any, i: number) => (
+            <div key={i} className="flex-1 min-w-[200px] max-w-[400px] relative bg-bg rounded-lg overflow-hidden border border-bd">
+              <img
+                src={previews[i] || ''}
+                alt={`Camera ${i}`}
+                className="w-full aspect-video object-contain bg-black"
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-sm text-tx2">{t('noCameraFeed')}</div>
+      )}
+    </div>
+  )
+}
+
+function canDo(state: SessionState, hwReady: boolean) {
   const idle = state === 'idle'
   const tele = state === 'teleoperating'
   const rec = state === 'recording'
   return {
-    teleopStart: idle,
+    teleopStart: idle && hwReady,
     teleopStop: tele,
-    recStart: idle || tele,
+    recStart: (idle || tele) && hwReady,
     recStop: rec,
     saveEp: rec,
     discardEp: rec,
@@ -186,7 +238,8 @@ export default function DashboardView() {
   const store = useDashboard()
   const { session, logs, datasets, loading, hardwareStatus: hwStatus } = store
   const { state, episode_phase: episodePhase, saved_episodes: savedEpisodes, target_episodes: targetEpisodes } = session
-  const ok = canDo(state)
+  const hwReady = hwStatus?.ready ?? false
+  const ok = canDo(state, hwReady)
   const logRef = useRef<HTMLDivElement>(null)
   const { t } = useI18n()
 
@@ -308,6 +361,11 @@ export default function DashboardView() {
                 <div className="text-sm text-tx2">{t('noCameras')}</div>
               )}
             </div>
+
+            {/* Camera preview (idle only) */}
+            {state === 'idle' && hwStatus && hwStatus.cameras.some((c: any) => c.connected) && (
+              <CameraPreviewPanel cameras={hwStatus.cameras} busy={session.state !== 'idle'} />
+            )}
 
             {/* Teleop card */}
             <div className="bg-sf border border-bd rounded-lg p-4">
