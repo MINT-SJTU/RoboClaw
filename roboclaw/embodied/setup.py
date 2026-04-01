@@ -469,6 +469,8 @@ def ensure_bimanual_cal_dir(
         cal_dir = Path(arm["calibration_dir"]).expanduser()
         serial = cal_dir.name
         source = cal_dir / f"{serial}.json"
+        if not source.exists():
+            continue
         dest = target_dir / f"bimanual_{side}.json"
         if dest.exists() and source.stat().st_mtime <= dest.stat().st_mtime:
             continue
