@@ -6,8 +6,8 @@ Manages one LeRobot subprocess at a time (teleop or recording) with:
 - stdout parsing for episode lifecycle tracking
 - Callback-driven progress notifications
 
-Extracted from web/dashboard_session.py so both Web and CLI can share
-the same subprocess orchestration via EmbodiedService.
+Used by EmbodiedService so both Web and CLI can share
+the same subprocess orchestration.
 """
 
 from __future__ import annotations

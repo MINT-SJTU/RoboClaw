@@ -7,9 +7,8 @@ consistent busy checks, port locking, and hardware monitor state.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Awaitable, Callable
-
-from loguru import logger
 
 from roboclaw.embodied.hardware_monitor import (
     ArmStatus,
@@ -19,6 +18,7 @@ from roboclaw.embodied.hardware_monitor import (
     check_camera_status,
 )
 from roboclaw.embodied.operation_session import OperationSession, StatusCallback
+from roboclaw.embodied.ops.helpers import group_arms
 from roboclaw.embodied.setup import load_setup
 
 
@@ -27,8 +27,6 @@ def _compute_readiness(
     arm_statuses: list[ArmStatus],
     camera_statuses: list[CameraStatus],
 ) -> tuple[bool, list[str]]:
-    from roboclaw.embodied.ops.helpers import group_arms
-
     missing: list[str] = []
     grouped = group_arms(arms)
     if not grouped["followers"]:
@@ -67,6 +65,7 @@ class EmbodiedService:
         self._monitor = hardware_monitor
         self._session = OperationSession(on_state_change=self._on_session_state_change)
         self._external_callback = on_state_change
+        self._recording_started = False
 
     # -- Properties -----------------------------------------------------------
 
@@ -100,15 +99,14 @@ class EmbodiedService:
             episode_time_s=episode_time_s,
             reset_time_s=reset_time_s,
         )
+        self._recording_started = True
         if self._monitor is not None:
             self._monitor.set_recording_active(True)
         return dataset_name
 
     async def stop(self) -> None:
-        was_recording = self._session.state == "recording"
         await self._session.stop()
-        if was_recording and self._monitor is not None:
-            self._monitor.set_recording_active(False)
+        # recording_active is reset by _on_session_state_change callback
 
     # -- Episode control ------------------------------------------------------
 
@@ -151,16 +149,16 @@ class EmbodiedService:
     async def _on_session_state_change(self, status: dict[str, Any]) -> None:
         """Called by OperationSession on every state transition.
 
-        Fixes the recording_active leak bug: when the recording process
-        exits on its own (_wait_for_exit sets state=idle), we detect the
-        transition from recording→idle and reset recording_active.
+        Only resets recording_active when transitioning from an active
+        recording (not from teleop or other states).
         """
         new_state = status.get("state", "idle")
-        if new_state == "idle" and self._monitor is not None:
-            self._monitor.set_recording_active(False)
+        if new_state == "idle" and self._recording_started:
+            self._recording_started = False
+            if self._monitor is not None:
+                self._monitor.set_recording_active(False)
 
         if self._external_callback is not None:
-            import inspect
             result = self._external_callback(status)
             if inspect.isawaitable(result):
                 await result

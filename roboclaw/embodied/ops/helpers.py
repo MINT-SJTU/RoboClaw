@@ -148,7 +148,7 @@ def _logs_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Shared argv builders (used by CLI execute.py and Web dashboard_session.py)
+# Shared argv builders (used by CLI execute.py and EmbodiedService)
 # ---------------------------------------------------------------------------
 
 

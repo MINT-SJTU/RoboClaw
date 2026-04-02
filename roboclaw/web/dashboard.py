@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
+from roboclaw.embodied.hardware_monitor import HardwareMonitor
 from roboclaw.embodied.service import EmbodiedService
 from roboclaw.embodied.setup import load_setup
 from roboclaw.web.dashboard_datasets import delete_dataset, get_dataset_info, list_datasets
@@ -163,7 +164,6 @@ def register_dashboard_routes(
 
     @app.post("/api/dashboard/troubleshoot/recheck")
     async def troubleshoot_recheck(body: RecheckRequest) -> dict[str, Any]:
-        from roboclaw.embodied.hardware_monitor import HardwareMonitor
         monitor: HardwareMonitor = app.state.hardware_monitor
         faults = monitor.check_hardware()
         return {"faults": [f.to_dict() for f in faults]}
@@ -171,7 +171,6 @@ def register_dashboard_routes(
     @app.post("/api/dashboard/troubleshoot/snapshot")
     async def troubleshoot_snapshot() -> dict[str, Any]:
         setup = load_setup()
-        from roboclaw.embodied.hardware_monitor import HardwareMonitor
         monitor: HardwareMonitor = app.state.hardware_monitor
         faults = monitor.active_faults
         return generate_fault_snapshot(setup, faults, "")
