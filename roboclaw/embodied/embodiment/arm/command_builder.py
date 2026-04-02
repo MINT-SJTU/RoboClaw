@@ -1,4 +1,4 @@
-"""SO101 LeRobot 0.5.0 command builder."""
+"""LeRobot CLI command builder for robot arms."""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ import json
 from pathlib import Path
 import sys
 
+from roboclaw.embodied.embodiment.arm.registry import ArmFamily, get_family
 
-class SO101Controller:
-    """Builds LeRobot CLI commands for SO101 robot arm.
 
-    All methods take explicit params — the caller (tool.py) resolves
+class ArmCommandBuilder:
+    """Builds LeRobot CLI commands for any supported robot arm family.
+
+    All methods take explicit params — the caller resolves
     setup.json into concrete values before calling these.
     """
+
+    def __init__(self, family: ArmFamily | None = None) -> None:
+        self._family = family
 
     def doctor(self) -> list[str]:
         """Check lerobot, list supported robots, motors, and connected devices."""
@@ -33,7 +38,6 @@ class SO101Controller:
     ) -> list[str]:
         """Build calibration command for one arm.
 
-        arm_type: "so101_follower" or "so101_leader"
         For follower uses --robot.* prefix, for leader uses --teleop.* prefix.
         """
         prefix = self._arm_prefix(arm_type)
@@ -49,6 +53,9 @@ class SO101Controller:
         teleop_type: str, teleop_port: str, teleop_cal_dir: str,
         teleop_id: str,
         cameras: dict[str, dict] | None = None,
+        display_data: bool = False,
+        display_ip: str = "",
+        display_port: int = 0,
     ) -> list[str]:
         """Build teleoperation command (single follower + single leader)."""
         argv = [
@@ -58,6 +65,7 @@ class SO101Controller:
         ]
         if cameras:
             argv.append(f"--robot.cameras={json.dumps(cameras)}")
+        argv.extend(self._display_args(display_data, display_ip, display_port))
         return argv
 
     def teleoperate_bimanual(
@@ -67,19 +75,25 @@ class SO101Controller:
         teleop_id: str, teleop_cal_dir: str,
         left_teleop: dict, right_teleop: dict,
         cameras: dict[str, dict] | None = None,
+        display_data: bool = False,
+        display_ip: str = "",
+        display_port: int = 0,
     ) -> list[str]:
         """Build bimanual teleoperation command (2 followers + 2 leaders)."""
-        return [
+        family = self._require_bimanual_family()
+        argv = [
             *self._wrapper_args("teleoperate"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={family.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            "--teleop.type=bi_so_leader",
+            f"--teleop.type={family.bimanual_leader_type}",
             f"--teleop.id={teleop_id}",
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
         ]
+        argv.extend(self._display_args(display_data, display_ip, display_port))
+        return argv
 
     def record(
         self,
@@ -95,6 +109,9 @@ class SO101Controller:
         episode_time_s: int | None = None,
         reset_time_s: int | None = None,
         resume: bool = False,
+        display_data: bool = False,
+        display_ip: str = "",
+        display_port: int = 0,
     ) -> list[str]:
         """Build recording command (follower + leader + cameras + dataset)."""
         argv = self._wrapper_args("record")
@@ -106,6 +123,7 @@ class SO101Controller:
             repo_id, dataset_root, task, push_to_hub, fps, num_episodes, episode_time_s,
             reset_time_s=reset_time_s, resume=resume,
         ))
+        argv.extend(self._display_args(display_data, display_ip, display_port))
         return argv
 
     def record_bimanual(
@@ -122,15 +140,19 @@ class SO101Controller:
         episode_time_s: int | None = None,
         reset_time_s: int | None = None,
         resume: bool = False,
+        display_data: bool = False,
+        display_ip: str = "",
+        display_port: int = 0,
     ) -> list[str]:
         """Build bimanual recording command (2 followers + 2 leaders + cameras)."""
+        family = self._require_bimanual_family()
         argv = [
             *self._wrapper_args("record"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={family.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            "--teleop.type=bi_so_leader",
+            f"--teleop.type={family.bimanual_leader_type}",
             f"--teleop.id={teleop_id}",
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
@@ -139,6 +161,7 @@ class SO101Controller:
                 reset_time_s=reset_time_s, resume=resume,
             ),
         ]
+        argv.extend(self._display_args(display_data, display_ip, display_port))
         return argv
 
     def replay(
@@ -172,9 +195,10 @@ class SO101Controller:
         fps: int = 30,
     ) -> list[str]:
         """Build replay command for two follower arms."""
+        family = self._require_bimanual_family()
         return [
             *self._wrapper_args("replay"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={family.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot),
@@ -219,9 +243,10 @@ class SO101Controller:
         resume: bool = False,
     ) -> list[str]:
         """Build bimanual policy execution command (2 followers, no teleop)."""
+        family = self._require_bimanual_family()
         argv = [
             *self._wrapper_args("record"),
-            "--robot.type=bi_so_follower",
+            f"--robot.type={family.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
@@ -231,13 +256,21 @@ class SO101Controller:
         ]
         return argv
 
+    # -- Private helpers ---------------------------------------------------
+
+    def _require_bimanual_family(self) -> ArmFamily:
+        if self._family is None:
+            raise ValueError("ArmCommandBuilder needs a family for bimanual commands.")
+        if not self._family.supports_bimanual:
+            raise ValueError(f"{self._family.name} arms do not support bimanual mode.")
+        return self._family
+
     def _policy_args(
         self,
         policy_path: str, repo_id: str, task: str,
         num_episodes: int, dataset_root: str,
         resume: bool = False,
     ) -> list[str]:
-        """Build --policy.* and --dataset.* args for run_policy commands."""
         args = [
             f"--policy.path={Path(policy_path).expanduser()}",
             f"--dataset.repo_id={repo_id}",
@@ -259,7 +292,6 @@ class SO101Controller:
         reset_time_s: int | None = None,
         resume: bool = False,
     ) -> list[str]:
-        """Build --dataset.* CLI args shared by record and record_bimanual."""
         args = [
             f"--dataset.repo_id={repo_id}",
             f"--dataset.root={Path(dataset_root).expanduser()}",
@@ -298,6 +330,18 @@ class SO101Controller:
             f"--{prefix}.calibration_dir={Path(cal_dir).expanduser()}",
         ]
 
+    def _display_args(
+        self, display_data: bool, display_ip: str, display_port: int,
+    ) -> list[str]:
+        if not display_data:
+            return []
+        args = ["--display_data=true"]
+        if display_ip:
+            args.append(f"--display_ip={display_ip}")
+        if display_port:
+            args.append(f"--display_port={display_port}")
+        return args
+
     def _bimanual_arm_args(
         self,
         prefix: str,
@@ -305,10 +349,13 @@ class SO101Controller:
         right: dict,
         cameras: dict[str, dict] | None = None,
     ) -> list[str]:
-        """Build --{prefix}.left_arm_config.* and --{prefix}.right_arm_config.* args."""
         args: list[str] = []
         for side, arm in [("left", left), ("right", right)]:
             args.append(f"--{prefix}.{side}_arm_config.port={arm['port']}")
         if cameras:
             args.append(f"--{prefix}.left_arm_config.cameras={json.dumps(cameras)}")
         return args
+
+
+# Backward-compatible alias
+SO101Controller = ArmCommandBuilder

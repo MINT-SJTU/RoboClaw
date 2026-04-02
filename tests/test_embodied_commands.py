@@ -1,19 +1,28 @@
-"""Tests for SO101Controller and ACTPipeline CLI arg generation."""
+"""Tests for ArmCommandBuilder and ACTPipeline CLI arg generation."""
 
 import sys
 
-from roboclaw.embodied.embodiment.arm.so101 import SO101Controller
+from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
+from roboclaw.embodied.embodiment.arm.registry import SO101
 from roboclaw.embodied.learning.act import ACTPipeline
 
 
+def _builder() -> ArmCommandBuilder:
+    return ArmCommandBuilder()
+
+
+def _bimanual_builder() -> ArmCommandBuilder:
+    return ArmCommandBuilder(family=SO101)
+
+
 def test_doctor_command() -> None:
-    argv = SO101Controller().doctor()
+    argv = _builder().doctor()
     assert argv[0] == "python3"
     assert "import lerobot" in argv[2]
 
 
 def test_calibrate_follower() -> None:
-    argv = SO101Controller().calibrate(
+    argv = _builder().calibrate(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/follower",
@@ -27,7 +36,7 @@ def test_calibrate_follower() -> None:
 
 
 def test_calibrate_leader() -> None:
-    argv = SO101Controller().calibrate(
+    argv = _builder().calibrate(
         "so101_leader",
         "/dev/ttyACM1",
         "/cal/leader",
@@ -40,8 +49,19 @@ def test_calibrate_leader() -> None:
     assert any("--teleop.calibration_dir=" in arg for arg in argv)
 
 
+def test_calibrate_koch() -> None:
+    argv = _builder().calibrate(
+        "koch_follower",
+        "/dev/ttyACM2",
+        "/cal/koch",
+        "ABCD1234",
+    )
+    assert "--robot.type=koch_follower" in argv
+    assert "--robot.id=ABCD1234" in argv
+
+
 def test_teleoperate() -> None:
-    argv = SO101Controller().teleoperate(
+    argv = _builder().teleoperate(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -59,7 +79,7 @@ def test_teleoperate() -> None:
 
 
 def test_teleoperate_bimanual() -> None:
-    argv = SO101Controller().teleoperate_bimanual(
+    argv = _bimanual_builder().teleoperate_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -70,8 +90,10 @@ def test_teleoperate_bimanual() -> None:
         right_teleop={"port": "/dev/d"},
     )
     assert argv[:4] == [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", "teleoperate"]
+    assert "--robot.type=bi_so_follower" in argv
     assert "--robot.id=bimanual" in argv
     assert "--robot.calibration_dir=/cal/robot" in argv
+    assert "--teleop.type=bi_so_leader" in argv
     assert "--teleop.id=bimanual" in argv
     assert "--teleop.calibration_dir=/cal/teleop" in argv
     assert "--robot.left_arm_config.port=/dev/a" in argv
@@ -84,7 +106,7 @@ def test_teleoperate_bimanual() -> None:
 
 def test_record() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().record(
+    argv = _builder().record(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -116,7 +138,7 @@ def test_record() -> None:
 
 
 def test_record_with_episode_time_s() -> None:
-    argv = SO101Controller().record(
+    argv = _builder().record(
         "so101_follower", "/dev/ttyACM0", "/cal/f", "5B14032630",
         "so101_leader", "/dev/ttyACM1", "/cal/l", "5B14030892",
         cameras={}, repo_id="local/test", task="grasp",
@@ -126,7 +148,7 @@ def test_record_with_episode_time_s() -> None:
 
 
 def test_record_omits_episode_time_s_when_none() -> None:
-    argv = SO101Controller().record(
+    argv = _builder().record(
         "so101_follower", "/dev/ttyACM0", "/cal/f", "5B14032630",
         "so101_leader", "/dev/ttyACM1", "/cal/l", "5B14030892",
         cameras={}, repo_id="local/test", task="grasp",
@@ -136,7 +158,7 @@ def test_record_omits_episode_time_s_when_none() -> None:
 
 
 def test_record_skips_empty_cameras() -> None:
-    argv = SO101Controller().record(
+    argv = _builder().record(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -155,7 +177,7 @@ def test_record_skips_empty_cameras() -> None:
 
 def test_record_bimanual_uses_per_arm_cameras() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().record_bimanual(
+    argv = _bimanual_builder().record_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -181,7 +203,7 @@ def test_record_bimanual_uses_per_arm_cameras() -> None:
 
 
 def test_replay() -> None:
-    argv = SO101Controller().replay(
+    argv = _builder().replay(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -199,7 +221,7 @@ def test_replay() -> None:
 
 
 def test_replay_bimanual() -> None:
-    argv = SO101Controller().replay_bimanual(
+    argv = _bimanual_builder().replay_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -209,6 +231,7 @@ def test_replay_bimanual() -> None:
         episode=1,
     )
     assert argv[:4] == [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", "replay"]
+    assert "--robot.type=bi_so_follower" in argv
     assert "--robot.id=bimanual" in argv
     assert "--robot.calibration_dir=/cal/robot" in argv
     assert "--robot.left_arm_config.port=/dev/a" in argv
@@ -219,7 +242,7 @@ def test_replay_bimanual() -> None:
 
 def test_run_policy() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().run_policy(
+    argv = _builder().run_policy(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",
@@ -237,7 +260,7 @@ def test_run_policy() -> None:
 
 def test_run_policy_bimanual() -> None:
     cameras = {"front": {"type": "opencv", "index": 0}}
-    argv = SO101Controller().run_policy_bimanual(
+    argv = _bimanual_builder().run_policy_bimanual(
         robot_id="bimanual",
         robot_cal_dir="/cal/robot",
         left_robot={"port": "/dev/a"},
@@ -257,7 +280,7 @@ def test_run_policy_bimanual() -> None:
 
 
 def test_run_policy_skips_empty_cameras() -> None:
-    argv = SO101Controller().run_policy(
+    argv = _builder().run_policy(
         "so101_follower",
         "/dev/ttyACM0",
         "/cal/f",

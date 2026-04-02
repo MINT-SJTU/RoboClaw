@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import re
-import shutil
-from contextlib import contextmanager
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any, Iterator
+from typing import Any
 
-from roboclaw.embodied.setup import get_roboclaw_home
+from roboclaw.embodied.setup import ensure_bimanual_cal_dir, get_roboclaw_home
 
 _NO_TTY_MSG = "This action requires a local terminal. Run: roboclaw agent"
 _BIMANUAL_ID = "bimanual"
@@ -54,7 +51,7 @@ def _split_arm_tokens(arms_str: str) -> list[str]:
     return [token.strip() for token in arms_str.split(",") if token.strip()]
 
 
-def _group_arms(arms: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def group_arms(arms: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {"followers": [], "leaders": []}
     for arm in arms:
         arm_type = arm.get("type", "")
@@ -113,7 +110,7 @@ def _format_tty_failure(prefix: str, returncode: int, stderr_text: str) -> str:
     return f"{message}\nstderr: {stderr_text}"
 
 
-def _dataset_root(setup: dict[str, Any], fallback: Path | None = None) -> Path:
+def dataset_root(setup: dict[str, Any], fallback: Path | None = None) -> Path:
     root = setup.get("datasets", {}).get("root", "")
     if root:
         return Path(root).expanduser()
@@ -122,10 +119,10 @@ def _dataset_root(setup: dict[str, Any], fallback: Path | None = None) -> Path:
     return get_roboclaw_home() / "workspace" / "embodied" / "datasets"
 
 
-def _dataset_path(
+def dataset_path(
     setup: dict[str, Any], dataset_name: str, fallback: Path | None = None,
 ) -> Path:
-    return _dataset_root(setup, fallback) / "local" / dataset_name
+    return dataset_root(setup, fallback) / "local" / dataset_name
 
 
 def _validate_dataset_name(dataset_name: str) -> str | None:
@@ -141,29 +138,6 @@ def _arm_id(arm: dict[str, Any]) -> str:
     return arm_id
 
 
-@contextmanager
-def _bimanual_cal_dirs(
-    followers: list[dict[str, Any]],
-    leaders: list[dict[str, Any]],
-) -> Iterator[tuple[str, str]]:
-    with TemporaryDirectory(prefix="roboclaw-bimanual-robot-") as robot_dir:
-        with TemporaryDirectory(prefix="roboclaw-bimanual-teleop-") as teleop_dir:
-            _stage_bimanual_arm_pair(followers[0], followers[1], robot_dir)
-            if leaders:
-                _stage_bimanual_arm_pair(leaders[0], leaders[1], teleop_dir)
-            yield robot_dir, teleop_dir
-
-
-def _stage_bimanual_arm_pair(
-    left_arm: dict[str, Any], right_arm: dict[str, Any], target_dir: str,
-) -> None:
-    target = Path(target_dir)
-    for side, arm in [("left", left_arm), ("right", right_arm)]:
-        serial = _arm_id(arm)
-        source = Path(arm["calibration_dir"]).expanduser() / f"{serial}.json"
-        shutil.copy2(source, target / f"bimanual_{side}.json")
-
-
 def _camera_previews_dir() -> Path:
     return get_roboclaw_home() / "workspace" / "embodied" / "camera_previews"
 
@@ -171,3 +145,180 @@ def _camera_previews_dir() -> Path:
 def _logs_dir() -> Path:
     """Return the embodied jobs log directory under ROBOCLAW_HOME."""
     return get_roboclaw_home() / "workspace" / "embodied" / "jobs"
+
+
+# ---------------------------------------------------------------------------
+# Shared argv builders (used by CLI execute.py and Web dashboard_session.py)
+# ---------------------------------------------------------------------------
+
+
+def prepare_teleop(
+    setup: dict[str, Any],
+    kwargs: dict[str, Any] | None = None,
+    *,
+    display_data: bool = False,
+    display_ip: str = "",
+    display_port: int = 0,
+) -> list[str]:
+    """Build teleop argv from setup. Returns argv.
+
+    Raises ActionError on validation failure.
+    """
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
+    from roboclaw.embodied.embodiment.arm.registry import get_family
+    from roboclaw.embodied.sensor.camera import resolve_cameras
+
+    kwargs = kwargs or {}
+    grouped = group_arms(_resolve_action_arms(setup, kwargs))
+    error = _validate_pairing(grouped["followers"], grouped["leaders"])
+    if error:
+        raise ActionError(error)
+
+    all_arms = grouped["followers"] + grouped["leaders"]
+    family = get_family(all_arms[0]["type"]) if all_arms else None
+    controller = ArmCommandBuilder(family=family)
+    followers = grouped["followers"]
+    leaders = grouped["leaders"]
+    cameras = resolve_cameras(setup)
+    display_kwargs = _display_kwargs(display_data, display_ip, display_port)
+
+    if len(followers) == 1:
+        return controller.teleoperate(
+            robot_type=followers[0]["type"],
+            robot_port=followers[0]["port"],
+            robot_cal_dir=followers[0]["calibration_dir"],
+            robot_id=_arm_id(followers[0]),
+            teleop_type=leaders[0]["type"],
+            teleop_port=leaders[0]["port"],
+            teleop_cal_dir=leaders[0]["calibration_dir"],
+            teleop_id=_arm_id(leaders[0]),
+            cameras=cameras,
+            **display_kwargs,
+        )
+
+    robot_dir = ensure_bimanual_cal_dir(followers[0], followers[1], "followers")
+    teleop_dir = ensure_bimanual_cal_dir(leaders[0], leaders[1], "leaders")
+    return controller.teleoperate_bimanual(
+        robot_id=_BIMANUAL_ID,
+        robot_cal_dir=robot_dir,
+        left_robot=followers[0],
+        right_robot=followers[1],
+        teleop_id=_BIMANUAL_ID,
+        teleop_cal_dir=teleop_dir,
+        left_teleop=leaders[0],
+        right_teleop=leaders[1],
+        cameras=cameras,
+        **display_kwargs,
+    )
+
+
+def prepare_record(
+    setup: dict[str, Any],
+    kwargs: dict[str, Any],
+    *,
+    display_data: bool = False,
+    display_ip: str = "",
+    display_port: int = 0,
+) -> tuple[list[str], str, str]:
+    """Build record argv from setup. Returns (argv, dataset_name, dataset_root).
+
+    Raises ActionError on validation failure.
+    """
+    from datetime import datetime
+
+    from roboclaw.embodied.embodiment.arm.command_builder import ArmCommandBuilder
+    from roboclaw.embodied.embodiment.arm.registry import get_family
+    from roboclaw.embodied.sensor.camera import resolve_cameras
+
+    grouped = group_arms(_resolve_action_arms(setup, kwargs))
+    error = _validate_pairing(grouped["followers"], grouped["leaders"])
+    if error:
+        raise ActionError(error)
+
+    # Resolve dataset name
+    user_specified = "dataset_name" in kwargs
+    if user_specified:
+        dataset_name = kwargs["dataset_name"]
+    else:
+        dataset_name = f"rec_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    name_error = _validate_dataset_name(dataset_name)
+    if name_error:
+        raise ActionError(name_error)
+
+    all_arms = grouped["followers"] + grouped["leaders"]
+    family = get_family(all_arms[0]["type"]) if all_arms else None
+    controller = ArmCommandBuilder(family=family)
+    cameras = {} if kwargs.get("use_cameras") is False else resolve_cameras(setup)
+    ds_path = dataset_path(setup, dataset_name)
+    resume = user_specified and ds_path.exists()
+
+    record_kwargs: dict[str, Any] = {
+        "cameras": cameras,
+        "repo_id": f"local/{dataset_name}",
+        "task": kwargs.get("task", "default_task"),
+        "dataset_root": str(ds_path),
+        "push_to_hub": False,
+        "fps": kwargs.get("fps", 30),
+        "num_episodes": kwargs.get("num_episodes", 10),
+    }
+    episode_time_s = kwargs.get("episode_time_s")
+    if episode_time_s is not None:
+        if episode_time_s <= 0:
+            raise ActionError("episode_time_s must be positive.")
+        record_kwargs["episode_time_s"] = episode_time_s
+    reset_time_s = kwargs.get("reset_time_s")
+    if reset_time_s is not None:
+        if reset_time_s < 0:
+            raise ActionError("reset_time_s must be non-negative.")
+        record_kwargs["reset_time_s"] = reset_time_s
+    if resume:
+        record_kwargs["resume"] = True
+
+    display_kw = _display_kwargs(display_data, display_ip, display_port)
+    followers = grouped["followers"]
+    leaders = grouped["leaders"]
+
+    if len(followers) == 1:
+        argv = controller.record(
+            robot_type=followers[0]["type"],
+            robot_port=followers[0]["port"],
+            robot_cal_dir=followers[0]["calibration_dir"],
+            robot_id=_arm_id(followers[0]),
+            teleop_type=leaders[0]["type"],
+            teleop_port=leaders[0]["port"],
+            teleop_cal_dir=leaders[0]["calibration_dir"],
+            teleop_id=_arm_id(leaders[0]),
+            **record_kwargs,
+            **display_kw,
+        )
+        return argv, dataset_name, str(ds_path)
+
+    robot_dir = ensure_bimanual_cal_dir(followers[0], followers[1], "followers")
+    teleop_dir = ensure_bimanual_cal_dir(leaders[0], leaders[1], "leaders")
+    argv = controller.record_bimanual(
+        robot_id=_BIMANUAL_ID,
+        robot_cal_dir=robot_dir,
+        left_robot=followers[0],
+        right_robot=followers[1],
+        teleop_id=_BIMANUAL_ID,
+        teleop_cal_dir=teleop_dir,
+        left_teleop=leaders[0],
+        right_teleop=leaders[1],
+        **record_kwargs,
+        **display_kw,
+    )
+    return argv, dataset_name, str(ds_path)
+
+
+def _display_kwargs(
+    display_data: bool, display_ip: str, display_port: int,
+) -> dict[str, Any]:
+    """Build display keyword args for ArmCommandBuilder methods."""
+    if not display_data:
+        return {}
+    result: dict[str, Any] = {"display_data": True}
+    if display_ip:
+        result["display_ip"] = display_ip
+    if display_port:
+        result["display_port"] = display_port
+    return result

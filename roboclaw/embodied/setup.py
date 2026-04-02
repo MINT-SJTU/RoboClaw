@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
-_ARM_TYPES = ("so101_follower", "so101_leader")
+from roboclaw.embodied.embodiment.arm.registry import all_arm_types
+
+_ARM_TYPES = all_arm_types()
 _ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
 _HAND_TYPES = ("inspire_rh56", "revo2")
 _HAND_FIELDS = {"alias", "type", "port", "slave_id"}
@@ -141,6 +144,7 @@ def mark_arm_calibrated(alias: str, path: Path | None = None) -> dict[str, Any]:
         raise ValueError(f"No arm with alias '{alias}' in setup.")
     arm["calibrated"] = True
     save_setup(setup, path)
+    refresh_bimanual_cal_dirs(setup)
     return setup
 
 
@@ -429,8 +433,64 @@ def _has_calibration_file(calibration_dir: Path, serial: str) -> bool:
     return (calibration_dir / f"{serial}.json").exists()
 
 
+def load_calibration(arm: dict[str, Any]) -> dict[str, Any]:
+    """Load calibration JSON for an arm. Returns empty dict if not found."""
+    cal_dir = arm.get("calibration_dir", "")
+    if not cal_dir:
+        return {}
+    serial = Path(cal_dir).name
+    cal_path = Path(cal_dir).expanduser() / f"{serial}.json"
+    if not cal_path.exists():
+        return {}
+    return json.loads(cal_path.read_text(encoding="utf-8"))
+
+
 def _migrate_none_calibration_file(calibration_dir: Path, serial: str) -> None:
     legacy = calibration_dir / "None.json"
     target = calibration_dir / f"{serial}.json"
     if legacy.exists() and not target.exists():
         legacy.rename(target)
+
+
+# ── Bimanual calibration directory management ─────────────────────────
+
+
+def ensure_bimanual_cal_dir(
+    left_arm: dict[str, Any], right_arm: dict[str, Any], role: str,
+) -> str:
+    """Return a persistent bimanual calibration directory, creating/refreshing if needed.
+
+    The directory lives at ``get_calibration_root() / bimanual_{role}/`` and
+    contains ``bimanual_left.json`` + ``bimanual_right.json`` copied from the
+    individual arm calibration files. Files are only re-copied when the source
+    is newer than the target (mtime comparison).
+    """
+    target_dir = get_calibration_root() / f"bimanual_{role}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for side, arm in [("left", left_arm), ("right", right_arm)]:
+        cal_dir = Path(arm["calibration_dir"]).expanduser()
+        serial = cal_dir.name
+        source = cal_dir / f"{serial}.json"
+        if not source.exists():
+            continue
+        dest = target_dir / f"bimanual_{side}.json"
+        if dest.exists() and source.stat().st_mtime <= dest.stat().st_mtime:
+            continue
+        shutil.copy2(source, dest)
+    return str(target_dir)
+
+
+def refresh_bimanual_cal_dirs(setup: dict[str, Any]) -> None:
+    """Eagerly refresh bimanual calibration dirs if a bimanual pair exists."""
+    from loguru import logger
+
+    arms = setup.get("arms", [])
+    followers = [a for a in arms if "follower" in a.get("type", "")]
+    leaders = [a for a in arms if "leader" in a.get("type", "")]
+    try:
+        if len(followers) == 2:
+            ensure_bimanual_cal_dir(followers[0], followers[1], "followers")
+        if len(leaders) == 2:
+            ensure_bimanual_cal_dir(leaders[0], leaders[1], "leaders")
+    except Exception:
+        logger.opt(exception=True).warning("Failed to refresh bimanual calibration dirs")

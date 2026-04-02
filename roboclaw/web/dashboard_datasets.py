@@ -1,4 +1,4 @@
-"""Dataset listing and deletion utilities for the web UI."""
+"""Dataset listing and deletion utilities for the dashboard."""
 
 from __future__ import annotations
 

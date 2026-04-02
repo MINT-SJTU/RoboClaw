@@ -420,12 +420,12 @@ def create_app(
         from roboclaw.web.dashboard import register_dashboard_routes
 
         async def _on_hw_fault(fault: Any) -> None:
-            await web_ch.broadcast_dashboard_event({
+            await web_ch.broadcast({
                 "type": "dashboard.fault", **fault.to_dict(),
             })
 
         async def _on_hw_fault_resolved(fault: Any) -> None:
-            await web_ch.broadcast_dashboard_event({
+            await web_ch.broadcast({
                 "type": "dashboard.fault.resolved",
                 "fault_type": fault.fault_type.value,
                 "device_alias": fault.device_alias,
@@ -443,11 +443,7 @@ def create_app(
             get_config=lambda: (web_cfg["host"], web_cfg["port"]),
         )
 
-    # 13. Mount embodied data-collection routes
-    from roboclaw.embodied.web.routes import router as embodied_router
-    app.include_router(embodied_router)
-
-    # 14. Serve built frontend in production (ui/dist/)
+    # 13. Serve built frontend in production (ui/dist/)
     ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
     if ui_dist.is_dir():
         from starlette.staticfiles import StaticFiles
@@ -484,10 +480,10 @@ def create_app(
     # 16. Shutdown: tear down gracefully
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        # Stop active recording if any
-        active_rec = getattr(app.state, "active_recording", None)
-        if active_rec is not None and active_rec.active:
-            active_rec.stop()
+        # Stop dashboard session if active
+        dashboard_session = getattr(app.state, "dashboard_session", None)
+        if dashboard_session is not None and dashboard_session.busy:
+            await dashboard_session.stop()
 
         # Stop hardware monitor
         hw_mon = getattr(app.state, "hardware_monitor", None)
@@ -514,6 +510,30 @@ def create_app(
 # ------------------------------------------------------------------
 
 
+def _check_device_permissions() -> None:
+    """Check serial/camera device permissions at startup, auto-fix if possible."""
+    import os
+    import sys
+
+    if sys.platform != "linux":
+        return
+    from roboclaw.embodied.scan import list_serial_device_paths
+    devices = list_serial_device_paths()
+    if not devices:
+        return
+    denied = [d for d in devices if not os.access(d, os.R_OK | os.W_OK)]
+    if not denied:
+        return
+    logger.warning("Serial devices without permission: {}", denied)
+    from roboclaw.web.dashboard_setup import _try_fix_serial_permissions
+    if _try_fix_serial_permissions():
+        logger.info("Auto-fixed serial device permissions")
+    else:
+        logger.warning(
+            "Cannot auto-fix serial permissions. Run: bash scripts/setup-udev.sh"
+        )
+
+
 def main(
     *,
     config_path: str | None = None,
@@ -524,6 +544,7 @@ def main(
     """Run the web server with uvicorn."""
     import uvicorn
 
+    _check_device_permissions()
     app = create_app(config_path=config_path, workspace=workspace, host=host, port=port)
     logger.info("Starting RoboClaw Web UI at http://{}:{}", app.state.web_host, app.state.web_port)
     uvicorn.run(app, host=app.state.web_host, port=app.state.web_port, log_level="info")

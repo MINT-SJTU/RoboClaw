@@ -56,6 +56,21 @@ class LocalLeRobotRunner:
             env=_utf8_env(),
         )
 
+    async def run_streaming_interactive(self, argv: list[str]) -> asyncio.subprocess.Process:
+        """Launch subprocess with stdin/stdout/stderr pipes for interactive streaming.
+
+        Caller owns the process: reads stdout/stderr, writes to stdin, and waits.
+        Used by web dashboard for teleop/recording with episode control via stdin.
+        """
+        return await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+            env=_utf8_env(),
+        )
+
     async def run_interactive(self, argv: list[str]) -> tuple[int, str]:
         """Run command with inherited TTY, tee stderr. Returns (exit code, stderr text)."""
         from roboclaw.embodied.stub import is_stub_mode

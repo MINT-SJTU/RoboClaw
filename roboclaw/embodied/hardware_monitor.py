@@ -45,6 +45,58 @@ class HardwareFault:
         return d
 
 
+@dataclass
+class ArmStatus:
+    """Connectivity and calibration status for a single arm."""
+
+    alias: str
+    arm_type: str
+    role: str  # "follower" | "leader" | ""
+    connected: bool
+    calibrated: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "alias": self.alias, "type": self.arm_type, "role": self.role,
+            "connected": self.connected, "calibrated": self.calibrated,
+        }
+
+
+@dataclass
+class CameraStatus:
+    """Connectivity status for a single camera."""
+
+    alias: str
+    connected: bool
+    width: int
+    height: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def check_arm_status(arm: dict[str, Any]) -> ArmStatus:
+    """Check a single arm's connectivity and calibration state."""
+    alias = arm.get("alias", "unknown")
+    port = arm.get("port", "")
+    connected = bool(port and Path(port).exists())
+    calibrated = bool(arm.get("calibrated", False))
+    arm_type = arm.get("type", "")
+    role = "follower" if "follower" in arm_type else "leader" if "leader" in arm_type else ""
+    return ArmStatus(alias=alias, arm_type=arm_type, role=role, connected=connected, calibrated=calibrated)
+
+
+def check_camera_status(cam: dict[str, Any]) -> CameraStatus:
+    """Check a single camera's connectivity."""
+    alias = cam.get("alias", "unknown")
+    port = cam.get("port", "")
+    connected = bool(port and Path(port).exists())
+    return CameraStatus(
+        alias=alias, connected=connected,
+        width=cam.get("width", 640), height=cam.get("height", 480),
+    )
+
+
 def _fault_key(fault: HardwareFault) -> str:
     """Unique key for deduplicating active faults."""
     return f"{fault.fault_type.value}:{fault.device_alias}"
@@ -122,21 +174,20 @@ def _check_arms(
 ) -> None:
     """Check arm connectivity and calibration state."""
     for arm in arms:
-        alias = arm.get("alias", "unknown")
-        port = arm.get("port", "")
-        if port and not Path(port).exists():
+        status = check_arm_status(arm)
+        if arm.get("port") and not status.connected:
             faults.append(HardwareFault(
                 fault_type=FaultType.ARM_DISCONNECTED,
-                device_alias=alias,
-                message=f"Arm '{alias}' USB port not found",
+                device_alias=status.alias,
+                message=f"Arm '{status.alias}' USB port not found",
                 timestamp=now,
             ))
             continue
-        if not arm.get("calibrated", False):
+        if not status.calibrated:
             faults.append(HardwareFault(
                 fault_type=FaultType.ARM_NOT_CALIBRATED,
-                device_alias=alias,
-                message=f"Arm '{alias}' is not calibrated",
+                device_alias=status.alias,
+                message=f"Arm '{status.alias}' is not calibrated",
                 timestamp=now,
             ))
 
@@ -151,13 +202,12 @@ def _check_cameras(
     if recording_active:
         return
     for cam in cameras:
-        alias = cam.get("alias", "unknown")
-        port = cam.get("port", "")
-        if port and not Path(port).exists():
+        status = check_camera_status(cam)
+        if cam.get("port") and not status.connected:
             faults.append(HardwareFault(
                 fault_type=FaultType.CAMERA_DISCONNECTED,
-                device_alias=alias,
-                message=f"Camera '{alias}' device not found",
+                device_alias=status.alias,
+                message=f"Camera '{status.alias}' device not found",
                 timestamp=now,
             ))
 

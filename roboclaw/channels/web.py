@@ -155,11 +155,11 @@ class WebChannel(BaseChannel):
         ]
 
     # ------------------------------------------------------------------
-    # Dashboard broadcast
+    # Broadcast
     # ------------------------------------------------------------------
 
-    async def broadcast_dashboard_event(self, event: dict[str, Any]) -> None:
-        """Send a dashboard event to all connected WebSocket clients."""
+    async def broadcast(self, event: dict[str, Any]) -> None:
+        """Send an event to all connected WebSocket clients."""
         all_sockets = [
             ws
             for sockets in self._connections.values()

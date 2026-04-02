@@ -27,7 +27,7 @@ from roboclaw.embodied.setup import (
     set_camera,
     set_hand,
 )
-from roboclaw.embodied.ops.helpers import _dataset_path, _group_arms, _resolve_arms
+from roboclaw.embodied.ops.helpers import dataset_path, group_arms, _resolve_arms
 from roboclaw.embodied.sensor.camera import resolve_cameras as _resolve_cameras
 from roboclaw.embodied.tool import EmbodiedToolGroup, create_embodied_tools
 
@@ -368,7 +368,7 @@ async def test_record_bimanual() -> None:
 
     with (
         patch("roboclaw.embodied.setup.ensure_setup", return_value=setup),
-        patch("roboclaw.embodied.ops.helpers.shutil.copy2") as mock_copy,
+        patch("roboclaw.embodied.ops.helpers.ensure_bimanual_cal_dir", return_value="/tmp/bimanual") as mock_cal,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(
@@ -383,7 +383,7 @@ async def test_record_bimanual() -> None:
     assert "--robot.id=bimanual" in argv
     assert "--teleop.id=bimanual" in argv
     assert "--dataset.root=/data/local/test" in argv
-    assert len(mock_copy.call_args_list) == 4
+    assert mock_cal.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -422,7 +422,7 @@ async def test_replay_bimanual_with_root_fallback() -> None:
 
     with (
         patch("roboclaw.embodied.setup.ensure_setup", return_value=setup),
-        patch("roboclaw.embodied.ops.helpers.shutil.copy2") as mock_copy,
+        patch("roboclaw.embodied.setup.ensure_bimanual_cal_dir", return_value="/tmp/bimanual") as mock_cal,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(action="replay", dataset_name="test", arms="/dev/a,/dev/b")
@@ -432,7 +432,7 @@ async def test_replay_bimanual_with_root_fallback() -> None:
     assert "--robot.id=bimanual" in argv
     fallback = Path("~/.cache/huggingface/lerobot").expanduser() / "local" / "test"
     assert f"--dataset.root={fallback}" in argv
-    assert len(mock_copy.call_args_list) == 2
+    assert mock_cal.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -460,7 +460,7 @@ async def test_teleoperate_bimanual() -> None:
 
     with (
         patch("roboclaw.embodied.setup.ensure_setup", return_value=setup),
-        patch("roboclaw.embodied.ops.helpers.shutil.copy2") as mock_copy,
+        patch("roboclaw.embodied.ops.helpers.ensure_bimanual_cal_dir", return_value="/tmp/bimanual") as mock_cal,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(action="teleoperate", arms="/dev/a,/dev/b,/dev/c,/dev/d")
@@ -469,7 +469,7 @@ async def test_teleoperate_bimanual() -> None:
     argv = mock_runner.run_interactive.call_args.args[0]
     assert "--robot.id=bimanual" in argv
     assert "--teleop.id=bimanual" in argv
-    assert len(mock_copy.call_args_list) == 4
+    assert mock_cal.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -515,7 +515,7 @@ async def test_run_policy_bimanual() -> None:
 
     with (
         patch("roboclaw.embodied.setup.ensure_setup", return_value=setup),
-        patch("roboclaw.embodied.ops.helpers.shutil.copy2"),
+        patch("roboclaw.embodied.setup.ensure_bimanual_cal_dir", return_value="/tmp/bimanual"),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(action="record", checkpoint_path="/models/act")
@@ -777,7 +777,7 @@ def test_resolve_arms_rejects_alias_lookup() -> None:
 
 
 def test_group_arms() -> None:
-    grouped = _group_arms(_resolve_arms(_MOCK_SETUP, f"{_FOLLOWER_PORT},{_LEADER_PORT}"))
+    grouped = group_arms(_resolve_arms(_MOCK_SETUP, f"{_FOLLOWER_PORT},{_LEADER_PORT}"))
     assert [arm["alias"] for arm in grouped["followers"]] == ["right_follower"]
     assert [arm["alias"] for arm in grouped["leaders"]] == ["left_leader"]
 
@@ -919,4 +919,4 @@ def test_resolve_cameras_defaults_and_passthrough() -> None:
 
 
 def test_dataset_path_appends_local_and_dataset_name() -> None:
-    assert _dataset_path(_MOCK_SETUP, "demo") == Path("/data/local/demo")
+    assert dataset_path(_MOCK_SETUP, "demo") == Path("/data/local/demo")

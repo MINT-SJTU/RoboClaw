@@ -8,30 +8,30 @@ from __future__ import annotations
 import json
 import sys
 
+from roboclaw.embodied.embodiment.arm.registry import all_arm_types
 from roboclaw.embodied.scan import restore_stderr, suppress_stderr
-from roboclaw.embodied.setup import _ARM_TYPES
 
-PRESENT_POS_ADDR = 56
-PRESENT_POS_LEN = 2
 MOTOR_IDS = list(range(1, 7))
 DEFAULT_BAUDRATE = 1_000_000
 MOTION_THRESHOLD = 50
 
-# Derive the menu from the canonical _ARM_TYPES tuple in setup.py.
-# _ARM_TYPES order: ("so101_follower", "so101_leader")
-_leader = next(t for t in _ARM_TYPES if "leader" in t)
-_follower = next(t for t in _ARM_TYPES if "follower" in t)
+# -- Feetech constants (STS3215 / scservo_sdk) --
+_FEETECH_POS_ADDR = 56
+_FEETECH_POS_LEN = 2
 
-_ARM_TYPE_CHOICES = {
-    "1": _leader,
-    "2": _follower,
-    "leader": _leader,
-    "follower": _follower,
-    _leader: _leader,
-    _follower: _follower,
-    "主": _leader,
-    "从": _follower,
-}
+# -- Dynamixel constants (XL430/XL330) --
+_DYNAMIXEL_POS_ADDR = 132
+_DYNAMIXEL_POS_LEN = 4
+
+# Build dynamic menu from all registered arm types.
+_ALL_TYPES = all_arm_types()
+_ARM_TYPE_CHOICES: dict[str, str] = {}
+for _idx, _t in enumerate(_ALL_TYPES, 1):
+    _ARM_TYPE_CHOICES[str(_idx)] = _t
+    _ARM_TYPE_CHOICES[_t] = _t
+_leader = next(t for t in _ALL_TYPES if "leader" in t)
+_follower = next(t for t in _ALL_TYPES if "follower" in t)
+_ARM_TYPE_CHOICES.update({"leader": _leader, "follower": _follower, "主": _leader, "从": _follower})
 
 
 def _read_line(prompt: str) -> str:
@@ -47,14 +47,15 @@ def _read_line(prompt: str) -> str:
 def _choose_arm_type() -> str:
     """Prompt until a valid arm type is selected."""
     print("Choose arm type:")
-    print("  1. leader (主臂)")
-    print("  2. follower (从臂)")
+    for i, t in enumerate(_ALL_TYPES, 1):
+        label = "主臂" if "leader" in t else "从臂"
+        print(f"  {i}. {t} ({label})")
     while True:
-        choice = _read_line("Select [1/2]: ").strip().casefold()
+        choice = _read_line("Select: ").strip().casefold()
         arm_type = _ARM_TYPE_CHOICES.get(choice)
         if arm_type is not None:
             return arm_type
-        print("Invalid choice. Enter 1, 2, 主, 从, leader, or follower.")
+        print(f"Invalid choice. Enter 1-{len(_ALL_TYPES)} or a type name.")
 
 
 def _choose_alias(existing_aliases: set[str]) -> str:
@@ -81,8 +82,12 @@ def _confirm(prompt: str) -> bool:
         print("Please enter Y or n.")
 
 
+# ---------------------------------------------------------------------------
+# Feetech probe / read
+# ---------------------------------------------------------------------------
+
 def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
-    """Try reading Present_Position for motor IDs 1-6. Return responding IDs."""
+    """Try reading Present_Position for Feetech motor IDs 1-6."""
     from roboclaw.embodied.stub import is_stub_mode, stub_motor_ids
 
     if is_stub_mode():
@@ -90,13 +95,16 @@ def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
     import scservo_sdk as scs
 
     handler = scs.PortHandler(port_path)
-    if not handler.openPort():
+    try:
+        if not handler.openPort():
+            return []
+    except OSError:
         return []
     handler.setBaudRate(baudrate)
     packet = scs.PacketHandler(0)
     found = []
     for mid in MOTOR_IDS:
-        val, result, _ = packet.read2ByteTxRx(handler, mid, PRESENT_POS_ADDR)
+        val, result, _ = packet.read2ByteTxRx(handler, mid, _FEETECH_POS_ADDR)
         if result == scs.COMM_SUCCESS:
             found.append(mid)
     handler.closePort()
@@ -106,7 +114,7 @@ def probe_port(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
 def read_positions(
     port_path: str, motor_ids: list[int], baudrate: int = DEFAULT_BAUDRATE,
 ) -> dict[int, int]:
-    """Read Present_Position (addr=56, len=2) for each motor ID."""
+    """Read Feetech Present_Position for each motor ID."""
     from roboclaw.embodied.stub import is_stub_mode
 
     if is_stub_mode():
@@ -120,12 +128,69 @@ def read_positions(
     packet = scs.PacketHandler(0)
     positions: dict[int, int] = {}
     for mid in motor_ids:
-        val, result, _ = packet.read2ByteTxRx(handler, mid, PRESENT_POS_ADDR)
+        val, result, _ = packet.read2ByteTxRx(handler, mid, _FEETECH_POS_ADDR)
         if result == scs.COMM_SUCCESS:
             positions[mid] = val
     handler.closePort()
     return positions
 
+
+# ---------------------------------------------------------------------------
+# Dynamixel probe / read
+# ---------------------------------------------------------------------------
+
+def probe_port_dynamixel(port_path: str, baudrate: int = DEFAULT_BAUDRATE) -> list[int]:
+    """Try reading Present_Position for Dynamixel motor IDs 1-6."""
+    from roboclaw.embodied.stub import is_stub_mode, stub_motor_ids
+
+    if is_stub_mode():
+        return stub_motor_ids(port_path)
+    import dynamixel_sdk as dxl
+
+    handler = dxl.PortHandler(port_path)
+    try:
+        if not handler.openPort():
+            return []
+    except OSError:
+        return []
+    handler.setBaudRate(baudrate)
+    packet = dxl.PacketHandler(2.0)
+    found = []
+    for mid in MOTOR_IDS:
+        val, result, _ = packet.read4ByteTxRx(handler, mid, _DYNAMIXEL_POS_ADDR)
+        if result == dxl.COMM_SUCCESS:
+            found.append(mid)
+    handler.closePort()
+    return found
+
+
+def read_positions_dynamixel(
+    port_path: str, motor_ids: list[int], baudrate: int = DEFAULT_BAUDRATE,
+) -> dict[int, int]:
+    """Read Dynamixel Present_Position for each motor ID."""
+    from roboclaw.embodied.stub import is_stub_mode
+
+    if is_stub_mode():
+        return {mid: 0 for mid in motor_ids}
+    import dynamixel_sdk as dxl
+
+    handler = dxl.PortHandler(port_path)
+    if not handler.openPort():
+        return {}
+    handler.setBaudRate(baudrate)
+    packet = dxl.PacketHandler(2.0)
+    positions: dict[int, int] = {}
+    for mid in motor_ids:
+        val, result, _ = packet.read4ByteTxRx(handler, mid, _DYNAMIXEL_POS_ADDR)
+        if result == dxl.COMM_SUCCESS:
+            positions[mid] = val
+    handler.closePort()
+    return positions
+
+
+# ---------------------------------------------------------------------------
+# Motion detection (protocol-agnostic)
+# ---------------------------------------------------------------------------
 
 def detect_motion(baseline: dict[int, int], current: dict[int, int]) -> int:
     """Compute total absolute delta between baseline and current positions."""
@@ -138,6 +203,10 @@ def detect_motion(baseline: dict[int, int], current: dict[int, int]) -> int:
     return total
 
 
+# ---------------------------------------------------------------------------
+# Port resolution helpers
+# ---------------------------------------------------------------------------
+
 def _resolve_port_path(port: dict) -> str:
     """Pick the best device path from a scanned port entry."""
     return port.get("dev") or port.get("by_id") or port.get("by_path", "")
@@ -148,33 +217,64 @@ def _resolve_port_by_id(port: dict) -> str:
     return port.get("by_id") or port.get("dev") or port.get("by_path", "")
 
 
+# ---------------------------------------------------------------------------
+# Multi-protocol probing
+# ---------------------------------------------------------------------------
+
 def _probe_single_port(port: dict) -> dict | None:
-    """Probe one port for Feetech motors. Returns enriched dict or None."""
+    """Probe one port for Feetech motors."""
     path = _resolve_port_path(port)
     if not path:
         return None
     ids = probe_port(path)
     if not ids:
         return None
-    return {**port, "motor_ids": ids}
+    return {**port, "motor_ids": ids, "bus_type": "feetech"}
 
 
-def _filter_feetech_ports(scanned_ports: list[dict]) -> list[dict]:
-    """Probe each port, keep only those with Feetech motors. Attach motor_ids."""
+def _probe_single_port_dynamixel(port: dict) -> dict | None:
+    """Probe one port for Dynamixel motors."""
+    path = _resolve_port_path(port)
+    if not path:
+        return None
+    ids = probe_port_dynamixel(path)
+    if not ids:
+        return None
+    return {**port, "motor_ids": ids, "bus_type": "dynamixel"}
+
+
+def _filter_motor_ports(scanned_ports: list[dict]) -> list[dict]:
+    """Probe each port for Feetech then Dynamixel motors."""
     saved = suppress_stderr()
     try:
-        results = [_probe_single_port(p) for p in scanned_ports]
+        feetech = [_probe_single_port(p) for p in scanned_ports]
+        feetech = [r for r in feetech if r is not None]
+        if feetech:
+            return feetech
+        dxl = [_probe_single_port_dynamixel(p) for p in scanned_ports]
+        return [r for r in dxl if r is not None]
     finally:
         restore_stderr(saved)
-    return [r for r in results if r is not None]
+
+
+# Keep old name as alias for backward compat within this module
+_filter_feetech_ports = _filter_motor_ports
+
+
+def _read_positions_for_port(port: dict) -> dict[int, int]:
+    """Read positions using the correct protocol for a probed port."""
+    path = _resolve_port_path(port)
+    if port.get("bus_type") == "dynamixel":
+        return read_positions_dynamixel(path, port["motor_ids"])
+    return read_positions(path, port["motor_ids"])
 
 
 def _read_all_baselines(ports: list[dict]) -> dict[str, dict[int, int]]:
-    """Read positions for all ports. Returns {dev_path: {motor_id: position}}."""
+    """Read positions for all ports."""
     baselines: dict[str, dict[int, int]] = {}
     for port in ports:
         path = _resolve_port_path(port)
-        baselines[path] = read_positions(path, port["motor_ids"])
+        baselines[path] = _read_positions_for_port(port)
     return baselines
 
 
@@ -189,7 +289,7 @@ def _find_moved_port(ports: list[dict], baselines: dict[str, dict[int, int]]) ->
     best_delta = 0
     for port in ports:
         path = _resolve_port_path(port)
-        current = read_positions(path, port["motor_ids"])
+        current = _read_positions_for_port(port)
         delta = detect_motion(baselines[path], current)
         if delta > MOTION_THRESHOLD and delta > best_delta:
             best_delta = delta
@@ -207,7 +307,7 @@ def _save_arm(alias: str, arm_type: str, port: dict) -> None:
 
 
 def _identify_one_arm(ports: list[dict], existing_aliases: set[str]) -> dict | None:
-    """Run one round of identification. Returns staged arm data or None."""
+    """Run one round of identification."""
     baselines = _read_all_baselines(ports)
     _read_line("\nMove one arm, then press Enter.")
     moved = _find_moved_port(ports, baselines)
@@ -249,10 +349,10 @@ def main() -> None:
         print("No serial ports provided.")
         sys.exit(1)
 
-    print("Probing ports for Feetech motors...")
-    ports = _filter_feetech_ports(scanned_ports)
+    print("Probing ports for motors...")
+    ports = _filter_motor_ports(scanned_ports)
     if not ports:
-        print("No Feetech motors found on any port.")
+        print("No motors found on any port.")
         sys.exit(1)
 
     print(f"Found {len(ports)} port(s) with motors.")
