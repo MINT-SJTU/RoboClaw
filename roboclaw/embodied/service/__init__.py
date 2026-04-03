@@ -7,6 +7,7 @@ monitor integration, and operation lifecycle.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from roboclaw.embodied.engine import StatusCallback
@@ -42,6 +43,7 @@ class EmbodiedService:
         on_state_change: StatusCallback | None = None,
     ) -> None:
         self._monitor = hardware_monitor
+        self._lock = threading.Lock()
         self._embodiment_owner: str = ""
 
         # Sub-services
@@ -55,25 +57,34 @@ class EmbodiedService:
 
     @property
     def embodiment_busy(self) -> bool:
-        return self._embodiment_owner != ""
+        with self._lock:
+            return self._embodiment_owner != ""
 
     @property
     def busy(self) -> bool:
-        return self.session.busy or self._embodiment_owner != ""
+        with self._lock:
+            return self.session.busy or self._embodiment_owner != ""
 
     @property
     def busy_reason(self) -> str:
-        if self.session.busy:
-            return self.session.state
-        return self._embodiment_owner
+        with self._lock:
+            if self.session.busy:
+                return self.session.state
+            return self._embodiment_owner
 
     def acquire_embodiment(self, owner: str) -> None:
-        if self.busy:
-            raise EmbodimentBusyError(f"Embodiment busy: {self.busy_reason}")
-        self._embodiment_owner = owner
+        with self._lock:
+            if self.session.busy or self._embodiment_owner:
+                reason = self.session.state if self.session.busy else self._embodiment_owner
+                raise EmbodimentBusyError(f"Embodiment busy: {reason}")
+            self._embodiment_owner = owner
 
-    def release_embodiment(self) -> None:
-        self._embodiment_owner = ""
+    def release_embodiment(self, owner: str = "") -> None:
+        """Release the embodiment lock. If owner is specified, only release if it matches."""
+        with self._lock:
+            if owner and self._embodiment_owner != owner:
+                return
+            self._embodiment_owner = ""
 
     # -- Delegated: session ---------------------------------------------------
 
@@ -134,7 +145,7 @@ class EmbodiedService:
     # -- Scanning is accessed via service.scanning directly --------------------
     # No top-level delegation needed — callers use service.scanning.*
 
-    # -- Delegated: queries (backward-compat wrappers) -------------------------
+    # -- Delegated: queries ----------------------------------------------------
 
     def get_hardware_status(self) -> dict[str, Any]:
         return self.queries.get_hardware_status()

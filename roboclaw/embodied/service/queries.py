@@ -117,11 +117,27 @@ class QueryService:
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
 
+    def get_current_config(self) -> dict[str, Any]:
+        """Return current setup config (arms, cameras, hands)."""
+        setup = load_setup()
+        return {
+            "arms": setup.get("arms", []),
+            "cameras": setup.get("cameras", []),
+            "hands": setup.get("hands", []),
+        }
+
     def get_setup(self) -> str:
         """Return setup JSON enriched with hardware connectivity status.
 
         Reuses get_hardware_status() so CLI and web share the same
         connectivity / calibration checks.
+
+        Note: scan_serial_ports() and scan_cameras() are called directly
+        from roboclaw.embodied.scan (low-level I/O), not through
+        ScanningService. This is intentional — these are read-only probes
+        that don't drive motors, so they don't need the embodiment lock.
+        The ScanningService locking is for operations that interact with
+        motor control or hold resources open (e.g. motion detection).
         """
         from roboclaw.embodied.scan import scan_cameras, scan_serial_ports
 

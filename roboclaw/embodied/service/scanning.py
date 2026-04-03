@@ -57,7 +57,7 @@ class ScanningService:
     def stop_motion_detection(self) -> None:
         """Stop motion detection and release the embodiment lock."""
         self._scanner.stop_motion_detection()
-        self._parent.release_embodiment()
+        self._parent.release_embodiment(owner="motion-detection")
 
     def poll_motion(self) -> list[dict]:
         return self._scanner.poll_motion()

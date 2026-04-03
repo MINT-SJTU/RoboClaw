@@ -304,8 +304,6 @@ def _get_service(service: Any) -> Any:
 async def _dispatch(
     action: str, kwargs: dict[str, Any], tty_handoff: Any, service: Any = None,
 ) -> str | list:
-    from roboclaw.embodied.ops.helpers import ActionError
-
     svc = _get_service(service)
 
     # Config operations — no setup needed
