@@ -140,9 +140,9 @@ class TestConvergence:
         }
         monkeypatch.setattr(
             service.scanning, "_scanner",
-            type("FakeScanner", (), {
-                "scan_ports": lambda self: mock_result["ports"],
-                "scan_cameras_list": lambda self: mock_result["cameras"],
+            type("FakeDiscovery", (), {
+                "discover_all": lambda self: mock_result["ports"],
+                "discover_cameras": lambda self: mock_result["cameras"],
             })(),
         )
 

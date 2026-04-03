@@ -35,7 +35,7 @@ class EmbodiedService:
     Sub-services:
     - session: teleop/recording via OperationEngine
     - calibration: arm calibration via CalibrationSession
-    - scanning: port/camera scanning via HardwareScanner
+    - scanning: port/camera scanning via HardwareDiscovery
     """
 
     def __init__(

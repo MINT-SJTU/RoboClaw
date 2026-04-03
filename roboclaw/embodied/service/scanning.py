@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from roboclaw.embodied.engine import HardwareScanner
+from roboclaw.embodied.hardware.discovery import HardwareDiscovery
 
 if TYPE_CHECKING:
     from roboclaw.embodied.service import EmbodiedService
@@ -19,7 +19,7 @@ class ScanningService:
 
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
-        self._scanner = HardwareScanner()
+        self._scanner = HardwareDiscovery()
 
     @property
     def motion_active(self) -> bool:
@@ -27,12 +27,15 @@ class ScanningService:
 
     # -- Locking scan operations ----------------------------------------------
 
-    def run_full_scan(self) -> dict:
+    def run_full_scan(self, model: str = "") -> dict:
         """Scan ports + cameras with embodiment lock."""
         self._parent.acquire_embodiment("scanning")
         try:
-            ports = self._scanner.scan_ports()
-            cameras = self._scanner.scan_cameras_list()
+            if model:
+                ports = self._scanner.discover(model)
+            else:
+                ports = self._scanner.discover_all()
+            cameras = self._scanner.discover_cameras()
             return {"ports": ports, "cameras": cameras}
         finally:
             self._parent.release_embodiment()

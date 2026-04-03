@@ -10,6 +10,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 
+class ScanRequest(BaseModel):
+    model: str = ""
+
+
 class AddArmRequest(BaseModel):
     alias: str
     arm_type: str
@@ -42,9 +46,10 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
     _map_service_errors(app)
 
     @app.post("/api/dashboard/setup/scan")
-    async def setup_scan() -> dict[str, Any]:
+    async def setup_scan(body: ScanRequest | None = None) -> dict[str, Any]:
+        model = body.model if body else ""
         try:
-            return await asyncio.to_thread(service.scanning.run_full_scan)
+            return await asyncio.to_thread(service.scanning.run_full_scan, model)
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from exc
 

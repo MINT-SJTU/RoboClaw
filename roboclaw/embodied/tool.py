@@ -38,6 +38,10 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "enum": ["so101_follower", "so101_leader", "koch_follower", "koch_leader"],
                     "description": "Arm hardware type for set_arm.",
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Robot model name to narrow scan protocol (e.g. so101).",
+                },
                 "port": {
                     "type": "string",
                     "description": "Serial port path for set_arm or set_hand.",
@@ -310,7 +314,8 @@ async def _dispatch(
     if action == "hardware_status":
         return svc.queries.get_manifest()
     if action == "scan":
-        result = await asyncio.to_thread(svc.scanning.run_full_scan)
+        model = kwargs.get("model", "")
+        result = await asyncio.to_thread(svc.scanning.run_full_scan, model)
         return _format_scan(result)
     if action == "describe":
         return svc.queries.describe_actions(kwargs.get("target_action", ""))

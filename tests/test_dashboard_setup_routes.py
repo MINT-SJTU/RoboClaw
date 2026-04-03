@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,12 +15,11 @@ from fastapi.testclient import TestClient
 from roboclaw.http.routes.setup import register_setup_routes
 
 
-_MOCK_PORTS = [
+_RAW_PORTS = [
     {
         "by_path": "/dev/serial/by-path/pci-0:2.1",
         "by_id": "/dev/serial/by-id/usb-ABC-if00",
         "dev": "/dev/ttyACM0",
-        "motor_ids": [1, 2, 3, 4, 5, 6],
     },
 ]
 
@@ -28,23 +28,48 @@ _MOCK_CAMERAS = [
 ]
 
 
+def _scan_context(cameras: list | None = None):
+    """Context manager that patches discover_all internals so the real method
+    runs, populates _scanned_ports, and returns motor-bearing ports."""
+    cam_list = cameras if cameras is not None else []
+    return contextlib.ExitStack(), [
+        patch("roboclaw.embodied.hardware.discovery.scan_serial_ports", return_value=_RAW_PORTS),
+        patch("roboclaw.embodied.hardware.discovery.scan_cameras", return_value=cam_list),
+        patch("roboclaw.embodied.hardware.probers.feetech.FeetechProber.probe", return_value=[1, 2, 3, 4, 5, 6]),
+        patch("roboclaw.embodied.hardware.discovery.suppress_stderr", return_value=99),
+        patch("roboclaw.embodied.hardware.discovery.restore_stderr"),
+    ]
+
+
+@contextlib.contextmanager
+def _patched_scan(cameras: list | None = None):
+    """Convenience wrapper: enter all scan patches at once."""
+    cam_list = cameras if cameras is not None else []
+    with (
+        patch("roboclaw.embodied.hardware.discovery.scan_serial_ports", return_value=_RAW_PORTS),
+        patch("roboclaw.embodied.hardware.discovery.scan_cameras", return_value=cam_list),
+        patch("roboclaw.embodied.hardware.probers.feetech.FeetechProber.probe", return_value=[1, 2, 3, 4, 5, 6]),
+        patch("roboclaw.embodied.hardware.discovery.suppress_stderr", return_value=99),
+        patch("roboclaw.embodied.hardware.discovery.restore_stderr"),
+    ):
+        yield
+
+
 def _make_app(session_busy: bool = False) -> FastAPI:
     """Create a minimal FastAPI app with setup routes registered."""
-    from roboclaw.embodied.engine import HardwareScanner
+    from roboclaw.embodied.hardware.discovery import HardwareDiscovery
 
     app = FastAPI()
     svc = MagicMock()
     svc.busy = session_busy
 
-    # Build a scanning sub-object that wraps a real HardwareScanner
-    # so state-dependent tests (motion start/poll/stop) still work.
-    scanner = HardwareScanner()
+    scanner = HardwareDiscovery()
     scanning = MagicMock()
 
-    def _run_full_scan():
+    def _run_full_scan(model=""):
         return {
-            "ports": scanner.scan_ports(),
-            "cameras": scanner.scan_cameras_list(),
+            "ports": scanner.discover_all(),
+            "cameras": scanner.discover_cameras(),
         }
 
     scanning.run_full_scan = _run_full_scan
@@ -61,7 +86,6 @@ def _make_app(session_busy: bool = False) -> FastAPI:
 
     svc.scanning = scanning
 
-    # Config and queries sub-services — routes delegate to these
     svc.config = MagicMock()
     svc.queries = MagicMock()
 
@@ -74,20 +98,7 @@ def _make_app(session_busy: bool = False) -> FastAPI:
 def test_scan_returns_ports_and_cameras() -> None:
     app = _make_app()
     client = TestClient(app)
-    with (
-        patch(
-            "roboclaw.embodied.engine.scanner.scan_serial_ports",
-            return_value=[{"by_path": "", "by_id": "/dev/serial/by-id/usb-ABC-if00", "dev": "/dev/ttyACM0"}],
-        ),
-        patch(
-            "roboclaw.embodied.engine.scanner._filter_feetech_ports",
-            return_value=_MOCK_PORTS,
-        ),
-        patch(
-            "roboclaw.embodied.engine.scanner.scan_cameras",
-            return_value=_MOCK_CAMERAS,
-        ),
-    ):
+    with _patched_scan(cameras=_MOCK_CAMERAS):
         resp = client.post("/api/dashboard/setup/scan")
 
     assert resp.status_code == 200
@@ -100,15 +111,10 @@ def test_scan_returns_ports_and_cameras() -> None:
 def test_motion_start_after_scan() -> None:
     app = _make_app()
     client = TestClient(app)
-    # Populate wizard state via scan
-    with (
-        patch("roboclaw.embodied.engine.scanner.scan_serial_ports", return_value=[]),
-        patch("roboclaw.embodied.engine.scanner._filter_feetech_ports", return_value=_MOCK_PORTS),
-        patch("roboclaw.embodied.engine.scanner.scan_cameras", return_value=[]),
-    ):
+    with _patched_scan():
         client.post("/api/dashboard/setup/scan")
 
-    with patch("roboclaw.embodied.engine.scanner.read_positions", return_value={1: 100, 2: 200}):
+    with patch("roboclaw.embodied.hardware.discovery.read_positions_for_port", return_value={1: 100, 2: 200}):
         resp = client.post("/api/dashboard/setup/motion/start")
 
     assert resp.status_code == 200
@@ -126,18 +132,11 @@ def test_motion_start_without_scan_returns_400() -> None:
 def test_motion_poll_returns_deltas() -> None:
     app = _make_app()
     client = TestClient(app)
-    # Scan first
-    with (
-        patch("roboclaw.embodied.engine.scanner.scan_serial_ports", return_value=[]),
-        patch("roboclaw.embodied.engine.scanner._filter_feetech_ports", return_value=_MOCK_PORTS),
-        patch("roboclaw.embodied.engine.scanner.scan_cameras", return_value=[]),
-    ):
+    with _patched_scan():
         client.post("/api/dashboard/setup/scan")
-    # Start motion
-    with patch("roboclaw.embodied.engine.scanner.read_positions", return_value={1: 100, 2: 200}):
+    with patch("roboclaw.embodied.hardware.discovery.read_positions_for_port", return_value={1: 100, 2: 200}):
         client.post("/api/dashboard/setup/motion/start")
-    # Poll with changed positions
-    with patch("roboclaw.embodied.engine.scanner.read_positions", return_value={1: 200, 2: 300}):
+    with patch("roboclaw.embodied.hardware.discovery.read_positions_for_port", return_value={1: 200, 2: 300}):
         resp = client.get("/api/dashboard/setup/motion/poll")
 
     assert resp.status_code == 200
@@ -160,7 +159,6 @@ def test_motion_stop_clears_state() -> None:
     resp = client.post("/api/dashboard/setup/motion/stop")
     assert resp.status_code == 200
     assert resp.json()["status"] == "stopped"
-    # stop_motion_detection delegates to the real scanner
     assert app.state.setup_wizard.motion_active is False
     assert app.state.embodied_service.scanning.stop_motion_detection.called
 

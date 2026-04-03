@@ -85,10 +85,10 @@ async def test_identify_failure() -> None:
     assert "exit 1" in result
 
 
-# ── Unit tests for identify.py helpers ───────────────────────────────
+# ── Unit tests for hardware module helpers ─────────────────────────────
 
-
-from roboclaw.embodied.identify import _filter_feetech_ports, _port_candidates, detect_motion
+from roboclaw.embodied.hardware.motion import detect_motion
+from roboclaw.embodied.hardware.scan import port_candidates
 
 
 def test_detect_motion_above_threshold() -> None:
@@ -115,38 +115,7 @@ def test_detect_motion_missing_ids() -> None:
 def test_port_candidates_adds_cu_variant_on_macos() -> None:
     import roboclaw.embodied.hardware.scan as scan_module
     with patch.object(scan_module.sys, "platform", "darwin"):
-        assert _port_candidates("/dev/tty.usbmodem123") == [
+        assert port_candidates("/dev/tty.usbmodem123") == [
             "/dev/tty.usbmodem123",
             "/dev/cu.usbmodem123",
         ]
-
-
-def test_filter_feetech_ports_skips_probe_exceptions() -> None:
-    ports = [
-        {"dev": "/dev/tty.bad", "by_id": "", "by_path": ""},
-        {"dev": "/dev/tty.good", "by_id": "", "by_path": ""},
-    ]
-    with patch("roboclaw.embodied.identify.probe_port", side_effect=[OSError("boom"), [1, 2, 3, 4, 5, 6]]):
-        result = _filter_feetech_ports(ports)
-
-    assert result == [{"dev": "/dev/tty.good", "by_id": "", "by_path": "", "motor_ids": [1, 2, 3, 4, 5, 6]}]
-
-
-def test_filter_feetech_ports_prefers_usb_like_ports_before_generic_tty() -> None:
-    ports = [
-        {"dev": "/dev/tty", "by_id": "", "by_path": ""},
-        {"dev": "/dev/tty.usbmodem123", "by_id": "", "by_path": ""},
-    ]
-    seen = []
-
-    def _fake_probe(port):
-        seen.append(port["dev"])
-        if "usbmodem" in port["dev"]:
-            return {**port, "motor_ids": [1, 2, 3, 4, 5, 6]}
-        return None
-
-    with patch("roboclaw.embodied.identify._probe_single_port", side_effect=_fake_probe):
-        result = _filter_feetech_ports(ports)
-
-    assert seen == ["/dev/tty.usbmodem123"]
-    assert result == [{"dev": "/dev/tty.usbmodem123", "by_id": "", "by_path": "", "motor_ids": [1, 2, 3, 4, 5, 6]}]
