@@ -298,10 +298,10 @@ def load_setup(path: Path | None = None) -> dict[str, Any]:
 
 
 def save_setup(setup: dict[str, Any], path: Path | None = None) -> None:
-    path = path or get_manifest_path()
-    _validate_setup(setup)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(setup, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    m = _lazy_manifest(path)
+    with m._lock:
+        m._data = setup
+        m._persist()
 
 
 def ensure_setup(path: Path | None = None) -> dict[str, Any]:

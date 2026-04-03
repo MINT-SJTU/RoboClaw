@@ -41,7 +41,7 @@ def generate_fault_snapshot(
 ) -> dict[str, Any]:
     """Generate a fault snapshot for tech support.
 
-    Includes: setup.json content, active faults, last 50 lines of stderr, timestamp.
+    Includes: manifest config, active faults, last 50 lines of stderr, timestamp.
     """
     return {
         "timestamp": time.time(),

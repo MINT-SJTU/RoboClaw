@@ -14,7 +14,7 @@ class ArmCommandBuilder:
     """Builds LeRobot CLI commands for any supported robot arm family.
 
     All methods take explicit params — the caller resolves
-    setup.json into concrete values before calling these.
+    the manifest config into concrete values before calling these.
     """
 
     def __init__(self, family: ArmFamily | None = None) -> None:

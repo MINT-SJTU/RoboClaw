@@ -165,11 +165,15 @@ class EmbodiedService:
 
     async def run_calibrate(self, setup: dict, kwargs: dict, tty_handoff: Any) -> str:
         from roboclaw.embodied.service.actions import do_calibrate
-        return await do_calibrate(setup, kwargs, tty_handoff)
+        result = await do_calibrate(setup, kwargs, tty_handoff)
+        self.manifest.reload()  # actions.py writes disk via free function
+        return result
 
     async def run_identify(self, setup: dict, kwargs: dict, tty_handoff: Any) -> str:
         from roboclaw.embodied.service.actions import do_identify
-        return await do_identify(setup, kwargs, tty_handoff)
+        result = await do_identify(setup, kwargs, tty_handoff)
+        self.manifest.reload()  # identify subprocess writes disk directly
+        return result
 
     async def run_replay(self, setup: dict, kwargs: dict, tty_handoff: Any) -> str:
         from roboclaw.embodied.service.actions import do_replay

@@ -28,7 +28,6 @@ from roboclaw.embodied.manifest.helpers import (
     find_hand,
     get_calibration_root,
     get_manifest_path,
-    get_setup_path,
     refresh_bimanual_cal_dirs,
 )
 
@@ -70,7 +69,7 @@ class Manifest:
         return data
 
     def _persist(self) -> None:
-        """Atomic write: tempfile + os.rename."""
+        """Atomic write: tempfile + os.replace."""
         _validate_setup(self._data)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_fd, tmp_path = tempfile.mkstemp(
@@ -80,7 +79,7 @@ class Manifest:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                 json.dump(self._data, f, indent=2, ensure_ascii=False)
                 f.write("\n")
-            os.rename(tmp_path, str(self._path))
+            os.replace(tmp_path, str(self._path))
         except BaseException:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)

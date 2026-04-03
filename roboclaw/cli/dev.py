@@ -21,7 +21,7 @@ def reset(
     api_base: Optional[str] = typer.Option(None, help="API base URL to set."),
     api_key: Optional[str] = typer.Option(None, help="API key to set."),
     keep_calibration: bool = typer.Option(False, "--keep-calibration", help="Preserve calibration files."),
-    keep_setup: bool = typer.Option(False, "--keep-setup", help="Preserve setup.json (arms, cameras)."),
+    keep_setup: bool = typer.Option(False, "--keep-setup", help="Preserve manifest.json (arms, cameras)."),
     workspace_only: bool = typer.Option(False, "--workspace-only", help="Only reset workspace, keep config.json."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
@@ -45,7 +45,7 @@ def reset(
         if keep_calibration:
             _console.print(f"  [dim](keeping calibration files)[/dim]")
         if keep_setup:
-            _console.print(f"  [dim](keeping setup.json)[/dim]")
+            _console.print(f"  [dim](keeping manifest.json)[/dim]")
         if workspace_only:
             _console.print(f"  [dim](keeping config.json)[/dim]")
         if not typer.confirm("Continue?"):
@@ -74,7 +74,7 @@ def _clean_workspace(workspace: Path, *, keep_calibration: bool, keep_setup: boo
     """Delete workspace contents, optionally preserving calibration and setup."""
     embodied = workspace / "embodied"
     cal_dir = embodied / "calibration"
-    setup_file = embodied / "setup.json"
+    setup_file = embodied / "manifest.json"
 
     # Save files we want to keep
     saved_cal = None
