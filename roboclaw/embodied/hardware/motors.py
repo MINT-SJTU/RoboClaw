@@ -39,12 +39,12 @@ def _motor_config_from_calibration(arm: dict[str, Any]) -> dict[str, tuple[int, 
     }
 
 
-def read_servo_positions(setup: dict[str, Any]) -> dict[str, Any]:
+def read_servo_positions(manifest: dict[str, Any]) -> dict[str, Any]:
     """Read current servo positions for all arms (followers + leaders).
 
     Returns ``{"error": None, "arms": {alias: {motor_name: position}}}``.
     """
-    arms = setup.get("arms", [])
+    arms = manifest.get("arms", [])
     result: dict[str, Any] = {"error": None, "arms": {}}
 
     active_arms = [a for a in arms if a.get("port")]

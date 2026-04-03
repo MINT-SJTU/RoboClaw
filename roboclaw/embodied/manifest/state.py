@@ -22,7 +22,7 @@ from roboclaw.embodied.manifest.helpers import (
     _probe_hand_slave_id,
     _refresh_calibration_state,
     _resolve_port,
-    _validate_setup,
+    _validate_manifest,
     find_arm,
     find_camera,
     find_hand,
@@ -35,7 +35,7 @@ from roboclaw.embodied.manifest.helpers import (
 class Manifest:
     """Single guardian of robot hardware configuration.
 
-    Holds setup state in memory. All reads return deep copies (zero I/O).
+    Holds manifest state in memory. All reads return deep copies (zero I/O).
     All writes are locked, validated, atomically persisted, and emit events.
     """
 
@@ -70,7 +70,7 @@ class Manifest:
 
     def _persist(self) -> None:
         """Atomic write: tempfile + os.replace."""
-        _validate_setup(self._data)
+        _validate_manifest(self._data)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=str(self._path.parent), suffix=".tmp",
@@ -176,12 +176,12 @@ class Manifest:
         return result
 
     def remove_arm(self, alias: str) -> dict[str, Any]:
-        """Remove arm by alias. Returns updated setup dict."""
+        """Remove arm by alias. Returns updated manifest dict."""
         with self._lock:
             arms = self._data.get("arms", [])
             arm = find_arm(arms, alias)
             if arm is None:
-                raise ValueError(f"No arm with alias '{alias}' in setup.")
+                raise ValueError(f"No arm with alias '{alias}' in manifest.")
             arms.remove(arm)
             self._persist()
             result = copy.deepcopy(self._data)
@@ -190,7 +190,7 @@ class Manifest:
         return result
 
     def rename_arm(self, old_alias: str, new_alias: str) -> dict[str, Any]:
-        """Rename arm. Returns updated setup dict."""
+        """Rename arm. Returns updated manifest dict."""
         if not old_alias:
             raise ValueError("Old arm alias is required.")
         if not new_alias:
@@ -200,7 +200,7 @@ class Manifest:
             arms = self._data.get("arms", [])
             arm = find_arm(arms, old_alias)
             if arm is None:
-                raise ValueError(f"No arm with alias '{old_alias}' in setup.")
+                raise ValueError(f"No arm with alias '{old_alias}' in manifest.")
             if old_alias != new_alias and find_arm(arms, new_alias) is not None:
                 raise ValueError(f"Arm alias '{new_alias}' already exists.")
             arm["alias"] = new_alias
@@ -211,12 +211,12 @@ class Manifest:
         return result
 
     def mark_arm_calibrated(self, alias: str) -> dict[str, Any]:
-        """Mark arm as calibrated. Returns updated setup dict."""
+        """Mark arm as calibrated. Returns updated manifest dict."""
         with self._lock:
             arms = self._data.get("arms", [])
             arm = find_arm(arms, alias)
             if arm is None:
-                raise ValueError(f"No arm with alias '{alias}' in setup.")
+                raise ValueError(f"No arm with alias '{alias}' in manifest.")
             arm["calibrated"] = True
             self._persist()
             data_copy = copy.deepcopy(self._data)
@@ -266,12 +266,12 @@ class Manifest:
         return result
 
     def remove_camera(self, name: str) -> dict[str, Any]:
-        """Remove camera by alias. Returns updated setup dict."""
+        """Remove camera by alias. Returns updated manifest dict."""
         with self._lock:
             cameras = self._data.get("cameras", [])
             cam = find_camera(cameras, name)
             if cam is None:
-                raise ValueError(f"No camera with alias '{name}' in setup.")
+                raise ValueError(f"No camera with alias '{name}' in manifest.")
             cameras.remove(cam)
             self._persist()
             result = copy.deepcopy(self._data)
@@ -315,12 +315,12 @@ class Manifest:
         return result
 
     def remove_hand(self, alias: str) -> dict[str, Any]:
-        """Remove hand by alias. Returns updated setup dict."""
+        """Remove hand by alias. Returns updated manifest dict."""
         with self._lock:
             hands = self._data.get("hands", [])
             hand = find_hand(hands, alias)
             if hand is None:
-                raise ValueError(f"No hand with alias '{alias}' in setup.")
+                raise ValueError(f"No hand with alias '{alias}' in manifest.")
             hands.remove(hand)
             self._persist()
             result = copy.deepcopy(self._data)

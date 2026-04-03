@@ -111,31 +111,31 @@ def _previews_to_multimodal(
 
 
 class QueryService:
-    """Read-only queries: setup, hardware status, datasets, policies, previews."""
+    """Read-only queries: manifest, hardware status, datasets, policies, previews."""
 
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
 
     def get_current_config(self) -> dict[str, Any]:
-        """Return current setup config (arms, cameras, hands)."""
-        setup = self._parent.manifest.snapshot
+        """Return current manifest config (arms, cameras, hands)."""
+        manifest = self._parent.manifest.snapshot
         return {
-            "arms": setup.get("arms", []),
-            "cameras": setup.get("cameras", []),
-            "hands": setup.get("hands", []),
+            "arms": manifest.get("arms", []),
+            "cameras": manifest.get("cameras", []),
+            "hands": manifest.get("hands", []),
         }
 
-    def get_setup(self) -> str:
-        """Return setup config + hardware connectivity status.
+    def get_manifest(self) -> str:
+        """Return manifest config + hardware connectivity status.
 
         Same data as the web hardware-status endpoint — config + connectivity
         + calibration + readiness. Discovery of new hardware uses the separate
         ``scan`` action (service.scanning.run_full_scan).
         """
-        setup = self._parent.manifest.snapshot
-        hw = self.get_hardware_status(setup)
-        setup["hardware_status"] = hw
-        return json.dumps(setup, indent=2, ensure_ascii=False)
+        manifest = self._parent.manifest.snapshot
+        hw = self.get_hardware_status(manifest)
+        manifest["hardware_status"] = hw
+        return json.dumps(manifest, indent=2, ensure_ascii=False)
 
     def describe_actions(self, target_action: str = "") -> str:
         if not target_action:
@@ -144,10 +144,10 @@ class QueryService:
             return f"Unknown target_action: {target_action}"
         return f"{target_action}: {_ACTION_DESCRIPTIONS[target_action]}"
 
-    def list_datasets(self, setup: dict[str, Any] | None = None) -> str:
-        if setup is None:
-            setup = self._parent.manifest.ensure()
-        root = Path(setup.get("datasets", {}).get("root", "")) / "local"
+    def list_datasets(self, manifest: dict[str, Any] | None = None) -> str:
+        if manifest is None:
+            manifest = self._parent.manifest.ensure()
+        root = Path(manifest.get("datasets", {}).get("root", "")) / "local"
         if not root.exists():
             return "No datasets found."
         datasets = []
@@ -169,10 +169,10 @@ class QueryService:
             return "No datasets found."
         return json.dumps(datasets, indent=2, ensure_ascii=False)
 
-    def list_policies(self, setup: dict[str, Any] | None = None) -> str:
-        if setup is None:
-            setup = self._parent.manifest.ensure()
-        root = Path(setup.get("policies", {}).get("root", ""))
+    def list_policies(self, manifest: dict[str, Any] | None = None) -> str:
+        if manifest is None:
+            manifest = self._parent.manifest.ensure()
+        root = Path(manifest.get("policies", {}).get("root", ""))
         if not root.exists():
             return "No policies found."
         policies = []
@@ -207,11 +207,11 @@ class QueryService:
             return "No camera previews captured."
         return _previews_to_multimodal(previews, scanned_cameras)
 
-    def get_hardware_status(self, setup: dict | None = None) -> dict[str, Any]:
-        if setup is None:
-            setup = self._parent.manifest.snapshot
-        arms = setup.get("arms", [])
-        cameras = setup.get("cameras", [])
+    def get_hardware_status(self, manifest: dict | None = None) -> dict[str, Any]:
+        if manifest is None:
+            manifest = self._parent.manifest.snapshot
+        arms = manifest.get("arms", [])
+        cameras = manifest.get("cameras", [])
         arm_statuses = [check_arm_status(a) for a in arms]
         camera_statuses = [check_camera_status(c) for c in cameras]
         ready, missing = _compute_readiness(arms, arm_statuses, camera_statuses)

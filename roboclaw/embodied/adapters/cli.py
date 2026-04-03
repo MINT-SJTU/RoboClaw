@@ -83,7 +83,7 @@ def _format_status_line(status: dict[str, Any]) -> str:
 async def run_cli_session(
     service: Any,
     action: str,
-    setup: dict[str, Any],
+    manifest: dict[str, Any],
     kwargs: dict[str, Any],
     tty_handoff: Any,
 ) -> str:
@@ -95,9 +95,9 @@ async def run_cli_session(
         EmbodiedService instance.
     action:
         "teleoperate" or "record".
-    setup:
-        Current hardware setup dict (unused directly; OperationEngine loads
-        its own via load_setup).
+    manifest:
+        Current hardware manifest dict (unused directly; OperationEngine loads
+        its own via load_manifest).
     kwargs:
         Action-specific keyword args (fps, task, num_episodes, etc.).
     tty_handoff:

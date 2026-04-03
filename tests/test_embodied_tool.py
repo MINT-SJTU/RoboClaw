@@ -17,12 +17,12 @@ from roboclaw.embodied.manifest.helpers import (
     find_camera,
     find_hand,
     get_calibration_root,
-    load_setup,
+    load_manifest,
     remove_arm,
     remove_camera,
     rename_arm,
     remove_hand,
-    save_setup,
+    save_manifest,
     set_arm,
     set_camera,
     set_hand,
@@ -184,7 +184,7 @@ async def test_doctor_action() -> None:
     mock_runner.run.return_value = (0, "lerobot 0.5.0", "")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(action="doctor")
@@ -200,7 +200,7 @@ async def test_calibrate_all_arms() -> None:
     mock_runner.run_interactive.return_value = (0, "")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.manifest.helpers.mark_arm_calibrated") as mock_mark,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
@@ -225,7 +225,7 @@ async def test_calibrate_selected_arms_even_if_calibrated() -> None:
     mock_runner.run_interactive.return_value = (0, "")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup),
         patch("roboclaw.embodied.manifest.helpers.mark_arm_calibrated") as mock_mark,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
@@ -238,7 +238,7 @@ async def test_calibrate_selected_arms_even_if_calibrated() -> None:
 @pytest.mark.asyncio
 async def test_calibrate_no_arms() -> None:
     tool = _find_tool(create_embodied_tools(), "embodied_hardware")
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value={**_MOCK_SETUP, "arms": []}):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value={**_MOCK_SETUP, "arms": []}):
         result = await tool.execute(action="calibrate")
     assert result == "No arms configured."
 
@@ -246,9 +246,9 @@ async def test_calibrate_no_arms() -> None:
 @pytest.mark.asyncio
 async def test_calibrate_missing_arm() -> None:
     tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_hardware")
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP):
         result = await tool.execute(action="calibrate", arms="missing_arm")
-    assert result == "No arm with port 'missing_arm' found in setup."
+    assert result == "No arm with port 'missing_arm' found in manifest."
 
 
 @pytest.mark.asyncio
@@ -258,7 +258,7 @@ async def test_calibrate_interrupted_on_sigint() -> None:
     mock_runner.run_interactive.side_effect = [(0, ""), (130, "")]
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.manifest.helpers.mark_arm_calibrated") as mock_mark,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
@@ -279,7 +279,7 @@ async def test_record_action() -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -301,7 +301,7 @@ async def test_record_action_cli_reports_failure() -> None:
         return "Record failed: Process exited with code 7\ncamera init failed"
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -324,7 +324,7 @@ async def test_record_action_without_cameras() -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -347,7 +347,7 @@ async def test_record_action_rejects_non_ascii_dataset_name() -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -378,7 +378,7 @@ async def test_record_bimanual() -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -398,7 +398,7 @@ async def test_replay_single_uses_followers_only() -> None:
     mock_runner.run_interactive.return_value = (0, "")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(action="replay", dataset_name="test", episode=2)
@@ -426,7 +426,7 @@ async def test_replay_bimanual_with_root_fallback() -> None:
     mock_runner.run_interactive.return_value = (0, "")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup),
         patch("roboclaw.embodied.manifest.helpers.ensure_bimanual_cal_dir", return_value="/tmp/bimanual") as mock_cal,
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
@@ -443,7 +443,7 @@ async def test_replay_bimanual_with_root_fallback() -> None:
 @pytest.mark.asyncio
 async def test_replay_rejects_explicit_leaders() -> None:
     tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "embodied_replay")
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP):
         result = await tool.execute(action="replay", dataset_name="test", arms=_LEADER_PORT)
     assert "Replay only supports follower arms" in result
 
@@ -466,7 +466,7 @@ async def test_teleoperate_bimanual() -> None:
         return "Teleoperation finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(action="teleoperate", arms="/dev/a,/dev/b,/dev/c,/dev/d")
@@ -481,7 +481,7 @@ async def test_train_action() -> None:
     mock_runner.run_detached.return_value = "job-abc-123"
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
         result = await tool.execute(action="train", dataset_name="test", steps=5000)
@@ -496,7 +496,7 @@ async def test_run_policy_no_follower_arm() -> None:
     tool = _find_tool(create_embodied_tools(), "embodied_control")
     setup = {**_MOCK_SETUP, "arms": [{**_MOCK_SETUP["arms"][1]}]}
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="record", checkpoint_path="/models/act")
 
     assert result == "No follower arm configured."
@@ -516,7 +516,7 @@ async def test_run_policy_bimanual() -> None:
     }
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup),
         patch("roboclaw.embodied.manifest.helpers.ensure_bimanual_cal_dir", return_value="/tmp/bimanual"),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
@@ -535,7 +535,7 @@ async def test_unknown_action_in_group() -> None:
 
 
 @pytest.fixture()
-def setup_file(tmp_path: Path) -> Path:
+def manifest_file(tmp_path: Path) -> Path:
     p = tmp_path / "setup.json"
     base = {
         "version": 2,
@@ -549,63 +549,63 @@ def setup_file(tmp_path: Path) -> Path:
     return p
 
 
-def test_set_arm(setup_file: Path, calibration_root: Path) -> None:
+def test_set_arm(manifest_file: Path, calibration_root: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=setup_file)
+        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     arm = find_arm(result["arms"], "my_follower")
     assert arm is not None
     assert arm["type"] == "so101_follower"
     assert arm["port"] == _MOCK_SCANNED_PORTS[0]["by_id"]
     assert arm["calibration_dir"] == str(calibration_root / "5B14032630")
     assert arm["calibrated"] is False
-    assert find_arm(load_setup(setup_file)["arms"], "my_follower") == arm
+    assert find_arm(load_manifest(manifest_file)["arms"], "my_follower") == arm
 
 
-def test_set_arm_replaces_existing(setup_file: Path) -> None:
+def test_set_arm_replaces_existing(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        set_arm("my_arm", "so101_follower", "/dev/ttyACM0", path=setup_file)
-        result = set_arm("my_arm", "so101_leader", "/dev/ttyACM1", path=setup_file)
+        set_arm("my_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
+        result = set_arm("my_arm", "so101_leader", "/dev/ttyACM1", path=manifest_file)
     assert len(result["arms"]) == 1
     assert find_arm(result["arms"], "my_arm")["type"] == "so101_leader"
 
 
-def test_set_arm_rejects_duplicate_port(setup_file: Path) -> None:
+def test_set_arm_rejects_duplicate_port(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=setup_file)
+        set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
         with pytest.raises(ValueError, match="already assigned"):
-            set_arm("right_arm", "so101_leader", "/dev/ttyACM0", path=setup_file)
+            set_arm("right_arm", "so101_leader", "/dev/ttyACM0", path=manifest_file)
 
 
-def test_set_arm_resolves_volatile_port(setup_file: Path) -> None:
+def test_set_arm_resolves_volatile_port(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_arm("my_leader", "so101_leader", "/dev/ttyACM1", path=setup_file)
+        result = set_arm("my_leader", "so101_leader", "/dev/ttyACM1", path=manifest_file)
     assert find_arm(result["arms"], "my_leader")["port"] == _MOCK_SCANNED_PORTS[1]["by_id"]
 
 
-def test_set_arm_keeps_stable_port(setup_file: Path) -> None:
+def test_set_arm_keeps_stable_port(manifest_file: Path) -> None:
     stable = "/dev/serial/by-id/usb-custom-device"
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
-        result = set_arm("my_follower", "so101_follower", stable, path=setup_file)
+        result = set_arm("my_follower", "so101_follower", stable, path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["port"] == stable
 
 
-def test_set_arm_unmatched_volatile_port(setup_file: Path) -> None:
+def test_set_arm_unmatched_volatile_port(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
-        result = set_arm("my_follower", "so101_follower", "/dev/ttyUSB99", path=setup_file)
+        result = set_arm("my_follower", "so101_follower", "/dev/ttyUSB99", path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["port"] == "/dev/ttyUSB99"
 
 
-def test_set_arm_marks_existing_calibration(setup_file: Path, calibration_root: Path) -> None:
+def test_set_arm_marks_existing_calibration(manifest_file: Path, calibration_root: Path) -> None:
     serial = "5B14032630"
     calibration_dir = calibration_root / serial
     calibration_dir.mkdir(parents=True)
     (calibration_dir / f"{serial}.json").write_text("{}", encoding="utf-8")
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=setup_file)
+        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["calibrated"] is True
 
 
-def test_set_arm_migrates_none_json(setup_file: Path, calibration_root: Path) -> None:
+def test_set_arm_migrates_none_json(manifest_file: Path, calibration_root: Path) -> None:
     serial = "5B14032630"
     calibration_dir = calibration_root / serial
     calibration_dir.mkdir(parents=True)
@@ -613,55 +613,55 @@ def test_set_arm_migrates_none_json(setup_file: Path, calibration_root: Path) ->
     target = calibration_dir / f"{serial}.json"
     legacy.write_text("{}", encoding="utf-8")
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=setup_file)
+        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["calibrated"] is True
     assert not legacy.exists()
     assert target.exists()
 
 
-def test_set_arm_invalid_type(setup_file: Path) -> None:
+def test_set_arm_invalid_type(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid arm_type"):
-            set_arm("my_follower", "bogus_arm", "/dev/ttyACM0", path=setup_file)
+            set_arm("my_follower", "bogus_arm", "/dev/ttyACM0", path=manifest_file)
 
 
-def test_set_arm_empty_alias(setup_file: Path) -> None:
+def test_set_arm_empty_alias(manifest_file: Path) -> None:
     with pytest.raises(ValueError, match="Arm alias is required"):
-        set_arm("", "so101_follower", "/dev/ttyACM0", path=setup_file)
+        set_arm("", "so101_follower", "/dev/ttyACM0", path=manifest_file)
 
 
-def test_remove_arm(setup_file: Path) -> None:
+def test_remove_arm(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
-        set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=setup_file)
-    result = remove_arm("my_follower", path=setup_file)
+        set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
+    result = remove_arm("my_follower", path=manifest_file)
     assert find_arm(result["arms"], "my_follower") is None
 
 
-def test_remove_arm_missing(setup_file: Path) -> None:
+def test_remove_arm_missing(manifest_file: Path) -> None:
     with pytest.raises(ValueError, match="No arm with alias"):
-        remove_arm("nonexistent", path=setup_file)
+        remove_arm("nonexistent", path=manifest_file)
 
 
-def test_rename_arm_preserves_fields(setup_file: Path, calibration_root: Path) -> None:
+def test_rename_arm_preserves_fields(manifest_file: Path, calibration_root: Path) -> None:
     serial = "5B14032630"
     calibration_dir = calibration_root / serial
     calibration_dir.mkdir(parents=True)
     (calibration_dir / f"{serial}.json").write_text("{}", encoding="utf-8")
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        set_arm("old_alias", "so101_follower", "/dev/ttyACM0", path=setup_file)
-    result = rename_arm("old_alias", "new_alias", path=setup_file)
+        set_arm("old_alias", "so101_follower", "/dev/ttyACM0", path=manifest_file)
+    result = rename_arm("old_alias", "new_alias", path=manifest_file)
     arm = find_arm(result["arms"], "new_alias")
     assert arm["calibration_dir"] == str(calibration_dir)
     assert arm["calibrated"] is True
     assert find_arm(result["arms"], "old_alias") is None
 
 
-def test_rename_arm_rejects_duplicate_alias(setup_file: Path) -> None:
+def test_rename_arm_rejects_duplicate_alias(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=setup_file)
-        set_arm("right_arm", "so101_leader", "/dev/ttyACM1", path=setup_file)
+        set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
+        set_arm("right_arm", "so101_leader", "/dev/ttyACM1", path=manifest_file)
     with pytest.raises(ValueError, match="already exists"):
-        rename_arm("left_arm", "right_arm", path=setup_file)
+        rename_arm("left_arm", "right_arm", path=manifest_file)
 
 
 _MOCK_SCANNED_CAMERAS = [
@@ -670,9 +670,9 @@ _MOCK_SCANNED_CAMERAS = [
 ]
 
 
-def test_set_camera(setup_file: Path) -> None:
+def test_set_camera(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
-        result = set_camera("front", 0, path=setup_file)
+        result = set_camera("front", 0, path=manifest_file)
     cam = find_camera(result["cameras"], "front")
     assert cam is not None
     assert cam["alias"] == "front"
@@ -702,43 +702,43 @@ async def test_preview_cameras_action() -> None:
     assert output_dir == Path("~/.roboclaw").expanduser() / "workspace" / "embodied" / "camera_previews"
 
 
-def test_set_camera_bad_index(setup_file: Path) -> None:
+def test_set_camera_bad_index(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
         with pytest.raises(ValueError, match="out of range"):
-            set_camera("front", 99, path=setup_file)
+            set_camera("front", 99, path=manifest_file)
 
 
-def test_remove_camera(setup_file: Path) -> None:
+def test_remove_camera(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
-        set_camera("front", 0, path=setup_file)
-    result = remove_camera("front", path=setup_file)
+        set_camera("front", 0, path=manifest_file)
+    result = remove_camera("front", path=manifest_file)
     assert find_camera(result["cameras"], "front") is None
 
 
-def test_remove_camera_missing(setup_file: Path) -> None:
+def test_remove_camera_missing(manifest_file: Path) -> None:
     with pytest.raises(ValueError, match="No camera with alias"):
-        remove_camera("nonexistent", path=setup_file)
+        remove_camera("nonexistent", path=manifest_file)
 
 
-def test_validation_rejects_unknown_arm_fields(setup_file: Path) -> None:
-    bad = load_setup(setup_file)
+def test_validation_rejects_unknown_arm_fields(manifest_file: Path) -> None:
+    bad = load_manifest(manifest_file)
     bad["arms"] = [{"alias": "x", "type": "so101_follower", "port": "/dev/x", "junk": True}]
     with pytest.raises(ValueError, match="unknown fields"):
-        save_setup(bad, setup_file)
+        save_manifest(bad, manifest_file)
 
 
-def test_validation_rejects_unknown_camera_fields(setup_file: Path) -> None:
-    bad = load_setup(setup_file)
+def test_validation_rejects_unknown_camera_fields(manifest_file: Path) -> None:
+    bad = load_manifest(manifest_file)
     bad["cameras"] = [{"alias": "front", "port": "/dev/video0", "junk": True}]
     with pytest.raises(ValueError, match="unknown fields"):
-        save_setup(bad, setup_file)
+        save_manifest(bad, manifest_file)
 
 
-def test_validation_rejects_bad_arm_type(setup_file: Path) -> None:
-    bad = load_setup(setup_file)
+def test_validation_rejects_bad_arm_type(manifest_file: Path) -> None:
+    bad = load_manifest(manifest_file)
     bad["arms"] = [{"alias": "x", "type": "garbage", "port": "/dev/x"}]
     with pytest.raises(ValueError, match="invalid type"):
-        save_setup(bad, setup_file)
+        save_manifest(bad, manifest_file)
 
 
 def test_arm_display_name() -> None:
@@ -787,10 +787,10 @@ def test_group_arms() -> None:
 # ── Serial number extraction test ────────────────────────────────────
 
 
-def test_calibration_dir_uses_serial_number(setup_file: Path, calibration_root: Path) -> None:
+def test_calibration_dir_uses_serial_number(manifest_file: Path, calibration_root: Path) -> None:
     """calibration_dir should be based on serial number extracted from by_id port."""
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
-        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=setup_file)
+        result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     arm = find_arm(result["arms"], "my_follower")
     assert arm["calibration_dir"] == str(calibration_root / "5B14032630")
 
@@ -798,12 +798,12 @@ def test_calibration_dir_uses_serial_number(setup_file: Path, calibration_root: 
 # ── set_hand / remove_hand / find_hand tests ─────────────────────────
 
 
-def test_set_hand(setup_file: Path) -> None:
+def test_set_hand(manifest_file: Path) -> None:
     with (
         std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
         std_patch("roboclaw.embodied.manifest.state._probe_hand_slave_id", return_value=1),
     ):
-        result = set_hand("left_hand", "inspire_rh56", "/dev/ttyACM0", path=setup_file)
+        result = set_hand("left_hand", "inspire_rh56", "/dev/ttyACM0", path=manifest_file)
     hand = find_hand(result["hands"], "left_hand")
     assert hand is not None
     assert hand["type"] == "inspire_rh56"
@@ -811,40 +811,40 @@ def test_set_hand(setup_file: Path) -> None:
     assert hand["slave_id"] == 1
     assert "calibration_dir" not in hand
     assert "calibrated" not in hand
-    persisted = load_setup(setup_file)
+    persisted = load_manifest(manifest_file)
     assert find_hand(persisted["hands"], "left_hand") == hand
 
 
-def test_set_hand_replaces_existing(setup_file: Path) -> None:
+def test_set_hand_replaces_existing(manifest_file: Path) -> None:
     with (
         std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
         std_patch("roboclaw.embodied.manifest.state._probe_hand_slave_id", return_value=1),
     ):
-        set_hand("h", "inspire_rh56", "/dev/ttyACM0", path=setup_file)
-        result = set_hand("h", "revo2", "/dev/ttyACM1", path=setup_file)
+        set_hand("h", "inspire_rh56", "/dev/ttyACM0", path=manifest_file)
+        result = set_hand("h", "revo2", "/dev/ttyACM1", path=manifest_file)
     assert len(result["hands"]) == 1
     assert find_hand(result["hands"], "h")["port"] == "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14030892-if00"
 
 
-def test_set_hand_invalid_type(setup_file: Path) -> None:
+def test_set_hand_invalid_type(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid hand_type"):
-            set_hand("h", "so101_follower", "/dev/ttyUSB0", path=setup_file)
+            set_hand("h", "so101_follower", "/dev/ttyUSB0", path=manifest_file)
 
 
-def test_remove_hand(setup_file: Path) -> None:
+def test_remove_hand(manifest_file: Path) -> None:
     with (
         std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]),
         std_patch("roboclaw.embodied.manifest.state._probe_hand_slave_id", return_value=1),
     ):
-        set_hand("left_hand", "inspire_rh56", "/dev/ttyUSB0", path=setup_file)
-    result = remove_hand("left_hand", path=setup_file)
+        set_hand("left_hand", "inspire_rh56", "/dev/ttyUSB0", path=manifest_file)
+    result = remove_hand("left_hand", path=manifest_file)
     assert find_hand(result["hands"], "left_hand") is None
 
 
-def test_remove_hand_missing(setup_file: Path) -> None:
+def test_remove_hand_missing(manifest_file: Path) -> None:
     with pytest.raises(ValueError, match="No hand with alias"):
-        remove_hand("nonexistent", path=setup_file)
+        remove_hand("nonexistent", path=manifest_file)
 
 
 def test_find_hand() -> None:
@@ -858,10 +858,10 @@ def test_find_hand() -> None:
     assert find_hand([], "left") is None
 
 
-def test_set_arm_rejects_revo2(setup_file: Path) -> None:
+def test_set_arm_rejects_revo2(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid arm_type"):
-            set_arm("h", "revo2", "/dev/ttyUSB0", path=setup_file)
+            set_arm("h", "revo2", "/dev/ttyUSB0", path=manifest_file)
 
 
 # ── embodied_hand tool group tests ────────────────────────────────────

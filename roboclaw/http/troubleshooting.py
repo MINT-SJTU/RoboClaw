@@ -35,7 +35,7 @@ def get_troubleshoot_map_json() -> dict[str, dict[str, Any]]:
 
 
 def generate_fault_snapshot(
-    setup: dict[str, Any],
+    manifest: dict[str, Any],
     faults: list[HardwareFault],
     stderr_tail: str,
 ) -> dict[str, Any]:
@@ -45,7 +45,7 @@ def generate_fault_snapshot(
     """
     return {
         "timestamp": time.time(),
-        "setup": setup,
+        "manifest": manifest,
         "faults": [f.to_dict() for f in faults],
         "stderr_tail": stderr_tail,
     }

@@ -29,7 +29,7 @@ def _hw_tool(tty_handoff=None) -> EmbodiedToolGroup:
 async def test_identify_no_tty() -> None:
     """Identify without TTY handoff should return the no-TTY message."""
     tool = _hw_tool()  # no tty_handoff
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP):
         result = await tool.execute(action="identify")
     assert "local terminal" in result.lower()
 
@@ -39,7 +39,7 @@ async def test_identify_no_ports() -> None:
     """Identify with empty scanned_ports should return an error message."""
     tool = _hw_tool(tty_handoff=AsyncMock())
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]),
     ):
         result = await tool.execute(action="identify")
@@ -55,7 +55,7 @@ async def test_identify_success() -> None:
     mock_runner.run_interactive.return_value = (0, "")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_PORTS),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):
@@ -75,7 +75,7 @@ async def test_identify_failure() -> None:
     mock_runner.run_interactive.return_value = (1, "identify subprocess error")
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_PORTS),
         patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner),
     ):

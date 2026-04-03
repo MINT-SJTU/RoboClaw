@@ -19,15 +19,15 @@ class ActionError(Exception):
     """User-facing embodied action error."""
 
 
-def _resolve_action_arms(setup: dict[str, Any], kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+def _resolve_action_arms(manifest: dict[str, Any], kwargs: dict[str, Any]) -> list[dict[str, Any]]:
     try:
-        return _resolve_arms(setup, kwargs.get("arms", ""))
+        return _resolve_arms(manifest, kwargs.get("arms", ""))
     except ValueError as exc:
         raise ActionError(str(exc)) from exc
 
 
-def _resolve_arms(setup: dict[str, Any], arms_str: str) -> list[dict[str, Any]]:
-    configured = setup.get("arms", [])
+def _resolve_arms(manifest: dict[str, Any], arms_str: str) -> list[dict[str, Any]]:
+    configured = manifest.get("arms", [])
     if not configured:
         return []
     ports = _split_arm_tokens(arms_str)
@@ -41,7 +41,7 @@ def _resolve_arms(setup: dict[str, Any], arms_str: str) -> list[dict[str, Any]]:
         seen.add(port)
         arm = next((item for item in configured if item.get("port") == port), None)
         if arm is None:
-            raise ValueError(f"No arm with port '{port}' found in setup.")
+            raise ValueError(f"No arm with port '{port}' found in manifest.")
         resolved.append(arm)
     return resolved
 
@@ -111,8 +111,8 @@ def _format_tty_failure(prefix: str, returncode: int, stderr_text: str) -> str:
     return f"{message}\nstderr: {stderr_text}"
 
 
-def dataset_root(setup: dict[str, Any], fallback: Path | None = None) -> Path:
-    root = setup.get("datasets", {}).get("root", "")
+def dataset_root(manifest: dict[str, Any], fallback: Path | None = None) -> Path:
+    root = manifest.get("datasets", {}).get("root", "")
     if root:
         return Path(root).expanduser()
     if fallback is not None:
@@ -121,9 +121,9 @@ def dataset_root(setup: dict[str, Any], fallback: Path | None = None) -> Path:
 
 
 def dataset_path(
-    setup: dict[str, Any], dataset_name: str, fallback: Path | None = None,
+    manifest: dict[str, Any], dataset_name: str, fallback: Path | None = None,
 ) -> Path:
-    return dataset_root(setup, fallback) / "local" / dataset_name
+    return dataset_root(manifest, fallback) / "local" / dataset_name
 
 
 def _validate_dataset_name(dataset_name: str) -> str | None:
@@ -163,7 +163,7 @@ class _PreparedContext:
 
 
 def _prepare_common(
-    setup: dict[str, Any],
+    manifest: dict[str, Any],
     kwargs: dict[str, Any] | None = None,
     *,
     display_data: bool = False,
@@ -176,13 +176,13 @@ def _prepare_common(
     from roboclaw.embodied.sensor.camera import resolve_cameras
 
     kwargs = kwargs or {}
-    grouped = group_arms(_resolve_action_arms(setup, kwargs))
+    grouped = group_arms(_resolve_action_arms(manifest, kwargs))
     error = _validate_pairing(grouped["followers"], grouped["leaders"])
     if error:
         raise ActionError(error)
     all_arms = grouped["followers"] + grouped["leaders"]
     controller = builder_for_arms(all_arms)
-    cameras = {} if skip_cameras else resolve_cameras(setup)
+    cameras = {} if skip_cameras else resolve_cameras(manifest)
     return _PreparedContext(
         controller=controller,
         followers=grouped["followers"],
@@ -193,19 +193,19 @@ def _prepare_common(
 
 
 def prepare_teleop(
-    setup: dict[str, Any],
+    manifest: dict[str, Any],
     kwargs: dict[str, Any] | None = None,
     *,
     display_data: bool = False,
     display_ip: str = "",
     display_port: int = 0,
 ) -> list[str]:
-    """Build teleop argv from setup. Returns argv.
+    """Build teleop argv from manifest. Returns argv.
 
     Raises ActionError on validation failure.
     """
     ctx = _prepare_common(
-        setup, kwargs,
+        manifest, kwargs,
         display_data=display_data, display_ip=display_ip, display_port=display_port,
     )
 
@@ -240,21 +240,21 @@ def prepare_teleop(
 
 
 def prepare_record(
-    setup: dict[str, Any],
+    manifest: dict[str, Any],
     kwargs: dict[str, Any],
     *,
     display_data: bool = False,
     display_ip: str = "",
     display_port: int = 0,
 ) -> tuple[list[str], str, str]:
-    """Build record argv from setup. Returns (argv, dataset_name, dataset_root).
+    """Build record argv from manifest. Returns (argv, dataset_name, dataset_root).
 
     Raises ActionError on validation failure.
     """
     from datetime import datetime
 
     ctx = _prepare_common(
-        setup, kwargs,
+        manifest, kwargs,
         display_data=display_data, display_ip=display_ip, display_port=display_port,
         skip_cameras=kwargs.get("use_cameras") is False,
     )
@@ -269,7 +269,7 @@ def prepare_record(
     if name_error:
         raise ActionError(name_error)
 
-    ds_path = dataset_path(setup, dataset_name)
+    ds_path = dataset_path(manifest, dataset_name)
     resume = user_specified and ds_path.exists()
 
     record_kwargs: dict[str, Any] = {

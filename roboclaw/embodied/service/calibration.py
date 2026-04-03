@@ -13,11 +13,11 @@ if TYPE_CHECKING:
     from roboclaw.embodied.service import EmbodiedService
 
 
-def _find_arm(setup: dict, alias: str) -> dict:
-    for arm in setup.get("arms", []):
+def _find_arm(manifest: dict, alias: str) -> dict:
+    for arm in manifest.get("arms", []):
         if arm.get("alias") == alias:
             return arm
-    raise RuntimeError(f"Arm '{alias}' not found in setup.")
+    raise RuntimeError(f"Arm '{alias}' not found in manifest.")
 
 
 class CalibrationService:
@@ -33,8 +33,8 @@ class CalibrationService:
     async def start(self, arm_alias: str) -> dict[str, Any]:
         """Start calibrating an arm. Acquires embodiment lock + port lock."""
         self._parent.acquire_embodiment("calibrating")
-        setup = self._parent.manifest.snapshot
-        arm = _find_arm(setup, arm_alias)
+        manifest = self._parent.manifest.snapshot
+        arm = _find_arm(manifest, arm_alias)
         port = arm.get("port", "")
         if port:
             self._port_cm = port_locks.acquire(port)

@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 
-def resolve_cameras(setup: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    cameras = setup.get("cameras", [])
+def resolve_cameras(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    cameras = manifest.get("cameras", [])
     result: dict[str, dict[str, Any]] = {}
     for cam in cameras:
         alias = cam.get("alias", "")

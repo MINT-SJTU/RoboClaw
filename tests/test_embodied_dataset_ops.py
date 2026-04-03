@@ -82,7 +82,7 @@ async def test_record_auto_generates_timestamp_name() -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -108,7 +108,7 @@ async def test_record_resumes_existing_named_dataset(tmp_path: Path) -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -131,7 +131,7 @@ async def test_record_no_resume_for_new_named_dataset() -> None:
         return "Recording finished."
 
     with (
-        patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=_MOCK_SETUP),
+        patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=_MOCK_SETUP),
         patch("roboclaw.embodied.adapters.cli.run_cli_session", side_effect=fake_cli_session),
     ):
         result = await tool.execute(
@@ -152,7 +152,7 @@ async def test_list_datasets_empty() -> None:
     setup = {**_MOCK_SETUP, "datasets": {"root": "/nonexistent"}}
     tool = _find_tool(create_embodied_tools(), "embodied_train")
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="list_datasets")
 
     assert result == "No datasets found."
@@ -168,7 +168,7 @@ async def test_list_datasets_with_entries(tmp_path: Path) -> None:
     setup = {**_MOCK_SETUP, "datasets": {"root": str(tmp_path)}}
     tool = _find_tool(create_embodied_tools(), "embodied_train")
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="list_datasets")
 
     datasets = json.loads(result)
@@ -185,7 +185,7 @@ async def test_list_datasets_skips_corrupt_json(tmp_path: Path) -> None:
     setup = {**_MOCK_SETUP, "datasets": {"root": str(tmp_path)}}
     tool = _find_tool(create_embodied_tools(), "embodied_train")
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="list_datasets")
 
     assert result == "No datasets found."
@@ -196,7 +196,7 @@ async def test_list_policies_empty() -> None:
     setup = {**_MOCK_SETUP, "policies": {"root": "/nonexistent"}}
     tool = _find_tool(create_embodied_tools(), "embodied_train")
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="list_policies")
 
     assert result == "No policies found."
@@ -212,7 +212,7 @@ async def test_list_policies_with_entries(tmp_path: Path) -> None:
     setup = {**_MOCK_SETUP, "policies": {"root": str(tmp_path)}}
     tool = _find_tool(create_embodied_tools(), "embodied_train")
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="list_policies")
 
     policies = json.loads(result)
@@ -230,7 +230,7 @@ async def test_list_policies_skips_corrupt_config(tmp_path: Path) -> None:
     setup = {**_MOCK_SETUP, "policies": {"root": str(tmp_path)}}
     tool = _find_tool(create_embodied_tools(), "embodied_train")
 
-    with patch("roboclaw.embodied.manifest.helpers.ensure_setup", return_value=setup):
+    with patch("roboclaw.embodied.manifest.helpers.ensure_manifest", return_value=setup):
         result = await tool.execute(action="list_policies")
 
     policies = json.loads(result)

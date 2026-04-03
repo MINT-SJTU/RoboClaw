@@ -40,8 +40,8 @@ class SessionService:
         return self._engine.get_status()
 
     async def start_teleop(self, *, fps: int = 30) -> None:
-        setup = self._parent.manifest.snapshot
-        await self._engine.start_teleop(fps=fps, setup=setup)
+        manifest = self._parent.manifest.snapshot
+        await self._engine.start_teleop(fps=fps, setup=manifest)
 
     async def start_recording(
         self,
@@ -52,14 +52,14 @@ class SessionService:
         reset_time_s: int = 10,
     ) -> str:
         """Start recording. Returns dataset_name."""
-        setup = self._parent.manifest.snapshot
+        manifest = self._parent.manifest.snapshot
         dataset_name = await self._engine.start_recording(
             task=task,
             num_episodes=num_episodes,
             fps=fps,
             episode_time_s=episode_time_s,
             reset_time_s=reset_time_s,
-            setup=setup,
+            setup=manifest,
         )
         self._recording_started = True
         monitor = self._parent._monitor

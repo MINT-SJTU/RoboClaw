@@ -31,7 +31,7 @@ def register_troubleshoot_routes(app: FastAPI, service: EmbodiedService) -> None
 
     @app.post("/api/dashboard/troubleshoot/snapshot")
     async def troubleshoot_snapshot() -> dict[str, Any]:
-        setup = service.manifest.snapshot
+        manifest = service.manifest.snapshot
         monitor: HardwareMonitor = app.state.hardware_monitor
         faults = monitor.active_faults
-        return generate_fault_snapshot(setup, faults, "")
+        return generate_fault_snapshot(manifest, faults, "")

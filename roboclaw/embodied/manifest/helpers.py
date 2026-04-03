@@ -124,14 +124,14 @@ def _extract_serial_number(port: str) -> str:
 # ── Validation ────────────────────────────────────────────────────────
 
 
-def _validate_setup(setup: dict[str, Any]) -> None:
-    """Validate setup against schema. Raises ValueError on invalid data."""
-    invalid_top = set(setup.keys()) - _VALID_TOP_KEYS
+def _validate_manifest(manifest: dict[str, Any]) -> None:
+    """Validate manifest against schema. Raises ValueError on invalid data."""
+    invalid_top = set(manifest.keys()) - _VALID_TOP_KEYS
     if invalid_top:
         raise ValueError(f"Unknown top-level keys: {invalid_top}")
-    _validate_arms(setup.get("arms", []))
-    _validate_hands(setup.get("hands", []))
-    _validate_cameras(setup.get("cameras", []))
+    _validate_arms(manifest.get("arms", []))
+    _validate_hands(manifest.get("hands", []))
+    _validate_cameras(manifest.get("cameras", []))
 
 
 def _validate_arms(arms: Any) -> None:
@@ -186,10 +186,10 @@ def _ensure_unique_port(arms: list[dict], alias: str, port: str) -> None:
 # ── Calibration file management ───────────────────────────────────────
 
 
-def _refresh_calibration_state(setup: dict[str, Any]) -> bool:
+def _refresh_calibration_state(manifest: dict[str, Any]) -> bool:
     """Migrate None.json and recompute calibrated from disk for all arms. Returns True if anything changed."""
     changed = False
-    for arm in setup.get("arms", []):
+    for arm in manifest.get("arms", []):
         cal_dir = Path(arm.get("calibration_dir", ""))
         serial = cal_dir.name
         if not serial or not cal_dir.exists():
@@ -247,11 +247,11 @@ def ensure_bimanual_cal_dir(
     return str(target_dir)
 
 
-def refresh_bimanual_cal_dirs(setup: dict[str, Any]) -> None:
+def refresh_bimanual_cal_dirs(manifest: dict[str, Any]) -> None:
     """Eagerly refresh bimanual calibration dirs if a bimanual pair exists."""
     from loguru import logger
 
-    arms = setup.get("arms", [])
+    arms = manifest.get("arms", [])
     followers = [a for a in arms if "follower" in a.get("type", "")]
     leaders = [a for a in arms if "leader" in a.get("type", "")]
     try:
@@ -293,18 +293,18 @@ def _lazy_manifest(path: Path | None = None) -> "Manifest":
     return Manifest(path=path) if path else Manifest()
 
 
-def load_setup(path: Path | None = None) -> dict[str, Any]:
+def load_manifest(path: Path | None = None) -> dict[str, Any]:
     return _lazy_manifest(path).snapshot
 
 
-def save_setup(setup: dict[str, Any], path: Path | None = None) -> None:
+def save_manifest(manifest: dict[str, Any], path: Path | None = None) -> None:
     m = _lazy_manifest(path)
     with m._lock:
-        m._data = setup
+        m._data = manifest
         m._persist()
 
 
-def ensure_setup(path: Path | None = None) -> dict[str, Any]:
+def ensure_manifest(path: Path | None = None) -> dict[str, Any]:
     return _lazy_manifest(path).ensure()
 
 

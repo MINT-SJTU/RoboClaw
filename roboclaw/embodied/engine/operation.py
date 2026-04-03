@@ -102,19 +102,20 @@ class OperationEngine:
         self._require_idle_or_raise()
         self._error_message = ""
         self._stderr_lines = []
-        if setup is None:
-            from roboclaw.embodied.manifest.helpers import load_setup
-            setup = load_setup()
+        manifest = setup
+        if manifest is None:
+            from roboclaw.embodied.manifest.helpers import load_manifest
+            manifest = load_manifest()
         await self._start_rerun_server()
         try:
             argv = prepare_teleop(
-                setup, {"fps": fps}, **self._rerun_display_kwargs(),
+                manifest, {"fps": fps}, **self._rerun_display_kwargs(),
             )
         except ActionError as exc:
             await self._stop_rerun_server()
             raise RuntimeError(str(exc)) from exc
 
-        await self._transition_through_preparing("teleoperating", argv, setup)
+        await self._transition_through_preparing("teleoperating", argv, manifest)
 
     async def start_recording(
         self,
@@ -133,9 +134,10 @@ class OperationEngine:
             self._set_state("idle")
         self._require_idle_or_raise()
 
-        if setup is None:
-            from roboclaw.embodied.manifest.helpers import load_setup
-            setup = load_setup()
+        manifest = setup
+        if manifest is None:
+            from roboclaw.embodied.manifest.helpers import load_manifest
+            manifest = load_manifest()
         await self._start_rerun_server()
         kwargs: dict[str, Any] = {
             "task": task,
@@ -146,7 +148,7 @@ class OperationEngine:
         }
         try:
             argv, dataset_name, dataset_root = prepare_record(
-                setup, kwargs, **self._rerun_display_kwargs(),
+                manifest, kwargs, **self._rerun_display_kwargs(),
             )
         except ActionError as exc:
             await self._stop_rerun_server()
@@ -160,7 +162,7 @@ class OperationEngine:
         self._total_frames = 0
         self._episode_phase = ""
 
-        await self._transition_through_preparing("recording", argv, setup)
+        await self._transition_through_preparing("recording", argv, manifest)
         return dataset_name
 
     async def stop(self) -> None:
@@ -278,7 +280,7 @@ class OperationEngine:
             raise RuntimeError(f"Session busy (state={self._state})")
 
     async def _transition_through_preparing(
-        self, target_state: str, argv: list[str], setup: dict[str, Any],
+        self, target_state: str, argv: list[str], manifest: dict[str, Any],
     ) -> None:
         self._cancel_prepare.clear()
         self._set_state("preparing")
@@ -293,7 +295,7 @@ class OperationEngine:
             self._set_state("idle")
             return
         # Acquire port locks for all arm serial ports before launching subprocess
-        arm_ports = sorted({arm["port"] for arm in setup.get("arms", []) if arm.get("port")})
+        arm_ports = sorted({arm["port"] for arm in manifest.get("arms", []) if arm.get("port")})
         for port in arm_ports:
             await port_locks._get_lock(port).acquire()
         self._held_port_locks = arm_ports

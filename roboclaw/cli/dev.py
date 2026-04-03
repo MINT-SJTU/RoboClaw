@@ -21,7 +21,7 @@ def reset(
     api_base: Optional[str] = typer.Option(None, help="API base URL to set."),
     api_key: Optional[str] = typer.Option(None, help="API key to set."),
     keep_calibration: bool = typer.Option(False, "--keep-calibration", help="Preserve calibration files."),
-    keep_setup: bool = typer.Option(False, "--keep-setup", help="Preserve manifest.json (arms, cameras)."),
+    keep_manifest: bool = typer.Option(False, "--keep-manifest", help="Preserve manifest.json (arms, cameras)."),
     workspace_only: bool = typer.Option(False, "--workspace-only", help="Only reset workspace, keep config.json."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
@@ -44,8 +44,8 @@ def reset(
             _console.print(f"  - {config_path}")
         if keep_calibration:
             _console.print(f"  [dim](keeping calibration files)[/dim]")
-        if keep_setup:
-            _console.print(f"  [dim](keeping manifest.json)[/dim]")
+        if keep_manifest:
+            _console.print("  [dim](keeping manifest.json)[/dim]")
         if workspace_only:
             _console.print(f"  [dim](keeping config.json)[/dim]")
         if not typer.confirm("Continue?"):
@@ -53,7 +53,7 @@ def reset(
 
     # 1. Delete workspace and config, preserving selected files
     if workspace.exists():
-        _clean_workspace(workspace, keep_calibration=keep_calibration, keep_setup=keep_setup)
+        _clean_workspace(workspace, keep_calibration=keep_calibration, keep_manifest=keep_manifest)
         _console.print(f"[green]✓[/green] Cleaned {workspace}")
     if not workspace_only and config_path.exists():
         config_path.unlink()
@@ -70,21 +70,21 @@ def reset(
     _console.print("\n[green]Dev reset complete.[/green]")
 
 
-def _clean_workspace(workspace: Path, *, keep_calibration: bool, keep_setup: bool) -> None:
-    """Delete workspace contents, optionally preserving calibration and setup."""
+def _clean_workspace(workspace: Path, *, keep_calibration: bool, keep_manifest: bool) -> None:
+    """Delete workspace contents, optionally preserving calibration and manifest."""
     embodied = workspace / "embodied"
     cal_dir = embodied / "calibration"
-    setup_file = embodied / "manifest.json"
+    manifest_file = embodied / "manifest.json"
 
     # Save files we want to keep
     saved_cal = None
-    saved_setup = None
+    saved_manifest = None
     if keep_calibration and cal_dir.exists():
         import tempfile
         saved_cal = Path(tempfile.mkdtemp()) / "calibration"
         shutil.copytree(cal_dir, saved_cal)
-    if keep_setup and setup_file.exists():
-        saved_setup = setup_file.read_bytes()
+    if keep_manifest and manifest_file.exists():
+        saved_manifest = manifest_file.read_bytes()
 
     # Nuke workspace
     shutil.rmtree(workspace)
@@ -94,9 +94,9 @@ def _clean_workspace(workspace: Path, *, keep_calibration: bool, keep_setup: boo
         cal_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(saved_cal, cal_dir)
         shutil.rmtree(saved_cal.parent)
-    if saved_setup is not None:
-        setup_file.parent.mkdir(parents=True, exist_ok=True)
-        setup_file.write_bytes(saved_setup)
+    if saved_manifest is not None:
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_bytes(saved_manifest)
 
 
 def _patch_config(

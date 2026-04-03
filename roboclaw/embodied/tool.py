@@ -306,9 +306,9 @@ async def _dispatch(
 ) -> str | list:
     svc = _get_service(service)
 
-    # Config operations — no setup needed
+    # Config operations — no manifest needed
     if action == "hardware_status":
-        return svc.queries.get_setup()
+        return svc.queries.get_manifest()
     if action == "scan":
         result = await asyncio.to_thread(svc.scanning.run_full_scan)
         return _format_scan(result)
@@ -330,38 +330,38 @@ async def _dispatch(
         return svc.config.set_hand(kwargs["alias"], kwargs.get("hand_type", ""), kwargs.get("port", ""))
     if action == "remove_hand":
         return svc.config.remove_hand(kwargs["alias"])
-    # Operations requiring setup — ActionError is a user-facing error
+    # Operations requiring manifest — ActionError is a user-facing error
     # raised by helpers (e.g. missing arm), converted to a plain string.
-    return await _dispatch_with_setup(action, kwargs, tty_handoff, svc)
+    return await _dispatch_with_manifest(action, kwargs, tty_handoff, svc)
 
 
-async def _dispatch_with_setup(
+async def _dispatch_with_manifest(
     action: str, kwargs: dict[str, Any], tty_handoff: Any, svc: Any,
 ) -> str | list:
     from roboclaw.embodied.engine.helpers import ActionError
-    from roboclaw.embodied.manifest.helpers import ensure_setup
+    from roboclaw.embodied.manifest.helpers import ensure_manifest
 
-    setup = ensure_setup()
+    manifest = ensure_manifest()
 
     try:
-        return await _run_action(action, kwargs, tty_handoff, svc, setup)
+        return await _run_action(action, kwargs, tty_handoff, svc, manifest)
     except ActionError as exc:
         return str(exc)
 
 
 async def _run_action(
-    action: str, kwargs: dict[str, Any], tty_handoff: Any, svc: Any, setup: dict,
+    action: str, kwargs: dict[str, Any], tty_handoff: Any, svc: Any, manifest: dict,
 ) -> str | list:
     if action == "list_datasets":
-        return svc.queries.list_datasets(setup)
+        return svc.queries.list_datasets(manifest)
     if action == "list_policies":
-        return svc.queries.list_policies(setup)
+        return svc.queries.list_policies(manifest)
     if action == "doctor":
-        return await svc.run_doctor(setup, kwargs, tty_handoff)
+        return await svc.run_doctor(manifest, kwargs, tty_handoff)
 
     # Record with checkpoint_path => run policy (no CLI session needed)
     if action == "record" and kwargs.get("checkpoint_path"):
-        return await svc.run_policy(setup, kwargs, tty_handoff)
+        return await svc.run_policy(manifest, kwargs, tty_handoff)
 
     # Early dataset name validation for record
     if action == "record":
@@ -374,26 +374,26 @@ async def _run_action(
 
     if action in ("teleoperate", "record"):
         from roboclaw.embodied.adapters.cli import run_cli_session
-        return await run_cli_session(svc, action, setup, kwargs, tty_handoff)
+        return await run_cli_session(svc, action, manifest, kwargs, tty_handoff)
 
     if action == "calibrate":
-        return await svc.run_calibrate(setup, kwargs, tty_handoff)
+        return await svc.run_calibrate(manifest, kwargs, tty_handoff)
     if action == "identify":
-        return await svc.run_identify(setup, kwargs, tty_handoff)
+        return await svc.run_identify(manifest, kwargs, tty_handoff)
     if action == "replay":
-        return await svc.run_replay(setup, kwargs, tty_handoff)
+        return await svc.run_replay(manifest, kwargs, tty_handoff)
     if action == "train":
-        return await svc.start_training(setup, kwargs, tty_handoff)
+        return await svc.start_training(manifest, kwargs, tty_handoff)
     if action == "job_status":
-        return await svc.get_job_status(setup, kwargs, tty_handoff)
+        return await svc.get_job_status(manifest, kwargs, tty_handoff)
 
     if action == "hand_open":
-        return await svc.hand_open(setup, kwargs, tty_handoff)
+        return await svc.hand_open(manifest, kwargs, tty_handoff)
     if action == "hand_close":
-        return await svc.hand_close(setup, kwargs, tty_handoff)
+        return await svc.hand_close(manifest, kwargs, tty_handoff)
     if action == "hand_pose":
-        return await svc.hand_pose(setup, kwargs, tty_handoff)
+        return await svc.hand_pose(manifest, kwargs, tty_handoff)
     if action == "hand_status":
-        return await svc.hand_status(setup, kwargs, tty_handoff)
+        return await svc.hand_status(manifest, kwargs, tty_handoff)
 
     return f"Unknown action: {action}"

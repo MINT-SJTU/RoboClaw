@@ -168,14 +168,14 @@ class HardwareMonitor:
     def check_hardware(self) -> list[HardwareFault]:
         """Check all configured devices and return current faults."""
         if self._manifest is not None:
-            setup = self._manifest.snapshot
+            manifest = self._manifest.snapshot
         else:
-            from roboclaw.embodied.manifest.helpers import load_setup
-            setup = load_setup()
+            from roboclaw.embodied.manifest.helpers import load_manifest
+            manifest = load_manifest()
         now = time.time()
         faults: list[HardwareFault] = []
-        _check_arms(setup.get("arms", []), now, faults)
-        _check_cameras(setup.get("cameras", []), now, faults, self._recording_active)
+        _check_arms(manifest.get("arms", []), now, faults)
+        _check_cameras(manifest.get("cameras", []), now, faults, self._recording_active)
         return faults
 
 
