@@ -447,7 +447,15 @@ def create_app(
     from roboclaw.embodied.web.routes import router as embodied_router
     app.include_router(embodied_router)
 
-    # 14. Serve built frontend in production (roboclaw-web/ui/dist/)
+    # 14. Mount workflow pipeline routes
+    from roboclaw.embodied.web.workflow_routes import router as workflow_router
+    app.include_router(workflow_router)
+
+    # 14b. Mount dataset explorer routes
+    from roboclaw.embodied.web.explorer_routes import router as explorer_router
+    app.include_router(explorer_router)
+
+    # 15. Serve built frontend in production (roboclaw-web/ui/dist/)
     ui_dist = Path(__file__).resolve().parent.parent.parent / "roboclaw-web" / "ui" / "dist"
     if ui_dist.is_dir():
         from starlette.staticfiles import StaticFiles

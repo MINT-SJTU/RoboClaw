@@ -41,6 +41,31 @@ def test_save_turn_keeps_image_placeholder_after_runtime_strip() -> None:
     assert session.messages[0]["content"] == [{"type": "text", "text": "[image]"}]
 
 
+def test_attach_user_metadata_persists_attachments_for_history() -> None:
+    loop = _mk_loop()
+    session = Session(key="test:image-metadata")
+    messages = [{
+        "role": "user",
+        "content": [{"type": "text", "text": "look at this"}],
+    }]
+
+    enriched = loop._attach_user_metadata(
+        messages,
+        {
+            "attachments": [
+                {
+                    "id": "img-1",
+                    "name": "shot.png",
+                    "preview_url": "/api/chat/uploads/demo/shot.png",
+                }
+            ]
+        },
+    )
+    loop._save_turn(session, enriched, skip=0)
+
+    assert session.messages[0]["metadata"]["attachments"][0]["name"] == "shot.png"
+
+
 def test_save_turn_strips_images_from_multimodal_tool_result() -> None:
     loop = _mk_loop()
     session = Session(key="test:multimodal-tool")

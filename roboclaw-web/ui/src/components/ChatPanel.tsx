@@ -5,8 +5,103 @@ import { useWebSocket } from '../controllers/connection'
 import { fetchProviderStatus } from '../controllers/provider'
 import { useI18n } from '../controllers/i18n'
 import { ActionButton, GlassPanel, StatusPill } from './ux'
+import {
+  getMessageAttachments,
+  type ChatAttachment,
+  type Message,
+} from '../controllers/chat'
 
 type ChatPanelVariant = 'page' | 'widget'
+
+function extractImageFiles(fileList: FileList | File[]): File[] {
+  return Array.from(fileList).filter((file) => file.type.startsWith('image/'))
+}
+
+function extractClipboardImageFiles(event: React.ClipboardEvent<HTMLTextAreaElement>): File[] {
+  const items = Array.from(event.clipboardData?.items || [])
+  return items
+    .map((item) => (item.kind === 'file' ? item.getAsFile() : null))
+    .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
+}
+
+async function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('Failed to read image file.'))
+      }
+    }
+    reader.onerror = () => reject(new Error('Failed to read image file.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function uploadChatImage(
+  sessionId: string,
+  file: File,
+): Promise<ChatAttachment> {
+  const dataUrl = await readFileAsDataUrl(file)
+  const response = await fetch('/api/chat/uploads/image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: sessionId,
+      filename: file.name,
+      data_url: dataUrl,
+    }),
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Upload failed (${response.status})`)
+  }
+
+  const payload = await response.json()
+  return {
+    id: String(payload.id ?? `${Date.now()}-${file.name}`),
+    name: String(payload.name ?? file.name),
+    preview_url: String(payload.preview_url ?? ''),
+    media_path: typeof payload.media_path === 'string' ? payload.media_path : undefined,
+    mime_type: typeof payload.mime_type === 'string' ? payload.mime_type : file.type,
+    size: typeof payload.size === 'number' ? payload.size : file.size,
+  }
+}
+
+function MessageAttachments({
+  message,
+  compact,
+}: {
+  message: Message
+  compact: boolean
+}) {
+  const attachments = getMessageAttachments(message)
+  if (!attachments.length || message.role !== 'user') {
+    return null
+  }
+
+  return (
+    <div className={`mb-3 grid gap-2 ${compact ? 'grid-cols-2' : 'grid-cols-3'}`}>
+      {attachments.map((attachment) => (
+        <a
+          key={attachment.id}
+          href={attachment.preview_url}
+          target="_blank"
+          rel="noreferrer"
+          className="group overflow-hidden rounded-2xl border border-white/20 bg-white/10"
+        >
+          <img
+            src={attachment.preview_url}
+            alt={attachment.name}
+            className={`block w-full object-cover transition duration-200 group-hover:scale-[1.02] ${compact ? 'h-24' : 'h-32'}`}
+          />
+        </a>
+      ))}
+    </div>
+  )
+}
 
 export default function ChatPanel({
   variant = 'page',
@@ -17,6 +112,10 @@ export default function ChatPanel({
 }) {
   const compact = variant === 'widget'
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+  const [uploadingImages, setUploadingImages] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const [dragActive, setDragActive] = useState(false)
   const [providerConfigured, setProviderConfigured] = useState(true)
   const { messages, sendMessage, connected, sessionId } = useWebSocket()
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -45,11 +144,37 @@ export default function ChatPanel({
     }
   }, [])
 
+  function submitCurrentMessage(): void {
+    if ((!input.trim() && attachments.length === 0) || !connected) return
+    sendMessage(input, attachments)
+    setInput('')
+    setAttachments([])
+    setUploadError('')
+  }
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
-    if (!input.trim() || !connected) return
-    sendMessage(input)
-    setInput('')
+    submitCurrentMessage()
+  }
+
+  async function uploadFiles(files: File[]): Promise<void> {
+    const imageFiles = extractImageFiles(files)
+    if (!imageFiles.length || !sessionId) {
+      return
+    }
+
+    setUploadingImages(true)
+    setUploadError('')
+    try {
+      const uploaded = await Promise.all(
+        imageFiles.map((file) => uploadChatImage(sessionId, file)),
+      )
+      setAttachments((current) => [...current, ...uploaded])
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Image upload failed')
+    } finally {
+      setUploadingImages(false)
+    }
   }
 
   const content = (
@@ -150,6 +275,7 @@ export default function ChatPanel({
                         <span className={`inline-flex h-2 w-2 rounded-full ${isUser ? 'bg-white/80' : 'bg-ac'}`} />
                       </div>
                     )}
+                    <MessageAttachments message={message} compact={compact} />
                     <ReactMarkdown className={`chat-markdown ${isUser ? '[&_code]:bg-white/10 [&_code]:text-white' : ''}`}>
                       {message.content}
                     </ReactMarkdown>
@@ -169,17 +295,90 @@ export default function ChatPanel({
 
       <div className={`${compact ? 'border-t border-[color:rgba(29,43,54,0.08)] px-4 pb-4 pt-3' : 'border-t border-[color:rgba(29,43,54,0.08)] bg-white/45 px-4 py-4 md:px-6'}`}>
         <form onSubmit={handleSubmit} className={compact ? '' : 'space-y-3'}>
-          <div className={`field-shell flex items-end gap-3 ${compact ? 'rounded-[20px] bg-white px-4 py-3' : 'px-4 py-3'}`}>
+          {(attachments.length > 0 || uploadError) && (
+            <div className={`${compact ? 'mb-3 space-y-2' : 'space-y-2'}`}>
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {attachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="relative overflow-hidden rounded-2xl border border-[color:rgba(47,111,228,0.16)] bg-white"
+                    >
+                      <img
+                        src={attachment.preview_url}
+                        alt={attachment.name}
+                        className="h-20 w-20 object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAttachments((current) =>
+                            current.filter((item) => item.id !== attachment.id),
+                          )
+                        }
+                        className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-xs font-semibold text-white"
+                        aria-label={t('removeImage')}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {uploadError && (
+                <div className="text-xs text-rd">{uploadError}</div>
+              )}
+            </div>
+          )}
+          <div
+            className={`field-shell relative flex items-end gap-3 ${compact ? 'rounded-[20px] bg-white px-4 py-3' : 'px-4 py-3'} ${
+              dragActive ? 'ring-2 ring-ac/30 bg-[rgba(47,111,228,0.06)]' : ''
+            }`}
+            onDragOver={(event) => {
+              const hasImage = Array.from(event.dataTransfer?.items || []).some(
+                (item) => item.kind === 'file' && item.type.startsWith('image/'),
+              )
+              if (!hasImage) {
+                return
+              }
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'copy'
+              setDragActive(true)
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                return
+              }
+              setDragActive(false)
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              setDragActive(false)
+              void uploadFiles(Array.from(event.dataTransfer.files || []))
+            }}
+          >
+            {dragActive && (
+              <div className="pointer-events-none absolute inset-2 grid place-items-center rounded-[18px] border border-dashed border-ac/30 bg-white/80 text-xs font-semibold text-ac">
+                {t('dropImageHere')}
+              </div>
+            )}
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault()
-                  if (!connected || !input.trim()) return
-                  sendMessage(input)
-                  setInput('')
+                  if (!connected || (!input.trim() && attachments.length === 0)) return
+                  submitCurrentMessage()
                 }
+              }}
+              onPaste={(event) => {
+                const files = extractClipboardImageFiles(event)
+                if (!files.length) {
+                  return
+                }
+                event.preventDefault()
+                void uploadFiles(files)
               }}
               placeholder={connected ? t('inputPlaceholder') : t('waitingConnection')}
               disabled={!connected}
@@ -188,7 +387,7 @@ export default function ChatPanel({
             />
             <ActionButton
               type="submit"
-              disabled={!connected || !input.trim()}
+              disabled={!connected || uploadingImages || (!input.trim() && attachments.length === 0)}
               className="shrink-0"
             >
               {t('send')}
@@ -197,7 +396,7 @@ export default function ChatPanel({
 
           {!compact && (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-tx2">
-              <span>Press Enter to submit on desktop, or use multiline drafting before sending.</span>
+              <span>{t('chatInputHint')}</span>
               <span>{connected ? 'Connection healthy' : 'Waiting for WebSocket reconnect'}</span>
             </div>
           )}

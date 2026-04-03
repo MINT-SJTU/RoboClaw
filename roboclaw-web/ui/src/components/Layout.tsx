@@ -24,6 +24,9 @@ export default function Layout() {
 
   const navItems = [
     { path: '/dashboard', label: t('dataCollection') },
+    { path: '/explorer', label: t('datasetExplorer') },
+    { path: '/quality', label: t('qualityWorkbench') },
+    { path: '/text-alignment', label: t('textAlignment') },
     { path: '/settings', label: t('settings') },
   ]
 

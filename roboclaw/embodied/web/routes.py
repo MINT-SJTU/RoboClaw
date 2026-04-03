@@ -11,7 +11,12 @@ from loguru import logger
 from pydantic import BaseModel
 
 from roboclaw.embodied.setup import load_setup
-from roboclaw.embodied.web.datasets import delete_dataset, get_dataset_info, list_datasets
+from roboclaw.embodied.web.datasets import (
+    datasets_root,
+    delete_dataset,
+    get_dataset_info,
+    list_datasets,
+)
 
 router = APIRouter(prefix="/api/embodied")
 
@@ -129,33 +134,25 @@ async def record_discard_episode() -> dict[str, str]:
 # Datasets
 # ---------------------------------------------------------------------------
 
-def _datasets_root() -> Path:
-    setup = load_setup()
-    root = setup.get("datasets", {}).get("root", "")
-    if not root:
-        raise ValueError("No datasets root configured in setup.json")
-    return Path(root)
-
-
 @router.get("/datasets")
 async def datasets_list() -> list[dict]:
     """List datasets from setup.json datasets root."""
-    return list_datasets(_datasets_root())
+    return list_datasets(datasets_root())
 
 
-@router.get("/datasets/{name}")
+@router.get("/datasets/{name:path}")
 async def dataset_detail(name: str) -> dict:
     """Get detailed info for a single dataset."""
-    info = get_dataset_info(_datasets_root(), name)
+    info = get_dataset_info(datasets_root(), name)
     if info is None:
         raise ValueError(f"Dataset '{name}' not found")
     return info
 
 
-@router.delete("/datasets/{name}")
+@router.delete("/datasets/{name:path}")
 async def dataset_delete(name: str) -> dict[str, str]:
     """Delete a dataset."""
-    delete_dataset(_datasets_root(), name)
+    delete_dataset(datasets_root(), name)
     return {"status": "deleted", "name": name}
 
 

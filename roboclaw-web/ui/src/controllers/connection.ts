@@ -1,8 +1,14 @@
 import { create } from 'zustand'
-import { type MessageRole, type Message, normalizeTimestamp, normalizeHistoryMessage } from './chat'
+import {
+  type MessageRole,
+  type Message,
+  type ChatAttachment,
+  normalizeTimestamp,
+  normalizeHistoryMessage,
+} from './chat'
 import { useDashboard } from './dashboard'
 
-export type { MessageRole, Message }
+export type { MessageRole, Message, ChatAttachment }
 
 interface WebSocketStore {
   ws: WebSocket | null
@@ -11,7 +17,7 @@ interface WebSocketStore {
   messages: Message[]
   connect: () => void
   disconnect: () => void
-  sendMessage: (content: string) => void
+  sendMessage: (content: string, attachments?: ChatAttachment[]) => void
   addMessage: (message: Message) => void
   replaceMessages: (messages: Message[]) => void
 }
@@ -139,26 +145,31 @@ export const useWebSocket = create<WebSocketStore>((set, get) => ({
     }
   },
 
-  sendMessage: (content: string) => {
+  sendMessage: (content: string, attachments = []) => {
     const { ws, connected } = get()
     if (!connected || !ws) {
       console.error('WebSocket not connected')
       return
     }
+    const normalizedContent = content.trim()
+    const metadata = attachments.length > 0 ? { attachments } : {}
 
     get().addMessage({
       id: `${Date.now()}-user`,
       role: 'user',
-      content,
+      content: normalizedContent || '[image]',
       timestamp: Date.now(),
-      metadata: {},
+      metadata,
     })
 
     ws.send(
       JSON.stringify({
         type: 'chat.send',
-        content,
-        metadata: {},
+        content: normalizedContent,
+        media: attachments
+          .map((attachment) => attachment.media_path)
+          .filter((path): path is string => Boolean(path)),
+        metadata,
       }),
     )
   },
