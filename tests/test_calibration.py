@@ -57,7 +57,7 @@ def mock_bus():
 def test_session_initial_state(arm_config: dict) -> None:
     session = CalibrationSession(arm_config)
     assert session.state == "idle"
-    assert session.family == SO101
+    assert session.spec == SO101
 
 
 def test_session_state_transitions(arm_config: dict, mock_bus: MagicMock) -> None:

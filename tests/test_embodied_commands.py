@@ -12,7 +12,7 @@ def _builder() -> ArmCommandBuilder:
 
 
 def _bimanual_builder() -> ArmCommandBuilder:
-    return ArmCommandBuilder(family=SO101)
+    return ArmCommandBuilder(spec=SO101)
 
 
 def test_doctor_command() -> None:

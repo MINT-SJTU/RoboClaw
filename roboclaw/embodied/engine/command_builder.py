@@ -7,18 +7,19 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from roboclaw.embodied.embodiment.arm.registry import ArmFamily, get_family
+from roboclaw.embodied.embodiment.arm.base import ServoArmSpec
+from roboclaw.embodied.embodiment.arm.registry import get_arm_spec
 
 
 class ArmCommandBuilder:
-    """Builds LeRobot CLI commands for any supported robot arm family.
+    """Builds LeRobot CLI commands for any supported robot arm spec.
 
     All methods take explicit params — the caller resolves
     the manifest config into concrete values before calling these.
     """
 
-    def __init__(self, family: ArmFamily | None = None) -> None:
-        self._family = family
+    def __init__(self, spec: ServoArmSpec | None = None) -> None:
+        self._spec = spec
 
     def doctor(self) -> list[str]:
         """Check lerobot, list supported robots, motors, and connected devices."""
@@ -81,14 +82,14 @@ class ArmCommandBuilder:
         display_port: int = 0,
     ) -> list[str]:
         """Build bimanual teleoperation command (2 followers + 2 leaders)."""
-        family = self._require_bimanual_family()
+        spec = self._require_bimanual_spec()
         argv = [
             *self._wrapper_args("teleoperate"),
-            f"--robot.type={family.bimanual_follower_type}",
+            f"--robot.type={spec.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            f"--teleop.type={family.bimanual_leader_type}",
+            f"--teleop.type={spec.bimanual_leader_type}",
             f"--teleop.id={teleop_id}",
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
@@ -146,14 +147,14 @@ class ArmCommandBuilder:
         display_port: int = 0,
     ) -> list[str]:
         """Build bimanual recording command (2 followers + 2 leaders + cameras)."""
-        family = self._require_bimanual_family()
+        spec = self._require_bimanual_spec()
         argv = [
             *self._wrapper_args("record"),
-            f"--robot.type={family.bimanual_follower_type}",
+            f"--robot.type={spec.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
-            f"--teleop.type={family.bimanual_leader_type}",
+            f"--teleop.type={spec.bimanual_leader_type}",
             f"--teleop.id={teleop_id}",
             f"--teleop.calibration_dir={Path(teleop_cal_dir).expanduser()}",
             *self._bimanual_arm_args("teleop", left_teleop, right_teleop),
@@ -196,10 +197,10 @@ class ArmCommandBuilder:
         fps: int = 30,
     ) -> list[str]:
         """Build replay command for two follower arms."""
-        family = self._require_bimanual_family()
+        spec = self._require_bimanual_spec()
         return [
             *self._wrapper_args("replay"),
-            f"--robot.type={family.bimanual_follower_type}",
+            f"--robot.type={spec.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot),
@@ -244,10 +245,10 @@ class ArmCommandBuilder:
         resume: bool = False,
     ) -> list[str]:
         """Build bimanual policy execution command (2 followers, no teleop)."""
-        family = self._require_bimanual_family()
+        spec = self._require_bimanual_spec()
         argv = [
             *self._wrapper_args("record"),
-            f"--robot.type={family.bimanual_follower_type}",
+            f"--robot.type={spec.bimanual_follower_type}",
             f"--robot.id={robot_id}",
             f"--robot.calibration_dir={Path(robot_cal_dir).expanduser()}",
             *self._bimanual_arm_args("robot", left_robot, right_robot, cameras),
@@ -259,12 +260,12 @@ class ArmCommandBuilder:
 
     # -- Private helpers ---------------------------------------------------
 
-    def _require_bimanual_family(self) -> ArmFamily:
-        if self._family is None:
-            raise ValueError("ArmCommandBuilder needs a family for bimanual commands.")
-        if not self._family.supports_bimanual:
-            raise ValueError(f"{self._family.name} arms do not support bimanual mode.")
-        return self._family
+    def _require_bimanual_spec(self) -> ServoArmSpec:
+        if self._spec is None:
+            raise ValueError("ArmCommandBuilder needs a spec for bimanual commands.")
+        if not self._spec.supports_bimanual:
+            raise ValueError(f"{self._spec.name} arms do not support bimanual mode.")
+        return self._spec
 
     def _policy_args(
         self,
@@ -360,8 +361,8 @@ class ArmCommandBuilder:
 
 
 def builder_for_arms(arms: list[dict[str, Any]]) -> ArmCommandBuilder:
-    """Create an ArmCommandBuilder with the family derived from arm types."""
+    """Create an ArmCommandBuilder with the spec derived from arm types."""
     if not arms:
         return ArmCommandBuilder()
-    family = get_family(arms[0]["type"])
-    return ArmCommandBuilder(family=family)
+    spec = get_arm_spec(arms[0]["type"])
+    return ArmCommandBuilder(spec=spec)

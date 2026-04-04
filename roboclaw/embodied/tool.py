@@ -6,6 +6,8 @@ import asyncio
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
+from roboclaw.embodied.embodiment.arm.registry import all_arm_types
+from roboclaw.embodied.embodiment.hand.registry import all_hand_types
 
 _SETUP_ACTIONS = [
     "hardware_status", "scan", "set_arm", "remove_arm", "rename_arm",
@@ -35,7 +37,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "arm_type": {
                     "type": "string",
-                    "enum": ["so101_follower", "so101_leader", "koch_follower", "koch_leader"],
+                    "enum": list(all_arm_types()),
                     "description": "Arm hardware type for set_arm.",
                 },
                 "model": {
@@ -64,7 +66,7 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "hand_type": {
                     "type": "string",
-                    "enum": ["inspire_rh56", "revo2"],
+                    "enum": list(all_hand_types()),
                     "description": "Hand hardware type for set_hand.",
                 },
             },

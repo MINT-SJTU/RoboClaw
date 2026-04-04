@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import re
@@ -11,12 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from roboclaw.embodied.embodiment.arm.registry import all_arm_types
+from roboclaw.embodied.embodiment.hand.registry import all_hand_types, get_hand_spec
 
 # ── Constants ──────────────────────────────────────────────────────────
 
 _ARM_TYPES = all_arm_types()
 _ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
-_HAND_TYPES = ("inspire_rh56", "revo2")
+_HAND_TYPES = all_hand_types()
 _HAND_FIELDS = {"alias", "type", "port", "slave_id"}
 _CAMERA_FIELDS = {"alias", "port", "width", "height", "fps", "fourcc"}
 _VALID_TOP_KEYS = {"version", "arms", "hands", "cameras", "datasets", "policies"}
@@ -268,15 +268,13 @@ def refresh_bimanual_cal_dirs(manifest: dict[str, Any]) -> None:
 
 def _probe_hand_slave_id(hand_type: str, port: str) -> int:
     """Auto-detect slave_id by probing the serial port."""
-    _PROBE_MODULES = {
-        "inspire_rh56": "roboclaw.embodied.embodiment.hand.inspire_rh56",
-        "revo2": "roboclaw.embodied.embodiment.hand.revo2",
-    }
-    module_path = _PROBE_MODULES.get(hand_type)
-    if not module_path:
-        raise ValueError(f"No probe available for hand type '{hand_type}'.")
-    probe_fn = getattr(importlib.import_module(module_path), "probe_slave_ids")
-    found = probe_fn(port)
+    from roboclaw.embodied.embodiment.hand.modbus import probe_modbus_slave_ids
+
+    spec = get_hand_spec(hand_type)
+    candidates = list(spec.probe_candidates) if spec.probe_candidates else list(range(1, 17))
+    found = probe_modbus_slave_ids(
+        port, spec.baudrate, candidates, spec.probe_register, spec.probe_register_count,
+    )
     if not found:
         raise ValueError(f"No {hand_type} hand detected on this port.")
     if len(found) > 1:

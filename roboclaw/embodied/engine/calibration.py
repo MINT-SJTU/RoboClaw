@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from roboclaw.embodied.embodiment.arm.registry import ArmFamily, get_family, get_role
+from roboclaw.embodied.embodiment.arm.base import ServoArmSpec
+from roboclaw.embodied.embodiment.arm.registry import get_arm_spec, get_role
 
 
 @dataclass
@@ -49,7 +50,7 @@ class CalibrationSession:
 
     def __init__(self, arm: dict[str, Any]) -> None:
         self._arm = arm
-        self._family = get_family(arm["type"])
+        self._spec = get_arm_spec(arm["type"])
         self._role = get_role(arm["type"])
         self._bus: Any = None
         self._state = "idle"
@@ -63,19 +64,19 @@ class CalibrationSession:
         return self._state
 
     @property
-    def family(self) -> ArmFamily:
-        return self._family
+    def spec(self) -> ServoArmSpec:
+        return self._spec
 
     def connect(self) -> None:
         """Create motor bus, connect, disable torque, set position mode."""
         if self._state != "idle":
             raise RuntimeError(f"Cannot connect in state '{self._state}'")
 
-        model_map = self._family.motor_models(self._role)
+        model_map = self._spec.motor_models(self._role)
         Motor, MotorNormMode = self._import_motor_types()
 
         motors = {}
-        for i, name in enumerate(self._family.motor_names):
+        for i, name in enumerate(self._spec.motor_names):
             model = model_map.get(name, list(model_map.values())[0])
             motors[name] = Motor(id=i + 1, model=model, norm_mode=MotorNormMode.RANGE_M100_100)
 
@@ -103,7 +104,7 @@ class CalibrationSession:
 
         # Prepare range recording
         self._range_motors = [
-            m for m in self._bus.motors if m not in self._family.full_turn_motors
+            m for m in self._bus.motors if m not in self._spec.full_turn_motors
         ]
         start_positions = self._bus.sync_read(
             "Present_Position", self._range_motors, normalize=False,
@@ -153,7 +154,7 @@ class CalibrationSession:
 
         calibration: dict[str, Any] = {}
         for motor, m in self._bus.motors.items():
-            if motor in self._family.full_turn_motors:
+            if motor in self._spec.full_turn_motors:
                 range_min = 0
                 range_max = max_resolution
             else:
@@ -223,8 +224,8 @@ class CalibrationSession:
         return result
 
     def _import_bus_class(self) -> type:
-        mod = importlib.import_module(self._family.motor_bus_module)
-        return getattr(mod, self._family.motor_bus_class)
+        mod = importlib.import_module(self._spec.motor_bus_module)
+        return getattr(mod, self._spec.motor_bus_class)
 
     @staticmethod
     def _import_motor_types() -> tuple:

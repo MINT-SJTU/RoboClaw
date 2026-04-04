@@ -6,30 +6,26 @@ import struct
 from contextlib import contextmanager
 
 from roboclaw.embodied.embodiment.hand.modbus import crc16, probe_modbus_slave_ids
-
-_FINGER_LABELS = ("little", "ring", "middle", "index", "thumb_bend", "thumb_rotation")
-# 1000 = fully open, 0 = fully closed
-_OPEN_POSITIONS = [1000, 1000, 1000, 1000, 1000, 1000]
-_CLOSE_POSITIONS = [0, 0, 0, 0, 0, 0]
-_BAUDRATE = 115200
-_DEFAULT_SLAVE_ID = 1
+from roboclaw.embodied.embodiment.hand.registry import INSPIRE_RH56
 
 # Modbus RTU register addresses (Inspire RH56 protocol)
 _REG_ANGLE_SET = 1486   # write target angles (6 x uint16)
 _REG_ANGLE_ACT = 1546   # read actual angles (6 x uint16)
 _REG_FORCE_ACT = 1582   # read actual forces (6 x uint16)
-_NUM_FINGERS = 6
 
 
 def probe_slave_ids(port: str, candidates: range = range(1, 17)) -> list[int]:
     """Probe a serial port for responding Inspire hand Modbus slave IDs."""
-    return probe_modbus_slave_ids(port, _BAUDRATE, candidates, _REG_ANGLE_ACT, _NUM_FINGERS)
+    return probe_modbus_slave_ids(
+        port, INSPIRE_RH56.baudrate, candidates,
+        INSPIRE_RH56.probe_register, INSPIRE_RH56.probe_register_count,
+    )
 
 
 class _ModbusSerial:
     """Minimal Modbus RTU client for Inspire hand registers."""
 
-    def __init__(self, port: str, slave_id: int, baudrate: int = _BAUDRATE):
+    def __init__(self, port: str, slave_id: int, baudrate: int = INSPIRE_RH56.baudrate):
         import serial  # pyserial — already a roboclaw dependency
 
         self._ser = serial.Serial(port, baudrate, timeout=0.5)
@@ -75,36 +71,36 @@ class InspireController:
     Finger positions: [little, ring, middle, index, thumb_bend, thumb_rotation], range 0-1000.
     """
 
-    def open_hand(self, port: str, slave_id: int = _DEFAULT_SLAVE_ID) -> str:
+    def open_hand(self, port: str, slave_id: int = INSPIRE_RH56.default_slave_id) -> str:
         """Open all fingers to fully extended position."""
         with self._session(port, slave_id) as bus:
-            bus.write_registers(_REG_ANGLE_SET, _OPEN_POSITIONS)
+            bus.write_registers(_REG_ANGLE_SET, list(INSPIRE_RH56.open_positions))
         return "Hand opened."
 
-    def close_hand(self, port: str, slave_id: int = _DEFAULT_SLAVE_ID) -> str:
+    def close_hand(self, port: str, slave_id: int = INSPIRE_RH56.default_slave_id) -> str:
         """Close all fingers to gripped position."""
         with self._session(port, slave_id) as bus:
-            bus.write_registers(_REG_ANGLE_SET, _CLOSE_POSITIONS)
+            bus.write_registers(_REG_ANGLE_SET, list(INSPIRE_RH56.close_positions))
         return "Hand closed."
 
-    def set_pose(self, port: str, positions: list[int], slave_id: int = _DEFAULT_SLAVE_ID) -> str:
+    def set_pose(self, port: str, positions: list[int], slave_id: int = INSPIRE_RH56.default_slave_id) -> str:
         """Set individual finger positions (6 values, 0-1000)."""
-        if len(positions) != _NUM_FINGERS:
-            raise ValueError(f"Expected {_NUM_FINGERS} finger positions, got {len(positions)}.")
+        if len(positions) != INSPIRE_RH56.num_fingers:
+            raise ValueError(f"Expected {INSPIRE_RH56.num_fingers} finger positions, got {len(positions)}.")
         if any(p < 0 or p > 1000 for p in positions):
             raise ValueError("Each finger position must be 0-1000.")
         with self._session(port, slave_id) as bus:
             bus.write_registers(_REG_ANGLE_SET, positions)
-        summary = ", ".join(f"{label}={val}" for label, val in zip(_FINGER_LABELS, positions))
+        summary = ", ".join(f"{label}={val}" for label, val in zip(INSPIRE_RH56.finger_labels, positions))
         return f"Pose set: {summary}."
 
-    def get_status(self, port: str, slave_id: int = _DEFAULT_SLAVE_ID) -> str:
+    def get_status(self, port: str, slave_id: int = INSPIRE_RH56.default_slave_id) -> str:
         """Read current finger angles and forces."""
         with self._session(port, slave_id) as bus:
-            angles = bus.read_registers(_REG_ANGLE_ACT, _NUM_FINGERS)
-            forces = bus.read_registers(_REG_FORCE_ACT, _NUM_FINGERS)
-        angle_dict = dict(zip(_FINGER_LABELS, angles))
-        force_dict = dict(zip(_FINGER_LABELS, forces))
+            angles = bus.read_registers(_REG_ANGLE_ACT, INSPIRE_RH56.num_fingers)
+            forces = bus.read_registers(_REG_FORCE_ACT, INSPIRE_RH56.num_fingers)
+        angle_dict = dict(zip(INSPIRE_RH56.finger_labels, angles))
+        force_dict = dict(zip(INSPIRE_RH56.finger_labels, forces))
         return f"angles={angle_dict}\nforces={force_dict}"
 
     @staticmethod

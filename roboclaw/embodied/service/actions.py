@@ -61,7 +61,7 @@ def _sync_calibration_to_motors(arm: dict[str, Any]) -> None:
     """Write calibration values from file to motor EEPROM.
 
     Best-effort: failures are logged but never block the calibration result.
-    Uses the arm family registry to pick the correct motor bus and models.
+    Uses the arm spec registry to pick the correct motor bus and models.
     """
     cal_dir = arm.get("calibration_dir", "")
     serial = Path(cal_dir).name
@@ -74,11 +74,11 @@ def _sync_calibration_to_motors(arm: dict[str, Any]) -> None:
         logger.debug("lerobot.motors not installed, skipping EEPROM sync")
         return
 
-    from roboclaw.embodied.embodiment.arm.registry import get_family, get_role
+    from roboclaw.embodied.embodiment.arm.registry import get_arm_spec, get_role
 
-    family = get_family(arm["type"])
+    spec = get_arm_spec(arm["type"])
     role = get_role(arm["type"])
-    model_map = family.motor_models(role)
+    model_map = spec.motor_models(role)
     cal = json.loads(cal_path.read_text())
 
     motors, calibration = {}, {}
@@ -92,8 +92,8 @@ def _sync_calibration_to_motors(arm: dict[str, Any]) -> None:
         )
 
     import importlib
-    mod = importlib.import_module(family.motor_bus_module)
-    BusClass = getattr(mod, family.motor_bus_class)
+    mod = importlib.import_module(spec.motor_bus_module)
+    BusClass = getattr(mod, spec.motor_bus_class)
 
     bus = BusClass(port=arm["port"], motors=motors, calibration=calibration)
     try:
@@ -353,15 +353,13 @@ def _resolve_hand(manifest: dict[str, Any], hand_name: str) -> dict:
 
 
 def _get_hand_controller(hand_type: str):
-    from roboclaw.embodied.engine.helpers import ActionError
+    import importlib
 
-    if hand_type == "inspire_rh56":
-        from roboclaw.embodied.embodiment.hand.inspire_rh56 import InspireController
-        return InspireController()
-    if hand_type == "revo2":
-        from roboclaw.embodied.embodiment.hand.revo2 import Revo2Controller
-        return Revo2Controller()
-    raise ActionError(f"Unknown hand type: {hand_type}")
+    from roboclaw.embodied.embodiment.hand.registry import get_hand_spec
+
+    spec = get_hand_spec(hand_type)
+    mod = importlib.import_module(spec.controller_module)
+    return getattr(mod, spec.controller_class)()
 
 
 async def _run_hand_method(method_name: str, manifest: dict[str, Any], kwargs: dict[str, Any], extra_args=()):

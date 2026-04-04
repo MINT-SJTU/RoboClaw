@@ -7,11 +7,11 @@ import pytest
 
 from roboclaw.embodied.embodiment.hand.inspire_rh56 import (
     InspireController,
-    _FINGER_LABELS,
     _REG_ANGLE_ACT,
     _REG_ANGLE_SET,
     _REG_FORCE_ACT,
 )
+from roboclaw.embodied.embodiment.hand.registry import INSPIRE_RH56
 
 PORT = "/dev/ttyUSB0"
 
@@ -96,8 +96,8 @@ def test_close_called_on_error(mock_bus: MagicMock) -> None:
 
 
 def test_finger_labels() -> None:
-    assert len(_FINGER_LABELS) == 6
-    assert _FINGER_LABELS == ("little", "ring", "middle", "index", "thumb_bend", "thumb_rotation")
+    assert len(INSPIRE_RH56.finger_labels) == 6
+    assert INSPIRE_RH56.finger_labels == ("little", "ring", "middle", "index", "thumb_bend", "thumb_rotation")
 
 
 # -- Hardware integration tests --

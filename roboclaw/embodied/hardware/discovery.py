@@ -41,12 +41,12 @@ class HardwareDiscovery:
 
     def discover(self, model: str) -> list[dict]:
         """Probe ports using the protocol for the given model."""
-        from roboclaw.embodied.embodiment.arm.registry import get_family_by_name
+        from roboclaw.embodied.embodiment.arm.registry import get_arm_spec_by_name
 
-        family = get_family_by_name(model)
-        prober = get_prober(family.probe_protocol)
+        spec = get_arm_spec_by_name(model)
+        prober = get_prober(spec.probe_protocol)
         ports = scan_serial_ports()
-        result = self._probe_ports(ports, prober, family.probe_protocol)
+        result = self._probe_ports(ports, prober, spec.probe_protocol)
         self._scanned_ports = result
         return result
 
