@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from roboclaw.embodied.events import ConfigChangedEvent, EventBus
+from roboclaw.embodied.guard import InterfaceGuard
+from roboclaw.embodied.interface.serial import SerialInterface
+from roboclaw.embodied.interface.video import VideoInterface
+from roboclaw.embodied.manifest.binding import Binding
 from roboclaw.embodied.manifest.helpers import (
     _ARM_TYPES,
     _HAND_TYPES,
@@ -19,9 +23,7 @@ from roboclaw.embodied.manifest.helpers import (
     _extract_serial_number,
     _has_calibration_file,
     _migrate_none_calibration_file,
-    _probe_hand_slave_id,
     _refresh_calibration_state,
-    _resolve_port,
     _validate_manifest,
     find_arm,
     find_camera,
@@ -48,6 +50,7 @@ class Manifest:
         self._bus = event_bus
         self._lock = threading.Lock()
         self._data: dict[str, Any] = self._load()
+        self._guards: dict[str, InterfaceGuard] = {}
 
     # ── Internal I/O ──────────────────────────────────────────────────
 
@@ -98,6 +101,18 @@ class Manifest:
         except RuntimeError:
             pass  # no event loop running (CLI context)
 
+    def _prune_guard(self, port: str) -> None:
+        """Remove guard for *port* if no other device still references it."""
+        if not port:
+            return
+        all_ports = {
+            d.get("port", "")
+            for lst in ("arms", "hands", "cameras")
+            for d in self._data.get(lst, [])
+        }
+        if port not in all_ports:
+            self._guards.pop(port, None)
+
     # ── Read properties (zero I/O, return deepcopy) ───────────────────
 
     @property
@@ -120,6 +135,19 @@ class Manifest:
         with self._lock:
             return copy.deepcopy(self._data.get("hands", []))
 
+    @property
+    def bindings(self) -> list[Binding]:
+        """Reconstruct Binding objects from _data on demand."""
+        with self._lock:
+            result: list[Binding] = []
+            for arm in self._data.get("arms", []):
+                result.append(Binding.from_dict(arm, "arm", self._guards))
+            for cam in self._data.get("cameras", []):
+                result.append(Binding.from_dict(cam, "camera", self._guards))
+            for hand in self._data.get("hands", []):
+                result.append(Binding.from_dict(hand, "hand", self._guards))
+            return result
+
     def find_arm(self, alias: str) -> dict | None:
         with self._lock:
             found = find_arm(self._data.get("arms", []), alias)
@@ -138,18 +166,20 @@ class Manifest:
     # ── Write methods (lock + validate + persist + emit) ──────────────
 
     def set_arm(
-        self, alias: str, arm_type: str, port: str,
+        self, alias: str, arm_type: str, interface: SerialInterface,
     ) -> dict[str, Any]:
-        """Add or update an arm. Returns the arm entry dict."""
+        """Add or update an arm. Returns the arm entry dict.
+
+        The caller is responsible for port resolution — the interface
+        already contains a stable address.
+        """
         if arm_type not in _ARM_TYPES:
             raise ValueError(f"Invalid arm_type '{arm_type}'. Must be one of {_ARM_TYPES}.")
-        if not port:
-            raise ValueError("Arm port is required.")
         if not alias:
             raise ValueError("Arm alias is required.")
-        from roboclaw.embodied.hardware.scan import scan_serial_ports
-
-        port = _resolve_port(port, scan_serial_ports())
+        port = interface.address
+        if not port:
+            raise ValueError("Arm interface has no usable address.")
         serial = _extract_serial_number(port)
         calibration_dir = get_calibration_root() / serial
         _migrate_none_calibration_file(calibration_dir, serial)
@@ -182,8 +212,10 @@ class Manifest:
             arm = find_arm(arms, alias)
             if arm is None:
                 raise ValueError(f"No arm with alias '{alias}' in manifest.")
+            port = arm.get("port", "")
             arms.remove(arm)
             self._persist()
+            self._prune_guard(port)
             result = copy.deepcopy(self._data)
 
         self._emit("arm_removed", alias)
@@ -225,32 +257,27 @@ class Manifest:
         self._emit("arm_calibrated", alias)
         return data_copy
 
-    def set_camera(self, name: str, camera_index: int) -> dict[str, Any]:
-        """Add/update camera from scanned list. Returns the camera entry dict."""
+    def set_camera(self, name: str, interface: VideoInterface) -> dict[str, Any]:
+        """Add/update camera. Returns the camera entry dict.
+
+        The caller is responsible for scanning — the interface already
+        contains width, height, fps, fourcc.
+        """
         if not name:
             raise ValueError("Camera alias is required.")
-        from roboclaw.embodied.hardware.scan import scan_cameras
-
-        scanned = scan_cameras()
-        if camera_index < 0 or camera_index >= len(scanned):
-            raise ValueError(
-                f"camera_index {camera_index} out of range. "
-                f"Found {len(scanned)} camera(s)."
-            )
-        source = scanned[camera_index]
-        port = source.get("by_path") or source.get("by_id") or source.get("dev", "")
+        port = interface.address
         if not port:
-            raise ValueError(f"Scanned camera at index {camera_index} has no usable path.")
+            raise ValueError("Camera interface has no usable address.")
         entry: dict[str, Any] = {
             "alias": name,
             "port": port,
-            "width": source.get("width", 640),
-            "height": source.get("height", 480),
+            "width": interface.width,
+            "height": interface.height,
         }
-        if source.get("fps"):
-            entry["fps"] = source["fps"]
-        if source.get("fourcc"):
-            entry["fourcc"] = source["fourcc"]
+        if interface.fps:
+            entry["fps"] = interface.fps
+        if interface.fourcc:
+            entry["fourcc"] = interface.fourcc
 
         with self._lock:
             cameras = self._data.setdefault("cameras", [])
@@ -272,27 +299,30 @@ class Manifest:
             cam = find_camera(cameras, name)
             if cam is None:
                 raise ValueError(f"No camera with alias '{name}' in manifest.")
+            port = cam.get("port", "")
             cameras.remove(cam)
             self._persist()
+            self._prune_guard(port)
             result = copy.deepcopy(self._data)
 
         self._emit("camera_removed", name)
         return result
 
     def set_hand(
-        self, alias: str, hand_type: str, port: str,
+        self, alias: str, hand_type: str,
+        interface: SerialInterface, slave_id: int,
     ) -> dict[str, Any]:
-        """Add/update hand. Returns the hand entry dict."""
+        """Add/update hand. Returns the hand entry dict.
+
+        The caller is responsible for port resolution and slave_id probing.
+        """
         if hand_type not in _HAND_TYPES:
             raise ValueError(f"Invalid hand_type '{hand_type}'. Must be one of {_HAND_TYPES}.")
-        if not port:
-            raise ValueError("Hand port is required.")
         if not alias:
             raise ValueError("Hand alias is required.")
-        from roboclaw.embodied.hardware.scan import scan_serial_ports
-
-        port = _resolve_port(port, scan_serial_ports())
-        slave_id = _probe_hand_slave_id(hand_type, port)
+        port = interface.address
+        if not port:
+            raise ValueError("Hand interface has no usable address.")
 
         entry: dict[str, Any] = {
             "alias": alias,
@@ -321,8 +351,10 @@ class Manifest:
             hand = find_hand(hands, alias)
             if hand is None:
                 raise ValueError(f"No hand with alias '{alias}' in manifest.")
+            port = hand.get("port", "")
             hands.remove(hand)
             self._persist()
+            self._prune_guard(port)
             result = copy.deepcopy(self._data)
 
         self._emit("hand_removed", alias)

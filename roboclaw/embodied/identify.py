@@ -17,6 +17,7 @@ from roboclaw.embodied.hardware.motion import (
     resolve_port_by_id,
     resolve_port_path,
 )
+from roboclaw.embodied.interface.serial import SerialInterface
 
 # Build dynamic menu from all registered arm types.
 _ALL_TYPES = all_arm_types()
@@ -77,14 +78,16 @@ def _confirm(prompt: str) -> bool:
         print("Please enter Y or n.")
 
 
-def _find_moved_port(ports: list[dict], baselines: dict[str, dict[int, int]]) -> dict | None:
+def _find_moved_port(
+    ports: list[SerialInterface], baselines: dict[str, dict[int, int]],
+) -> SerialInterface | None:
     """Read current positions, find the port with largest motion above threshold."""
     from roboclaw.embodied.stub import is_stub_mode, stub_moved_port
 
     if is_stub_mode():
         return stub_moved_port(ports)
 
-    best_port = None
+    best_port: SerialInterface | None = None
     best_delta = 0
     for port in ports:
         path = resolve_port_path(port)
@@ -96,7 +99,7 @@ def _find_moved_port(ports: list[dict], baselines: dict[str, dict[int, int]]) ->
     return best_port
 
 
-def _save_arm(alias: str, arm_type: str, port: dict) -> None:
+def _save_arm(alias: str, arm_type: str, port: SerialInterface) -> None:
     """Save arm to manifest via set_arm."""
     from roboclaw.embodied.manifest.helpers import set_arm
 
@@ -105,7 +108,9 @@ def _save_arm(alias: str, arm_type: str, port: dict) -> None:
     print(f"Saved: {alias} ({arm_type}) on {port_id}")
 
 
-def _identify_one_arm(ports: list[dict], existing_aliases: set[str]) -> dict | None:
+def _identify_one_arm(
+    ports: list[SerialInterface], existing_aliases: set[str],
+) -> dict | None:
     """Run one round of identification."""
     baselines = {resolve_port_path(p): read_positions_for_port(p) for p in ports}
     _read_line("\nMove one arm, then press Enter.")
@@ -137,14 +142,14 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        scanned_ports = json.loads(sys.argv[1])
+        raw_ports = json.loads(sys.argv[1])
     except json.JSONDecodeError as exc:
         print(f"Invalid scanned_ports JSON: {exc}")
         sys.exit(1)
-    if not isinstance(scanned_ports, list):
+    if not isinstance(raw_ports, list):
         print("scanned_ports_json must decode to a list.")
         sys.exit(1)
-    if not scanned_ports:
+    if not raw_ports:
         print("No serial ports provided.")
         sys.exit(1)
 

@@ -28,7 +28,10 @@ class ScanningService:
     # -- Locking scan operations ----------------------------------------------
 
     def run_full_scan(self, model: str = "") -> dict:
-        """Scan ports + cameras with embodiment lock."""
+        """Scan ports + cameras with embodiment lock.
+
+        Returns Interface objects (SerialInterface / VideoInterface).
+        """
         self._parent.acquire_embodiment("scanning")
         try:
             if model:

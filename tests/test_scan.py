@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from roboclaw.embodied.hardware.scan import _list_serial_ports, scan_serial_ports
+from roboclaw.embodied.interface.serial import SerialInterface
 
 
 class _FakePort:
@@ -68,7 +69,7 @@ def test_scan_serial_ports_merges_port_list_with_linux_symlink_aliases() -> None
         ports = scan_serial_ports()
 
     assert ports == [
-        {"by_path": "/dev/serial/by-path/pci-0:2.1", "by_id": "/dev/serial/by-id/usb-ABC-if00", "dev": "/dev/ttyACM0"},
+        SerialInterface(by_path="/dev/serial/by-path/pci-0:2.1", by_id="/dev/serial/by-id/usb-ABC-if00", dev="/dev/ttyACM0"),
     ]
 
 
@@ -80,4 +81,4 @@ def test_scan_serial_ports_uses_lerobot_compatible_range() -> None:
     ):
         ports = scan_serial_ports()
 
-    assert ports == [{"by_path": "", "by_id": "", "dev": "/dev/tty.usbmodemA"}]
+    assert ports == [SerialInterface(dev="/dev/tty.usbmodemA")]

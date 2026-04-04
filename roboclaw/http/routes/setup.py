@@ -49,7 +49,11 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
     async def setup_scan(body: ScanRequest | None = None) -> dict[str, Any]:
         model = body.model if body else ""
         try:
-            return await asyncio.to_thread(service.scanning.run_full_scan, model)
+            result = await asyncio.to_thread(service.scanning.run_full_scan, model)
+            return {
+                "ports": [p.to_dict() for p in result["ports"]],
+                "cameras": [c.to_dict() for c in result["cameras"]],
+            }
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from exc
 

@@ -286,16 +286,13 @@ def _format_scan(result: dict[str, Any]) -> str:
     if ports:
         lines.append("\nPorts:")
         for p in ports:
-            port_id = p.get("by_id") or p.get("dev", "?")
-            motors = p.get("motor_ids", [])
+            port_id = p.by_id or p.dev or "?"
+            motors = p.motor_ids
             lines.append(f"  - {port_id}  ({len(motors)} motors)")
     if cameras:
         lines.append("\nCameras:")
         for c in cameras:
-            dev = c.get("dev", "?")
-            w, h = c.get("width", "?"), c.get("height", "?")
-            fps = c.get("fps", "?")
-            lines.append(f"  - {dev}  ({w}x{h} @ {fps}fps)")
+            lines.append(f"  - {c.dev or '?'}  ({c.width}x{c.height} @ {c.fps}fps)")
     return "\n".join(lines)
 
 

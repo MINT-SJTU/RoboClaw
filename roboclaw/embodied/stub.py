@@ -19,6 +19,9 @@ import json
 import os
 from typing import Any
 
+from roboclaw.embodied.interface.serial import SerialInterface
+from roboclaw.embodied.interface.video import VideoInterface
+
 _FLAG = "ROBOCLAW_STUB"
 
 _DEFAULT_PORTS = [
@@ -58,14 +61,16 @@ def is_stub_mode() -> bool:
 # ── Stub hardware data ───────────────────────────────────────────────
 
 
-def stub_ports() -> list[dict[str, str]]:
+def stub_ports() -> list[SerialInterface]:
     """Return fake serial ports (overridable via ROBOCLAW_STUB_PORTS)."""
-    return copy.deepcopy(_read_json_env("ROBOCLAW_STUB_PORTS", _DEFAULT_PORTS))
+    raw = _read_json_env("ROBOCLAW_STUB_PORTS", _DEFAULT_PORTS)
+    return [SerialInterface.from_dict(p) if isinstance(p, dict) else p for p in raw]
 
 
-def stub_cameras() -> list[dict[str, str | int]]:
+def stub_cameras() -> list[VideoInterface]:
     """Return fake cameras (overridable via ROBOCLAW_STUB_CAMERAS)."""
-    return copy.deepcopy(_read_json_env("ROBOCLAW_STUB_CAMERAS", _DEFAULT_CAMERAS))
+    raw = _read_json_env("ROBOCLAW_STUB_CAMERAS", _DEFAULT_CAMERAS)
+    return [VideoInterface.from_dict(c) if isinstance(c, dict) else c for c in raw]
 
 
 def stub_motors() -> dict[str, list[int]]:
@@ -73,7 +78,7 @@ def stub_motors() -> dict[str, list[int]]:
     return copy.deepcopy(_read_json_env("ROBOCLAW_STUB_MOTORS", _DEFAULT_MOTORS))
 
 
-def stub_moved_port(ports: list[dict]) -> dict | None:
+def stub_moved_port(ports: list[SerialInterface]) -> SerialInterface | None:
     """Return the port that identify should detect as 'moved'.
 
     Defaults to the first port, overridable via ROBOCLAW_STUB_MOVED_PORT.
@@ -102,16 +107,19 @@ def stub_motor_ids(port_path: str) -> list[int]:
 # ── Internal helpers ─────────────────────────────────────────────────
 
 
-def _port_paths(port: dict) -> tuple[str, ...]:
+def _port_paths(port: SerialInterface | dict) -> tuple[str, ...]:
     """Collect all meaningful path variants for one scanned port entry.
 
     Returns a tuple with fixed precedence: by_id, by_path, dev.
+    Accepts both SerialInterface and legacy dict.
     """
-    return tuple(v for v in (
-        port.get("by_id", ""),
-        port.get("by_path", ""),
-        port.get("dev", ""),
-    ) if v)
+    if isinstance(port, dict):
+        return tuple(v for v in (
+            port.get("by_id", ""),
+            port.get("by_path", ""),
+            port.get("dev", ""),
+        ) if v)
+    return tuple(v for v in (port.by_id, port.by_path, port.dev) if v)
 
 
 def _read_json_env(name: str, default: Any) -> Any:

@@ -1,6 +1,8 @@
 """Hardware discovery orchestrator."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from roboclaw.embodied.hardware.motion import (
     MOTION_THRESHOLD,
     detect_motion,
@@ -16,30 +18,32 @@ from roboclaw.embodied.hardware.scan import (
     suppress_stderr,
     restore_stderr,
 )
+from roboclaw.embodied.interface.serial import SerialInterface
+from roboclaw.embodied.interface.video import VideoInterface
 
 
 class HardwareDiscovery:
     """Stateful hardware discovery workflow."""
 
     def __init__(self) -> None:
-        self._scanned_ports: list[dict] = []
-        self._scanned_cameras: list[dict] = []
+        self._scanned_ports: list[SerialInterface] = []
+        self._scanned_cameras: list[VideoInterface] = []
         self._baselines: dict[str, dict[int, int]] = {}
         self._motion_active: bool = False
 
     @property
-    def scanned_ports(self) -> list[dict]:
+    def scanned_ports(self) -> list[SerialInterface]:
         return self._scanned_ports
 
     @property
-    def scanned_cameras(self) -> list[dict]:
+    def scanned_cameras(self) -> list[VideoInterface]:
         return self._scanned_cameras
 
     @property
     def motion_active(self) -> bool:
         return self._motion_active
 
-    def discover(self, model: str) -> list[dict]:
+    def discover(self, model: str) -> list[SerialInterface]:
         """Probe ports using the protocol for the given model."""
         from roboclaw.embodied.embodiment.arm.registry import get_arm_spec_by_name
 
@@ -50,26 +54,26 @@ class HardwareDiscovery:
         self._scanned_ports = result
         return result
 
-    def discover_all(self) -> list[dict]:
+    def discover_all(self) -> list[SerialInterface]:
         """Probe all ports with all registered probers (per-port, per-prober).
 
         Each port is tried with each prober independently, fixing the
         mixed-protocol bug where Koch arms were lost if SO101 was found first.
         """
         ports = scan_serial_ports()
-        result = []
+        result: list[SerialInterface] = []
         for protocol, prober_cls in _REGISTRY.items():
             prober = prober_cls()
             matched = self._probe_ports(ports, prober, protocol)
-            matched_devs = {p.get("dev") for p in matched}
+            matched_devs = {p.dev for p in matched}
             result.extend(matched)
-            ports = [p for p in ports if p.get("dev") not in matched_devs]
+            ports = [p for p in ports if p.dev not in matched_devs]
             if not ports:
                 break
         self._scanned_ports = result
         return result
 
-    def discover_cameras(self) -> list[dict]:
+    def discover_cameras(self) -> list[VideoInterface]:
         """Scan connected cameras."""
         result = scan_cameras()
         self._scanned_cameras = result
@@ -110,9 +114,9 @@ class HardwareDiscovery:
                 delta = detect_motion(baseline, current)
                 results.append({
                     "port_id": resolve_port_by_id(port),
-                    "dev": port.get("dev", ""),
-                    "by_id": port.get("by_id", ""),
-                    "motor_ids": port.get("motor_ids", []),
+                    "dev": port.dev,
+                    "by_id": port.by_id,
+                    "motor_ids": list(port.motor_ids),
                     "delta": delta,
                     "moved": delta > MOTION_THRESHOLD,
                 })
@@ -125,7 +129,9 @@ class HardwareDiscovery:
         self._motion_active = False
         self._baselines = {}
 
-    def _probe_ports(self, ports: list[dict], prober, protocol: str = "") -> list[dict]:
+    def _probe_ports(
+        self, ports: list[SerialInterface], prober, protocol: str = "",
+    ) -> list[SerialInterface]:
         """Probe ports with a single prober, handling permission errors."""
         from roboclaw.embodied.hardware.scan import fix_serial_permissions
 
@@ -145,14 +151,16 @@ class HardwareDiscovery:
             restore_stderr(saved)
 
     @staticmethod
-    def _do_probe(ports: list[dict], prober, protocol: str = "") -> list[dict]:
+    def _do_probe(
+        ports: list[SerialInterface], prober, protocol: str = "",
+    ) -> list[SerialInterface]:
         """Run the prober on each port, return those with motors."""
-        result = []
+        result: list[SerialInterface] = []
         for port in ports:
             path = resolve_port_path(port)
             if not path:
                 continue
             ids = prober.probe(path)
             if ids:
-                result.append({**port, "motor_ids": ids, "bus_type": protocol})
+                result.append(replace(port, motor_ids=tuple(ids), bus_type=protocol))
         return result

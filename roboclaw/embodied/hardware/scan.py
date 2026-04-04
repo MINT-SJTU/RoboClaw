@@ -11,6 +11,9 @@ from pathlib import Path
 
 from loguru import logger
 
+from roboclaw.embodied.interface.serial import SerialInterface
+from roboclaw.embodied.interface.video import VideoInterface
+
 
 def _read_symlink_map(directory: str) -> dict[str, str]:
     """Read a directory of symlinks, return {resolved_target: symlink_path}."""
@@ -53,8 +56,8 @@ def _list_serial_ports() -> list[str]:
     )
 
 
-def scan_serial_ports() -> list[dict[str, str]]:
-    """Scan serial devices, return list with by_path, by_id, dev.
+def scan_serial_ports() -> list[SerialInterface]:
+    """Scan serial devices, return list of SerialInterface objects.
 
     Discovery scope is intentionally aligned with `lerobot-find-port`, while
     Linux symlink trees are still attached as stable `/dev/serial/by-*`
@@ -68,15 +71,15 @@ def scan_serial_ports() -> list[dict[str, str]]:
     by_path = _read_symlink_map("/dev/serial/by-path")
     by_id = _read_symlink_map("/dev/serial/by-id")
     all_devs = set(_list_serial_ports()) | set(by_path.keys()) | set(by_id.keys())
-    ports = []
+    ports: list[SerialInterface] = []
     for dev in sorted(all_devs):
         if not os.path.exists(dev):
             continue
-        ports.append({
-            "by_path": by_path.get(dev, ""),
-            "by_id": by_id.get(dev, ""),
-            "dev": dev,
-        })
+        ports.append(SerialInterface(
+            by_path=by_path.get(dev, ""),
+            by_id=by_id.get(dev, ""),
+            dev=dev,
+        ))
     return ports
 
 
@@ -127,8 +130,8 @@ def restore_stderr(saved: int) -> None:
     os.close(saved)
 
 
-def scan_cameras() -> list[dict[str, str | int]]:
-    """Scan cameras, return list with by_path, by_id, dev, resolution."""
+def scan_cameras() -> list[VideoInterface]:
+    """Scan cameras, return list of VideoInterface objects."""
     from roboclaw.embodied.stub import is_stub_mode, stub_cameras
 
     if is_stub_mode():
@@ -149,7 +152,7 @@ def scan_cameras() -> list[dict[str, str | int]]:
 
 
 def capture_camera_frames(
-    scanned_cameras: list[dict[str, str | int]], output_dir: str | Path,
+    scanned_cameras: list[VideoInterface], output_dir: str | Path,
 ) -> list[dict[str, str]]:
     """Capture one JPEG preview for each scanned camera."""
     try:
@@ -171,9 +174,9 @@ def capture_camera_frames(
         restore_stderr(saved)
 
 
-def _probe_cameras(cv2, by_path: dict, by_id: dict) -> list[dict[str, str | int]]:
+def _probe_cameras(cv2, by_path: dict, by_id: dict) -> list[VideoInterface]:
     """Try opening each /dev/videoN, return one per physical USB device."""
-    raw = []
+    raw: list[VideoInterface] = []
     for dev in sorted(glob.glob("/dev/video*")):
         m = re.match(r"/dev/video(\d+)$", dev)
         if not m:
@@ -194,25 +197,25 @@ def _usb_device_key(by_path_str: str) -> str:
     return m.group(1) if m else ""
 
 
-def _interface_sort_key(cam: dict) -> tuple[tuple[int, int], str]:
+def _interface_sort_key(cam: VideoInterface) -> tuple[tuple[int, int], str]:
     """Sort key: prefer higher interface number (RealSense RGB = 1.3), then lowest video index."""
-    bp = cam.get("by_path", "")
+    bp = cam.by_path
     # Extract interface e.g. "1.3" from "usb-0:2:1.3-video-index0"
     m = re.search(r"usb-\d+:\d+:(\d+)\.(\d+)", bp)
     iface = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
-    return (iface, cam.get("dev", ""))
+    return (iface, cam.dev)
 
 
-def _dedupe_by_usb_device(cameras: list[dict]) -> list[dict]:
+def _dedupe_by_usb_device(cameras: list[VideoInterface]) -> list[VideoInterface]:
     """Keep one camera per physical USB device.
 
     For multi-stream devices (e.g. RealSense), prefer the highest interface
     number — on RealSense D435 interface 1.3 is RGB, 1.0 is depth/IR.
     """
-    groups: dict[str, list[dict]] = {}
-    ungrouped = []
+    groups: dict[str, list[VideoInterface]] = {}
+    ungrouped: list[VideoInterface] = []
     for cam in cameras:
-        key = _usb_device_key(cam.get("by_path", ""))
+        key = _usb_device_key(cam.by_path)
         if key:
             groups.setdefault(key, []).append(cam)
         else:
@@ -221,11 +224,11 @@ def _dedupe_by_usb_device(cameras: list[dict]) -> list[dict]:
     for cams in groups.values():
         # Prefer highest interface (RGB on RealSense), then lowest video index
         result.append(max(cams, key=_interface_sort_key))
-    return sorted(result, key=lambda c: c.get("dev", ""))
+    return sorted(result, key=lambda c: c.dev)
 
 
-def _try_open_camera(cv2, index: int, dev: str, by_path: dict, by_id: dict) -> dict[str, str | int] | None:
-    """Open a single camera by index, return info dict or None."""
+def _try_open_camera(cv2, index: int, dev: str, by_path: dict, by_id: dict) -> VideoInterface | None:
+    """Open a single camera by index, return VideoInterface or None."""
     cap = cv2.VideoCapture(index)
     try:
         if not cap.isOpened():
@@ -233,30 +236,31 @@ def _try_open_camera(cv2, index: int, dev: str, by_path: dict, by_id: dict) -> d
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         real = os.path.realpath(dev)
-        result: dict[str, str | int] = {
-            "by_path": by_path.get(real, ""),
-            "by_id": by_id.get(real, ""),
-            "dev": dev,
-            "width": w,
-            "height": h,
-        }
+        fourcc = ""
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps < 30:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FPS, 30)
             if cap.get(cv2.CAP_PROP_FPS) >= 30:
-                result["fourcc"] = "MJPG"
+                fourcc = "MJPG"
                 fps = 30
-        result["fps"] = int(fps)
-        return result
+        return VideoInterface(
+            by_path=by_path.get(real, ""),
+            by_id=by_id.get(real, ""),
+            dev=dev,
+            width=w,
+            height=h,
+            fps=int(fps),
+            fourcc=fourcc,
+        )
     finally:
         cap.release()
 
 
 def _capture_camera_frame(
-    cv2, camera: dict[str, str | int], output_dir: Path, index: int,
+    cv2, camera: VideoInterface, output_dir: Path, index: int,
 ) -> dict[str, str] | None:
-    source = str(camera.get("by_path") or camera.get("by_id") or camera.get("dev") or "")
+    source = camera.address
     label = source
     if not source:
         return None

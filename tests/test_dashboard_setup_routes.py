@@ -12,19 +12,21 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from roboclaw.embodied.interface.serial import SerialInterface
+from roboclaw.embodied.interface.video import VideoInterface
 from roboclaw.http.routes.setup import register_setup_routes
 
 
 _RAW_PORTS = [
-    {
-        "by_path": "/dev/serial/by-path/pci-0:2.1",
-        "by_id": "/dev/serial/by-id/usb-ABC-if00",
-        "dev": "/dev/ttyACM0",
-    },
+    SerialInterface(
+        by_path="/dev/serial/by-path/pci-0:2.1",
+        by_id="/dev/serial/by-id/usb-ABC-if00",
+        dev="/dev/ttyACM0",
+    ),
 ]
 
 _MOCK_CAMERAS = [
-    {"by_path": "/dev/v4l/by-path/cam0", "by_id": "", "dev": "/dev/video0", "width": 640, "height": 480},
+    VideoInterface(by_path="/dev/v4l/by-path/cam0", by_id="", dev="/dev/video0", width=640, height=480),
 ]
 
 

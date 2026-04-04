@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from roboclaw.embodied.interface.serial import SerialInterface
 from roboclaw.embodied.tool import create_embodied_tools, EmbodiedToolGroup
 
 
@@ -16,7 +17,7 @@ _MOCK_SETUP = {
 }
 
 _MOCK_PORTS = [
-    {"by_path": "/dev/serial/by-path/pci-0:2.1", "by_id": "/dev/serial/by-id/usb-ABC-if00", "dev": "/dev/ttyACM0"},
+    SerialInterface(by_path="/dev/serial/by-path/pci-0:2.1", by_id="/dev/serial/by-id/usb-ABC-if00", dev="/dev/ttyACM0"),
 ]
 
 

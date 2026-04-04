@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from roboclaw.embodied.manifest.helpers import arm_display_name, find_arm, find_camera, find_hand
+from roboclaw.embodied.manifest.helpers import (
+    _probe_hand_slave_id,
+    _resolve_serial_interface,
+    arm_display_name,
+    find_arm,
+    find_camera,
+    find_hand,
+)
 
 if TYPE_CHECKING:
     from roboclaw.embodied.service import EmbodiedService
@@ -20,7 +27,8 @@ class ConfigService:
     def set_arm(self, alias: str, arm_type: str, port: str) -> str:
         if not all([alias, arm_type, port]):
             return "set_arm requires alias, arm_type, and port."
-        self._parent.manifest.set_arm(alias, arm_type, port)
+        interface = _resolve_serial_interface(port)
+        self._parent.manifest.set_arm(alias, arm_type, interface)
         arm = self._parent.manifest.find_arm(alias)
         display = arm_display_name(arm)
         return f"Arm '{display}' configured.\n{json.dumps(arm, indent=2)}"
@@ -43,7 +51,18 @@ class ConfigService:
     def set_camera(self, camera_name: str, camera_index: int) -> str:
         if not camera_name or camera_index is None:
             return "set_camera requires camera_name and camera_index."
-        self._parent.manifest.set_camera(camera_name, camera_index)
+        from roboclaw.embodied.hardware.scan import scan_cameras
+
+        scanned = scan_cameras()
+        if camera_index < 0 or camera_index >= len(scanned):
+            return (
+                f"camera_index {camera_index} out of range. "
+                f"Found {len(scanned)} camera(s)."
+            )
+        interface = scanned[camera_index]
+        if not interface.address:
+            return f"Scanned camera at index {camera_index} has no usable path."
+        self._parent.manifest.set_camera(camera_name, interface)
         cam = self._parent.manifest.find_camera(camera_name)
         return f"Camera '{camera_name}' configured.\n{json.dumps(cam, indent=2)}"
 
@@ -58,7 +77,9 @@ class ConfigService:
     def set_hand(self, alias: str, hand_type: str, port: str) -> str:
         if not all([alias, hand_type, port]):
             return "set_hand requires alias, hand_type, and port."
-        self._parent.manifest.set_hand(alias, hand_type, port)
+        interface = _resolve_serial_interface(port)
+        slave_id = _probe_hand_slave_id(hand_type, interface.address)
+        self._parent.manifest.set_hand(alias, hand_type, interface, slave_id)
         hand = self._parent.manifest.find_hand(alias)
         return f"Hand '{alias}' configured.\n{json.dumps(hand, indent=2)}"
 

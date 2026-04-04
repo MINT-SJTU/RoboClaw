@@ -74,13 +74,15 @@ def _compute_readiness(
 
 
 def _previews_to_multimodal(
-    previews: list[dict[str, str]], scanned: list[dict],
+    previews: list[dict[str, str]], scanned: list,
 ) -> list[dict]:
     """Convert camera previews to multimodal content blocks with embedded images."""
-    cam_by_source: dict[str, dict] = {}
+    from roboclaw.embodied.interface.video import VideoInterface
+
+    cam_by_source: dict[str, VideoInterface] = {}
     for cam in scanned:
-        for key in ("by_path", "by_id", "dev"):
-            if val := cam.get(key):
+        for val in (cam.by_path, cam.by_id, cam.dev):
+            if val:
                 cam_by_source[val] = cam
 
     blocks: list[dict] = []
@@ -89,12 +91,13 @@ def _previews_to_multimodal(
         "suggest a descriptive name for each based on what you see "
         "(e.g. top, left_wrist, right_wrist, front, side)."
     ]
+    _empty_cam = VideoInterface()
     for i, preview in enumerate(previews):
-        cam_info = cam_by_source.get(preview.get("camera", ""), {})
+        cam_info = cam_by_source.get(preview.get("camera", ""), _empty_cam)
         summary_lines.append(
-            f"\nCamera {i}: dev={cam_info.get('dev', '?')} "
-            f"({cam_info.get('width', '?')}x{cam_info.get('height', '?')} "
-            f"@ {cam_info.get('fps', '?')}fps)"
+            f"\nCamera {i}: dev={cam_info.dev or '?'} "
+            f"({cam_info.width}x{cam_info.height} "
+            f"@ {cam_info.fps}fps)"
         )
         img_path = Path(preview.get("image_path", ""))
         if img_path.is_file():

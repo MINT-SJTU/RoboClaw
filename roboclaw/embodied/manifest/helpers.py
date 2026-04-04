@@ -94,18 +94,32 @@ def arm_display_name(arm: dict) -> str:
 # ── Port resolution ───────────────────────────────────────────────────
 
 
-def _resolve_port(port: str, scanned_ports: list[dict]) -> str:
-    """Resolve a volatile port (e.g. /dev/ttyACM0) to a stable by_id path."""
+def _resolve_port(port: str, scanned_ports: list) -> str:
+    """Resolve a volatile port (e.g. /dev/ttyACM0) to a stable by_id path.
+
+    Accepts list[SerialInterface] from scan_serial_ports().
+    """
     if port.startswith("/dev/serial/"):
         return port
     for entry in scanned_ports:
-        if entry.get("dev") != port:
+        if entry.dev != port:
             continue
-        by_id = entry.get("by_id", "")
-        if by_id:
-            return by_id
+        if entry.by_id:
+            return entry.by_id
         return port
     return port
+
+
+def _resolve_serial_interface(port: str) -> "SerialInterface":
+    """Scan ports, resolve a volatile dev path, return a SerialInterface."""
+    from roboclaw.embodied.hardware.scan import scan_serial_ports
+    from roboclaw.embodied.interface.serial import SerialInterface
+
+    resolved = _resolve_port(port, scan_serial_ports())
+    return SerialInterface(
+        by_id=resolved if resolved.startswith("/dev/serial/") else "",
+        dev=resolved,
+    )
 
 
 def _extract_serial_number(port: str) -> str:
@@ -307,8 +321,9 @@ def ensure_manifest(path: Path | None = None) -> dict[str, Any]:
 
 
 def set_arm(alias: str, arm_type: str, port: str, *, path: Path | None = None) -> dict[str, Any]:
+    interface = _resolve_serial_interface(port)
     m = _lazy_manifest(path)
-    m.set_arm(alias, arm_type, port)
+    m.set_arm(alias, arm_type, interface)
     return m.snapshot
 
 
@@ -325,8 +340,19 @@ def mark_arm_calibrated(alias: str, path: Path | None = None) -> dict[str, Any]:
 
 
 def set_camera(name: str, camera_index: int, path: Path | None = None) -> dict[str, Any]:
+    from roboclaw.embodied.hardware.scan import scan_cameras
+
+    scanned = scan_cameras()
+    if camera_index < 0 or camera_index >= len(scanned):
+        raise ValueError(
+            f"camera_index {camera_index} out of range. "
+            f"Found {len(scanned)} camera(s)."
+        )
+    interface = scanned[camera_index]
+    if not interface.address:
+        raise ValueError(f"Scanned camera at index {camera_index} has no usable path.")
     m = _lazy_manifest(path)
-    m.set_camera(name, camera_index)
+    m.set_camera(name, interface)
     return m.snapshot
 
 
@@ -335,8 +361,12 @@ def remove_camera(name: str, path: Path | None = None) -> dict[str, Any]:
 
 
 def set_hand(alias: str, hand_type: str, port: str, *, path: Path | None = None) -> dict[str, Any]:
+    if hand_type not in _HAND_TYPES:
+        raise ValueError(f"Invalid hand_type '{hand_type}'. Must be one of {_HAND_TYPES}.")
+    interface = _resolve_serial_interface(port)
+    slave_id = _probe_hand_slave_id(hand_type, interface.address)
     m = _lazy_manifest(path)
-    m.set_hand(alias, hand_type, port)
+    m.set_hand(alias, hand_type, interface, slave_id)
     return m.snapshot
 
 

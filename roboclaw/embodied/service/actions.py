@@ -50,7 +50,8 @@ async def do_identify(manifest: dict[str, Any], kwargs: dict[str, Any], tty_hand
     ports = scan_serial_ports()
     if not ports:
         return "No serial ports detected."
-    argv = [sys.executable, "-m", "roboclaw.embodied.identify", json.dumps(ports)]
+    ports_json = json.dumps([p.to_dict() for p in ports])
+    argv = [sys.executable, "-m", "roboclaw.embodied.identify", ports_json]
     rc, stderr_text = await _run_tty(tty_handoff, LocalLeRobotRunner(), argv, "identify-arms")
     if rc == 0:
         return "Arm identification complete."
