@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
 from roboclaw.embodied.embodiment.arm.registry import all_arm_types
 from roboclaw.embodied.embodiment.hand.registry import all_hand_types
+from roboclaw.embodied.manifest.helpers import (
+    _probe_hand_slave_id,
+    _resolve_serial_interface,
+    arm_display_name,
+)
 
 _MANIFEST_ACTIONS = [
     "status",
@@ -348,6 +354,37 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
     },
 }
 
+_ACTION_DESCRIPTIONS = {
+    "scan": "Scan for serial ports with motors and available cameras.",
+    "check": "Check LeRobot availability and show the current embodied setup.",
+    "identify": "Launch the interactive arm-identification flow for detected serial ports.",
+    "describe": "Explain adjustable parameters for a target embodied action.",
+    "calibrate": "Calibrate one or more configured arms. If arms is omitted, calibrate every uncalibrated arm.",
+    "teleoperate": "Run live teleoperation. Select arms with a comma-separated port list.",
+    "record": "Record a dataset with one follower/leader pair or two pairs for bimanual capture.",
+    "replay": "Replay a recorded dataset episode on one or two follower arms.",
+    "train": "Start ACT training for a recorded dataset as a detached job.",
+    "run_policy": "Run a trained policy rollout with one or two follower arms.",
+    "job_status": "Inspect the status and recent logs for a detached training job.",
+    "status": "Show hardware status: configured arms/cameras, connectivity, calibration, readiness.",
+    "bind_arm": "Create or update one configured arm alias.",
+    "rename_arm": "Rename an existing configured arm alias.",
+    "unbind_arm": "Remove one configured arm alias.",
+    "bind_camera": "Assign a scanned camera to a stable camera name.",
+    "rename_camera": "Rename an existing configured camera alias.",
+    "preview_cameras": "Capture one preview image for each scanned camera.",
+    "unbind_camera": "Remove a configured camera.",
+    "bind_hand": "Create or update one configured hand alias.",
+    "unbind_hand": "Remove a configured hand alias.",
+    "rename_hand": "Rename an existing configured hand alias.",
+    "hand_open": "Open all fingers of a dexterous hand.",
+    "hand_close": "Close all fingers of a dexterous hand.",
+    "hand_pose": "Set individual finger positions on a dexterous hand.",
+    "hand_status": "Read current finger angles and forces from a dexterous hand.",
+    "list_datasets": "List recorded datasets with episode counts.",
+    "list_policies": "List trained policy checkpoints.",
+}
+
 
 class EmbodiedToolGroup(Tool):
     """A single embodied tool group with group-local dispatch."""
@@ -400,26 +437,97 @@ class EmbodiedToolGroup(Tool):
         svc = _get_service(self.embodied_service)
         action = kwargs["action"]
         if action == "status":
-            return svc.queries.get_manifest()
+            return svc.get_manifest_summary()
         if action == "describe":
-            return svc.queries.describe_actions(kwargs.get("target_action", ""))
+            target_action = kwargs.get("target_action", "")
+            if not target_action:
+                return json.dumps(_ACTION_DESCRIPTIONS, indent=2, ensure_ascii=False)
+            if target_action not in _ACTION_DESCRIPTIONS:
+                return f"Unknown target_action: {target_action}"
+            return f"{target_action}: {_ACTION_DESCRIPTIONS[target_action]}"
         if action == "bind_arm":
-            return svc.config.set_arm(kwargs.get("alias", ""), kwargs.get("arm_type", ""), kwargs.get("port", ""))
+            alias = kwargs.get("alias", "")
+            arm_type = kwargs.get("arm_type", "")
+            port = kwargs.get("port", "")
+            if not all([alias, arm_type, port]):
+                return "bind_arm requires alias, arm_type, and port."
+            interface = _resolve_serial_interface(port)
+            binding = svc.bind_arm(alias, arm_type, interface)
+            display = arm_display_name(binding)
+            return f"Arm '{display}' configured.\n{json.dumps(binding.to_dict(), indent=2)}"
         if action == "unbind_arm":
-            return svc.config.remove_arm(kwargs.get("alias", ""))
+            alias = kwargs.get("alias", "")
+            if not alias:
+                return "unbind_arm requires alias."
+            svc.unbind_arm(alias)
+            return f"Arm '{alias}' removed."
         if action == "rename_arm":
-            return svc.config.rename_arm(kwargs.get("alias", ""), kwargs.get("new_alias", ""))
+            alias = kwargs.get("alias", "")
+            new_alias = kwargs.get("new_alias", "")
+            if not alias or not new_alias:
+                return "rename_arm requires alias and new_alias."
+            binding = svc.rename_arm(alias, new_alias)
+            return (
+                f"Arm renamed from '{alias}' to '{new_alias}'.\n"
+                f"{json.dumps(binding.to_dict(), indent=2)}"
+            )
         if action == "bind_camera":
-            return svc.config.set_camera(kwargs.get("camera_name", ""), kwargs.get("camera_index", 0))
+            camera_name = kwargs.get("camera_name", "")
+            camera_index = kwargs.get("camera_index")
+            if not camera_name or camera_index is None:
+                return "bind_camera requires camera_name and camera_index."
+            from roboclaw.embodied.hardware.scan import scan_cameras
+
+            scanned = scan_cameras()
+            if camera_index < 0 or camera_index >= len(scanned):
+                return f"camera_index {camera_index} out of range. Found {len(scanned)} camera(s)."
+            interface = scanned[camera_index]
+            if not interface.address:
+                return f"Scanned camera at index {camera_index} has no usable path."
+            binding = svc.bind_camera(camera_name, interface)
+            return f"Camera '{camera_name}' configured.\n{json.dumps(binding.to_dict(), indent=2)}"
         if action == "unbind_camera":
-            return svc.config.remove_camera(kwargs.get("camera_name", ""))
+            camera_name = kwargs.get("camera_name", "")
+            if not camera_name:
+                return "unbind_camera requires camera_name."
+            svc.unbind_camera(camera_name)
+            return f"Camera '{camera_name}' removed."
         if action == "rename_camera":
-            return svc.config.rename_camera(kwargs.get("camera_name", ""), kwargs.get("new_alias", ""))
+            camera_name = kwargs.get("camera_name", "")
+            new_alias = kwargs.get("new_alias", "")
+            if not camera_name or not new_alias:
+                return "rename_camera requires camera_name and new_alias."
+            binding = svc.rename_camera(camera_name, new_alias)
+            return (
+                f"Camera renamed from '{camera_name}' to '{new_alias}'.\n"
+                f"{json.dumps(binding.to_dict(), indent=2)}"
+            )
         if action == "bind_hand":
-            return svc.config.set_hand(kwargs.get("alias", ""), kwargs.get("hand_type", ""), kwargs.get("port", ""))
+            alias = kwargs.get("alias", "")
+            hand_type = kwargs.get("hand_type", "")
+            port = kwargs.get("port", "")
+            if not all([alias, hand_type, port]):
+                return "bind_hand requires alias, hand_type, and port."
+            interface = _resolve_serial_interface(port)
+            slave_id = _probe_hand_slave_id(hand_type, interface.address)
+            binding = svc.bind_hand(alias, hand_type, interface, slave_id)
+            return f"Hand '{alias}' configured.\n{json.dumps(binding.to_dict(), indent=2)}"
         if action == "unbind_hand":
-            return svc.config.remove_hand(kwargs.get("alias", ""))
-        return svc.config.rename_hand(kwargs.get("alias", ""), kwargs.get("new_alias", ""))
+            alias = kwargs.get("alias", "")
+            if not alias:
+                return "unbind_hand requires alias."
+            svc.unbind_hand(alias)
+            return f"Hand '{alias}' removed."
+        # rename_hand (final action in manifest group)
+        alias = kwargs.get("alias", "")
+        new_alias = kwargs.get("new_alias", "")
+        if not alias or not new_alias:
+            return "rename_hand requires alias and new_alias."
+        binding = svc.rename_hand(alias, new_alias)
+        return (
+            f"Hand renamed from '{alias}' to '{new_alias}'.\n"
+            f"{json.dumps(binding.to_dict(), indent=2)}"
+        )
 
     async def _execute_setup(self, kwargs: dict[str, Any]) -> str | list:
         svc = _get_service(self.embodied_service)

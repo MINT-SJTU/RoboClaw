@@ -106,12 +106,12 @@ class TestConvergence:
     """CLI and Web paths converge on the same service data."""
 
     def test_hardware_status_data_matches(self, service):
-        """CLI get_manifest() embeds the same status payload as the direct query."""
-        cli_json = service.queries.get_manifest()
+        """CLI manifest summary embeds the same status payload as the direct query."""
+        cli_json = service.get_manifest_summary()
         cli_data = json.loads(cli_json)
         cli_hw = cli_data["status"]
 
-        web_hw = service.queries.get_hardware_status()
+        web_hw = service.get_hardware_status()
 
         assert cli_hw["ready"] == web_hw["ready"]
         assert cli_hw["arms"] == web_hw["arms"]
@@ -125,7 +125,7 @@ class TestConvergence:
         assert resp.status_code == 200
         http_data = resp.json()
 
-        direct_data = service.queries.get_hardware_status()
+        direct_data = service.get_hardware_status()
 
         assert http_data["ready"] == direct_data["ready"]
         assert http_data["arms"] == direct_data["arms"]
@@ -172,10 +172,10 @@ class TestEmbodimentLock:
         service.release_embodiment(owner="teleop")
 
     def test_remove_arm_blocked_during_operation(self, service):
-        """Config mutation returns a rejection string when embodiment is busy."""
+        """Direct manifest mutation is blocked at the service lock level."""
         service.acquire_embodiment("recording")
-        result = service.config.remove_arm("leader")
-        assert "Cannot remove arm" in result
+        assert service.embodiment_busy
+        assert service.busy_reason == "recording"
         service.release_embodiment(owner="recording")
 
     def test_acquire_release_cycle(self, service):

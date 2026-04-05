@@ -1,7 +1,7 @@
 """SetupSession — stateful setup workflow, sub-service of EmbodiedService.
 
 Drives the discover → identify → assign → commit workflow.
-Replaces ScanningService — owns embodiment locking for scan/motion operations.
+Owns embodiment locking for scan/motion operations.
 Shared by CLI agent and Web UI.
 """
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""TeleopSession - thin wrapper over SessionService teleoperation."""
+"""TeleopSession — CLI teleoperation via OperationEngine."""
 
 from __future__ import annotations
 

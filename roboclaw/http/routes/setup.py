@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from roboclaw.embodied.manifest.helpers import _resolve_serial_interface
 
 
 class ScanRequest(BaseModel):
@@ -153,33 +154,59 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
 
     @app.post("/api/dashboard/setup/arm")
     async def setup_add_arm(body: AddArmRequest) -> dict[str, Any]:
-        await asyncio.to_thread(
-            service.config.set_arm, body.alias, body.arm_type, body.port_id,
-        )
+        try:
+            interface = await asyncio.to_thread(_resolve_serial_interface, body.port_id)
+            await asyncio.to_thread(service.bind_arm, body.alias, body.arm_type, interface)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "added", "alias": body.alias}
 
     @app.delete("/api/dashboard/setup/arm/{alias}")
     async def setup_remove_arm(alias: str) -> dict[str, str]:
-        await asyncio.to_thread(service.config.remove_arm, alias)
+        try:
+            await asyncio.to_thread(service.unbind_arm, alias)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "removed", "alias": alias}
 
     @app.patch("/api/dashboard/setup/arm/{alias}/rename")
     async def setup_rename_arm(alias: str, body: RenameRequest) -> dict[str, str]:
-        await asyncio.to_thread(service.config.rename_arm, alias, body.new_alias)
+        try:
+            await asyncio.to_thread(service.rename_arm, alias, body.new_alias)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "renamed", "old": alias, "new": body.new_alias}
 
     @app.post("/api/dashboard/setup/camera")
     async def setup_add_camera(body: AddCameraRequest) -> dict[str, Any]:
-        await asyncio.to_thread(
-            service.config.set_camera, body.alias, body.camera_index,
-        )
+        from roboclaw.embodied.hardware.scan import scan_cameras
+
+        try:
+            scanned = await asyncio.to_thread(scan_cameras)
+            if body.camera_index < 0 or body.camera_index >= len(scanned):
+                raise HTTPException(
+                    400,
+                    f"camera_index {body.camera_index} out of range. Found {len(scanned)} camera(s).",
+                )
+            interface = scanned[body.camera_index]
+            if not interface.address:
+                raise HTTPException(
+                    400,
+                    f"Scanned camera at index {body.camera_index} has no usable path.",
+                )
+            await asyncio.to_thread(service.bind_camera, body.alias, interface)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "added", "alias": body.alias}
 
     @app.delete("/api/dashboard/setup/camera/{alias}")
     async def setup_remove_camera(alias: str) -> dict[str, str]:
-        await asyncio.to_thread(service.config.remove_camera, alias)
+        try:
+            await asyncio.to_thread(service.unbind_camera, alias)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "removed", "alias": alias}
 
     @app.get("/api/dashboard/setup/current")
     async def setup_current() -> dict[str, Any]:
-        return await asyncio.to_thread(service.queries.get_current_config)
+        return service.manifest.snapshot

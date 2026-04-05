@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from roboclaw.embodied.interface.serial import SerialInterface
 from roboclaw.embodied.interface.video import VideoInterface
+from roboclaw.embodied.manifest import Manifest
 from roboclaw.http.routes.setup import register_setup_routes
 
 
@@ -64,6 +65,8 @@ def _make_app(session_busy: bool = False) -> FastAPI:
     app = FastAPI()
     svc = MagicMock()
     svc.busy = session_busy
+    svc.embodiment_busy = session_busy
+    svc.busy_reason = "recording"
 
     scanner = HardwareDiscovery()
     setup = MagicMock()
@@ -88,9 +91,12 @@ def _make_app(session_busy: bool = False) -> FastAPI:
         )
 
     svc.setup = setup
-
-    svc.config = MagicMock()
-    svc.queries = MagicMock()
+    svc.manifest = MagicMock(spec=Manifest)
+    svc.manifest.snapshot = {
+        "arms": [{"alias": "left", "type": "so101_follower"}],
+        "cameras": [{"alias": "top"}],
+        "hands": [],
+    }
 
     app.state.embodied_service = svc
     app.state.setup_wizard = scanner
@@ -170,13 +176,14 @@ def test_add_arm() -> None:
     app = _make_app()
     client = TestClient(app)
     svc = app.state.embodied_service
-    resp = client.post(
-        "/api/dashboard/setup/arm",
-        json={"alias": "left", "arm_type": "so101_follower", "port_id": "/dev/serial/by-id/usb-ABC"},
-    )
+    with patch("roboclaw.http.routes.setup._resolve_serial_interface", return_value="iface"):
+        resp = client.post(
+            "/api/dashboard/setup/arm",
+            json={"alias": "left", "arm_type": "so101_follower", "port_id": "/dev/serial/by-id/usb-ABC"},
+        )
     assert resp.status_code == 200
     assert resp.json()["status"] == "added"
-    svc.config.set_arm.assert_called_once_with("left", "so101_follower", "/dev/serial/by-id/usb-ABC")
+    svc.bind_arm.assert_called_once_with("left", "so101_follower", "iface")
 
 
 def test_remove_arm() -> None:
@@ -186,7 +193,7 @@ def test_remove_arm() -> None:
     resp = client.delete("/api/dashboard/setup/arm/left")
     assert resp.status_code == 200
     assert resp.json()["status"] == "removed"
-    svc.config.remove_arm.assert_called_once_with("left")
+    svc.unbind_arm.assert_called_once_with("left")
 
 
 def test_rename_arm() -> None:
@@ -199,20 +206,21 @@ def test_rename_arm() -> None:
     )
     assert resp.status_code == 200
     assert resp.json() == {"status": "renamed", "old": "left", "new": "right"}
-    svc.config.rename_arm.assert_called_once_with("left", "right")
+    svc.rename_arm.assert_called_once_with("left", "right")
 
 
 def test_add_camera() -> None:
     app = _make_app()
     client = TestClient(app)
     svc = app.state.embodied_service
-    resp = client.post(
-        "/api/dashboard/setup/camera",
-        json={"alias": "top", "camera_index": 0},
-    )
+    with patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_CAMERAS):
+        resp = client.post(
+            "/api/dashboard/setup/camera",
+            json={"alias": "top", "camera_index": 0},
+        )
     assert resp.status_code == 200
     assert resp.json()["status"] == "added"
-    svc.config.set_camera.assert_called_once_with("top", 0)
+    svc.bind_camera.assert_called_once_with("top", _MOCK_CAMERAS[0])
 
 
 def test_remove_camera() -> None:
@@ -221,24 +229,19 @@ def test_remove_camera() -> None:
     svc = app.state.embodied_service
     resp = client.delete("/api/dashboard/setup/camera/top")
     assert resp.status_code == 200
-    svc.config.remove_camera.assert_called_once_with("top")
+    svc.unbind_camera.assert_called_once_with("top")
 
 
 def test_current_setup() -> None:
     app = _make_app()
     client = TestClient(app)
     svc = app.state.embodied_service
-    svc.queries.get_current_config.return_value = {
-        "arms": [{"alias": "left", "type": "so101_follower"}],
-        "cameras": [{"alias": "top"}],
-        "hands": [],
-    }
     resp = client.get("/api/dashboard/setup/current")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["arms"]) == 1
     assert data["arms"][0]["alias"] == "left"
-    svc.queries.get_current_config.assert_called_once()
+    assert data == svc.manifest.snapshot
 
 
 def test_scan_returns_409_when_recording() -> None:

@@ -346,6 +346,36 @@ class Manifest:
         self._emit("camera_removed", name)
         return result
 
+    def rename_camera(self, old_name: str, new_name: str) -> dict[str, Any]:
+        if not old_name:
+            raise ValueError("Old camera alias is required.")
+        if not new_name:
+            raise ValueError("New camera alias is required.")
+
+        with self._lock:
+            camera = self._require_binding(old_name, "camera")
+            existing = self._bindings.get(new_name)
+            if old_name != new_name and existing is not None:
+                raise ValueError(f"Alias '{new_name}' already exists.")
+            renamed = Binding(
+                alias=new_name,
+                spec=camera.spec,
+                interface=camera.interface,
+                guard=camera.guard,
+                calibration_dir=camera.calibration_dir,
+                calibrated=camera.calibrated,
+                slave_id=camera.slave_id,
+                _kind=camera.kind,
+                _type_name=camera.type_name,
+            )
+            del self._bindings[old_name]
+            self._bindings[new_name] = renamed
+            self._persist()
+            result = self._snapshot_unlocked()
+
+        self._emit("camera_renamed", new_name)
+        return result
+
     def set_hand(
         self, alias: str, hand_type: str,
         interface: SerialInterface, slave_id: int,
@@ -385,6 +415,36 @@ class Manifest:
             result = self._snapshot_unlocked()
 
         self._emit("hand_removed", alias)
+        return result
+
+    def rename_hand(self, old_alias: str, new_alias: str) -> dict[str, Any]:
+        if not old_alias:
+            raise ValueError("Old hand alias is required.")
+        if not new_alias:
+            raise ValueError("New hand alias is required.")
+
+        with self._lock:
+            hand = self._require_binding(old_alias, "hand")
+            existing = self._bindings.get(new_alias)
+            if old_alias != new_alias and existing is not None:
+                raise ValueError(f"Alias '{new_alias}' already exists.")
+            renamed = Binding(
+                alias=new_alias,
+                spec=hand.spec,
+                interface=hand.interface,
+                guard=hand.guard,
+                calibration_dir=hand.calibration_dir,
+                calibrated=hand.calibrated,
+                slave_id=hand.slave_id,
+                _kind=hand.kind,
+                _type_name=hand.type_name,
+            )
+            del self._bindings[old_alias]
+            self._bindings[new_alias] = renamed
+            self._persist()
+            result = self._snapshot_unlocked()
+
+        self._emit("hand_renamed", new_alias)
         return result
 
     # ── Lifecycle ─────────────────────────────────────────────────────

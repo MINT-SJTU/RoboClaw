@@ -131,11 +131,11 @@ class TestServoPositions:
         assert data["error"] is None
 
     def test_servo_when_busy(self, client, app):
-        app.state.embodied_service.session._engine._state = "recording"
+        app.state.embodied_service._engine._state = "recording"
         resp = client.get("/api/dashboard/servo-positions")
         assert resp.status_code == 200
         assert resp.json()["error"] == "busy"
-        app.state.embodied_service.session._engine._state = "idle"
+        app.state.embodied_service._engine._state = "idle"
 
 
 # ---------------------------------------------------------------------------

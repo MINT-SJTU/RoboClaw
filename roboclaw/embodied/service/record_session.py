@@ -1,4 +1,4 @@
-"""RecordSession - thin wrapper over SessionService recording."""
+"""RecordSession — CLI dataset recording via OperationEngine."""
 
 from __future__ import annotations
 
