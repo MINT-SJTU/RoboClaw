@@ -198,16 +198,23 @@ async def test_doctor_check_action(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_scan_requires_model() -> None:
+    tool = _find_tool(create_embodied_tools(), "setup")
+    result = await tool.execute(action="scan")
+    assert "requires model" in result
+
+
+@pytest.mark.asyncio
 async def test_setup_scan_action() -> None:
     tool = _find_tool(create_embodied_tools(), "setup")
     with patch(
-        "roboclaw.embodied.service.setup_session.HardwareDiscovery.discover_all",
+        "roboclaw.embodied.service.setup_session.HardwareDiscovery.discover",
         return_value=_MOCK_SCANNED_PORTS,
     ), patch(
         "roboclaw.embodied.service.setup_session.HardwareDiscovery.discover_cameras",
         return_value=[VideoInterface(dev="/dev/video0", width=640, height=480, fps=30)],
     ):
-        result = await tool.execute(action="scan")
+        result = await tool.execute(action="scan", model="so101")
 
     assert "Found 2 serial port(s) and 1 camera(s)." in result
 

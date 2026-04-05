@@ -102,7 +102,8 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Robot model name to narrow scan protocol.",
+                    "enum": ["so101", "koch"],
+                    "description": "Robot model name — determines scan protocol. REQUIRED for scan.",
                 },
             },
             "required": ["action"],
@@ -533,7 +534,10 @@ class EmbodiedToolGroup(Tool):
         svc = _get_service(self.embodied_service)
         action = kwargs["action"]
         if action == "scan":
-            result = await asyncio.to_thread(svc.setup.run_full_scan, kwargs.get("model", ""))
+            model = kwargs.get("model", "")
+            if not model:
+                return "scan requires model parameter. Ask the user what robot model they have (e.g. so101, koch)."
+            result = await asyncio.to_thread(svc.setup.run_full_scan, model)
             return _format_scan(result)
         if action == "preview_cameras":
             return svc.setup.preview_cameras()
