@@ -329,11 +329,8 @@ class SetupSession:
         elif prompt_id == "role":
             spec = self._current_spec
             roles = spec.roles if spec else ("follower", "leader")
-            try:
-                idx = int(answer) - 1
-                self._pending_role = roles[idx] if 0 <= idx < len(roles) else roles[0]
-            except (ValueError, IndexError):
-                self._pending_role = roles[0]
+            idx = int(answer) - 1
+            self._pending_role = roles[idx]
         elif prompt_id == "alias":
             self._submit_alias(answer)
         elif prompt_id == "confirm":

@@ -110,6 +110,15 @@ def _run_prompt_step(step: PromptStep) -> str:
     if step.options:
         for i, opt in enumerate(step.options, 1):
             print(f"  [{i}] {opt}")
+        while True:
+            raw = input(step.message + " ").strip()
+            try:
+                idx = int(raw)
+                if 1 <= idx <= len(step.options):
+                    return raw
+            except ValueError:
+                pass
+            print(f"  请输入 1-{len(step.options)}")
     return input(step.message + " ").strip()
 
 
