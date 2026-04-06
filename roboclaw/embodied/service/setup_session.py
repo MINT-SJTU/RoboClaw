@@ -429,8 +429,8 @@ class SetupSession:
         print(t("scanningModel", lang, model=model))
         try:
             result = self.run_full_scan(model)
-        except (ValueError, RuntimeError) as exc:
-            print(f"  Error: {exc}")
+        except (ValueError, RuntimeError):
+            print(t("resultNotSupported", lang))
             self._set_result("not_supported")
             return
         ports = result["ports"]
