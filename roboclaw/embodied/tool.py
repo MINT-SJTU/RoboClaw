@@ -7,7 +7,7 @@ from typing import Any
 
 from roboclaw.agent.tools.base import Tool
 
-_SETUP_ACTIONS = ["identify", "modify"]
+_SETUP_ACTIONS = ["identify", "modify", "scan", "probe", "motion_start", "motion_poll", "motion_stop"]
 _DOCTOR_ACTIONS = ["check"]
 _CALIBRATION_ACTIONS = ["calibrate"]
 _TELEOP_ACTIONS = ["teleoperate"]
@@ -41,8 +41,8 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "operation": {
                     "type": "string",
-                    "enum": ["rename", "unbind"],
-                    "description": "Operation to perform for modify.",
+                    "enum": ["rename", "unbind", "rebind", "bind"],
+                    "description": "Operation for modify action.",
                 },
                 "alias": {
                     "type": "string",
@@ -50,11 +50,26 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "new_alias": {
                     "type": "string",
-                    "description": "New alias for rename operation.",
+                    "description": "New alias for rename/rebind.",
+                },
+                "new_type": {
+                    "type": "string",
+                    "description": "New arm type for rebind (e.g., 'koch_follower').",
+                },
+                "arm_type": {
+                    "type": "string",
+                    "description": "Arm type for bind_arm (e.g., 'koch_leader').",
+                },
+                "port": {
+                    "type": "string",
+                    "description": "Serial port path for probe or bind_arm (by-id path from scan).",
+                },
+                "dev": {
+                    "type": "string",
+                    "description": "Camera device path for bind_camera (e.g., '/dev/video4').",
                 },
             },
             "required": ["action"],
-            "additionalProperties": False,
         },
     },
     "doctor": {

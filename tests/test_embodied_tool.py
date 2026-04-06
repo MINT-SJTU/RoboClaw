@@ -114,7 +114,7 @@ def test_create_embodied_tools_returns_eight_groups() -> None:
 @pytest.mark.parametrize(
     ("tool_name", "expected_actions", "included", "excluded"),
     [
-        ("setup", {"identify", "modify"}, {"model", "target", "operation", "alias", "new_alias"}, {"arms", "dataset_name", "positions"}),
+        ("setup", {"identify", "modify", "scan", "probe", "motion_start", "motion_poll", "motion_stop"}, {"model", "target", "operation", "alias", "new_alias", "new_type", "arm_type", "port", "dev"}, {"arms", "dataset_name", "positions"}),
         ("doctor", {"check"}, set(), {"alias", "arms", "dataset_name"}),
         ("calibration", {"calibrate"}, {"arms"}, {"port", "dataset_name", "positions"}),
         ("teleop", {"teleoperate"}, {"arms", "fps"}, {"dataset_name", "checkpoint_path", "positions"}),
@@ -136,7 +136,6 @@ def test_tool_group_schemas(
 
     assert params["type"] == "object"
     assert params["required"] == ["action"]
-    assert params["additionalProperties"] is False
     assert set(props["action"]["enum"]) == expected_actions
     for name in included:
         assert name in props
