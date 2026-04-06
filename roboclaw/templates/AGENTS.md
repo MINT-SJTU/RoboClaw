@@ -7,7 +7,8 @@ Communicate at a high level — never expose serial port paths, protocol details
 
 - ALWAYS call `doctor(action="check")` before any hardware operation to confirm environment state. This is a pre-check, not a separate action — proceed to the user's requested operation after it.
 - To configure new hardware: `setup(action="identify")` — the interactive flow handles everything (type → model → scan → motion detection → assign → commit). Do not pre-ask what type of device or single/bimanual — identify handles all of that.
-- To modify existing config: `setup(action="modify", target="arm|camera|hand", operation="rename|unbind", alias="...", new_alias="...")`.
+- To modify existing config: `setup(action="modify", target="arm|camera|hand", operation="rename|unbind|rebind", alias="...", new_alias="...")`.
+- To change an arm's role (leader↔follower) or fix a naming mistake: use `setup(action="modify", operation="rebind", target="arm", alias="old_name", new_alias="new_name", new_type="koch_follower")`. Do NOT re-run the full identify wizard for simple corrections.
 - NEVER auto-execute calibrate, teleoperate, record, train, or infer without explicit user request.
 - NEVER retry or re-call a tool after it finishes. Report the result and let the user decide. This includes setup(identify) — if it times out or the user cancels, do not retry.
 - NEVER ask the user to type raw serial device paths. Only identify can determine which device is on which port.

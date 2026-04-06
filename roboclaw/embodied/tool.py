@@ -404,6 +404,7 @@ _MODIFY_DISPATCH = {
     ("unbind", "hand"): "unbind_hand",
     ("rename", "arm"): "rename_arm",
     ("rename", "camera"): "rename_camera",
+    ("rebind", "arm"): "rebind_arm",
     ("rename", "hand"): "rename_hand",
 }
 
@@ -423,8 +424,18 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
         getattr(svc, method_name)(alias)
         return f"{target.title()} '{alias}' removed."
 
-    # rename
     new_alias = kwargs.get("new_alias", "")
+
+    if operation == "rebind":
+        new_type = kwargs.get("new_type", "")
+        if not new_type:
+            return "rebind requires new_type (e.g., 'koch_follower')."
+        if not new_alias:
+            new_alias = alias
+        result = svc.rebind_arm(alias, new_alias, new_type)
+        return f"Arm rebound: '{alias}' → '{new_alias}' ({new_type}).\n{json.dumps(result, indent=2)}"
+
+    # rename
     if not new_alias:
         return "rename requires new_alias."
     result = getattr(svc, method_name)(alias, new_alias)

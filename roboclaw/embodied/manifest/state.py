@@ -290,6 +290,50 @@ class Manifest:
         self._emit("arm_renamed", new_alias)
         return result
 
+    def rebind_arm(
+        self, alias: str, new_alias: str, new_type: str,
+    ) -> dict[str, Any]:
+        if not alias:
+            raise ValueError("Arm alias is required.")
+        if not new_alias:
+            raise ValueError("New arm alias is required.")
+        if new_type not in _ARM_TYPES:
+            raise ValueError(
+                f"Invalid arm_type '{new_type}'. Must be one of {_ARM_TYPES}."
+            )
+
+        from roboclaw.embodied.embodiment.arm.registry import get_arm_spec
+
+        with self._lock:
+            arm = self._require_binding(alias, "arm")
+            if alias != new_alias:
+                existing = self._bindings.get(new_alias)
+                if existing is not None:
+                    raise ValueError(f"Alias '{new_alias}' already exists.")
+
+            old_base = arm.spec.name
+            new_spec = get_arm_spec(new_type)
+            same_model = old_base == new_spec.name
+
+            rebound = Binding(
+                alias=new_alias,
+                spec=new_spec,
+                interface=arm.interface,
+                guard=arm.guard,
+                calibration_dir=arm.calibration_dir,
+                calibrated=arm.calibrated if same_model else False,
+                slave_id=arm.slave_id,
+                _kind=arm.kind,
+                _type_name=new_type,
+            )
+            del self._bindings[alias]
+            self._bindings[new_alias] = rebound
+            self._persist()
+            result = self._snapshot_unlocked()
+
+        self._emit("arm_renamed", new_alias)
+        return result
+
     def mark_arm_calibrated(self, alias: str) -> dict[str, Any]:
         with self._lock:
             arm = self._require_binding(alias, "arm")
