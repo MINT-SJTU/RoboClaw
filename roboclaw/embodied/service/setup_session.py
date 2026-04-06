@@ -130,15 +130,14 @@ class SetupSession:
             self._parent.release_embodiment()
 
     def capture_previews(self, output_dir: str) -> list[dict]:
-        """Capture camera preview frames."""
-        self._parent.acquire_embodiment("camera-preview")
-        try:
-            discovery = self._discovery or HardwareDiscovery()
-            if not discovery.scanned_cameras:
-                discovery.discover_cameras()
-            return discovery.capture_camera_previews(output_dir)
-        finally:
-            self._parent.release_embodiment()
+        """Capture camera preview frames.
+
+        No embodiment lock — cameras are independent of serial ports.
+        """
+        discovery = self._discovery or HardwareDiscovery()
+        if not discovery.scanned_cameras:
+            discovery.discover_cameras()
+        return discovery.capture_camera_previews(output_dir)
 
     # -- Identify (motion detection) -----------------------------------------
 
