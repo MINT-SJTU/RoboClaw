@@ -26,7 +26,7 @@ export default function Layout() {
   }, [])
 
   return (
-    <div className="flex flex-col h-screen bg-bg text-tx">
+    <div className="flex flex-col h-screen bg-bg text-tx font-base">
       <Header />
       <main className="flex-1 overflow-hidden">
         <Outlet />

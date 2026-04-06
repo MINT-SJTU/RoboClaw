@@ -23,7 +23,7 @@ function DeviceRow({ alias, typeBadge, dotColor, statusTag, onRename, onRemove }
   const cancel = () => { setDraft(alias); setEditing(false) }
 
   return (
-    <div className="group flex items-center gap-2 px-3 py-2 rounded-lg bg-sf hover:bg-sf/80 transition-colors">
+    <div className="group flex items-center gap-2 px-3 py-2 rounded-lg bg-white hover:bg-sf border border-transparent hover:border-bd/20 shadow-sm transition-colors">
       <span className={`shrink-0 w-2 h-2 rounded-full ${dotColor}`} />
 
       {editing ? (
@@ -33,7 +33,7 @@ function DeviceRow({ alias, typeBadge, dotColor, statusTag, onRename, onRemove }
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel() }}
-            className="w-24 px-1.5 py-0.5 text-sm bg-bg border border-bd rounded text-tx outline-none focus:border-ac"
+            className="w-24 px-1.5 py-0.5 text-sm bg-sf2 border border-bd rounded text-tx outline-none focus:border-ac"
           />
           <button onClick={save} className="text-2xs text-ac hover:underline">OK</button>
           <button onClick={cancel} className="text-2xs text-tx2 hover:underline">ESC</button>
@@ -47,7 +47,7 @@ function DeviceRow({ alias, typeBadge, dotColor, statusTag, onRename, onRemove }
         </span>
       )}
 
-      <span className="shrink-0 px-1.5 py-0.5 text-2xs rounded bg-bg text-tx2 border border-bd">
+      <span className="shrink-0 px-1.5 py-0.5 text-2xs rounded bg-sf2 text-tx2 border border-bd/40 font-mono">
         {typeBadge}
       </span>
       {statusTag && (

@@ -25,9 +25,9 @@ export const useToast = create<ToastStore>((set) => ({
 }))
 
 const typeStyles: Record<string, string> = {
-  s: 'bg-gn/5 border-gn text-gn',
-  e: 'bg-rd/5 border-rd text-rd',
-  i: 'bg-ac/5 border-ac text-ac',
+  s: 'border-l-gn text-gn',
+  e: 'border-l-rd text-rd',
+  i: 'border-l-ac text-ac',
 }
 
 export default function ToastContainer() {
@@ -40,7 +40,7 @@ export default function ToastContainer() {
       {items.map((t) => (
         <div
           key={t.id}
-          className={`px-3.5 py-2 rounded-lg border text-sm pointer-events-auto shadow-sm animate-[fadeIn_.2s]
+          className={`px-3.5 py-2 rounded-lg border-l-4 bg-white text-sm pointer-events-auto shadow-elevated animate-slide-in-right
             ${typeStyles[t.type]}`}
         >
           {t.message}

@@ -4,22 +4,28 @@
 
 :root {
   --bg: #ffffff;
-  --sf: #f6f8fa;
-  --bd: #d0d7de;
-  --tx: #1f2328;
-  --tx2: #656d76;
-  --ac: #0969da;
-  --gn: #1a7f37;
-  --rd: #cf222e;
-  --yl: #9a6700;
-  --or: #bc4c00;
+  --sf: #f2f4f9;
+  --sf2: #e9ecf4;
+  --bd: #dce0eb;
+  --bd2: #c5cad8;
+  --tx: #111827;
+  --tx2: #5f6980;
+  --tx3: #9ba3b5;
+  --ac: #2563eb;
+  --ac2: #1d4ed8;
+  --gn: #059669;
+  --rd: #dc2626;
+  --yl: #d97706;
+  --or: #ea580c;
 }
 
 body {
-  font: 15px/1.6 -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font: 14px/1.6 'Outfit', -apple-system, sans-serif;
   background: var(--bg);
   color: var(--tx);
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
@@ -27,16 +33,50 @@ body {
   height: 100vh;
 }
 
+/* Animations */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-8px); }
+  from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: none; }
 }
 
 @keyframes node-appear {
-  from { opacity: 0; transform: scale(0.8); }
+  from { opacity: 0; transform: scale(0.92); }
   to { opacity: 1; transform: scale(1); }
 }
 
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes scanPulse {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
 .animate-node-appear {
-  animation: node-appear 0.3s ease-out;
+  animation: node-appear 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.25s ease-out;
+}
+
+.animate-modal-in {
+  animation: modalIn 0.2s ease-out;
+}
+
+.animate-scan-pulse {
+  animation: scanPulse 1.5s ease-out infinite;
+}
+
+/* Focus ring utility */
+.focus-ring:focus-visible {
+  outline: 2px solid var(--ac);
+  outline-offset: 2px;
 }

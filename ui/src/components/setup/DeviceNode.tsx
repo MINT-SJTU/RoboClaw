@@ -20,7 +20,7 @@ export default function DeviceNode({ id, kind, label, sublabel, moved, previewUr
   }
 
   const icon = kind === 'port' ? '⊞' : '◎'
-  const glowCls = moved ? 'ring-2 ring-gn/40 shadow-sm shadow-gn/20' : ''
+  const glowCls = moved ? 'ring-2 ring-gn/30 shadow-card border-gn/30' : ''
 
   return (
     <div
@@ -29,10 +29,10 @@ export default function DeviceNode({ id, kind, label, sublabel, moved, previewUr
       {...listeners}
       {...attributes}
       className={`
-        flex items-center gap-3 px-3 py-2.5 rounded-lg border bg-sf
+        flex items-center gap-3 px-3 py-2.5 rounded-lg border bg-white shadow-card
         cursor-grab active:cursor-grabbing transition-all select-none
         ${glowCls}
-        ${moved ? 'border-gn/50 bg-gn/5' : 'border-bd/60 hover:border-ac/50'}
+        ${moved ? 'border-gn/30 bg-gn/[0.03]' : 'border-bd/30 hover:border-ac/40'}
       `}
     >
       {previewUrl ? (
@@ -43,7 +43,7 @@ export default function DeviceNode({ id, kind, label, sublabel, moved, previewUr
           draggable={false}
         />
       ) : (
-        <span className="w-8 h-8 flex items-center justify-center rounded-md bg-bg border border-bd/50 text-tx2 text-sm shrink-0">
+        <span className="w-8 h-8 flex items-center justify-center rounded-md bg-sf2 border border-bd/30 text-tx2 text-sm shrink-0">
           {icon}
         </span>
       )}

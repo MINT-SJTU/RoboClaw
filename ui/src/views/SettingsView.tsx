@@ -59,8 +59,8 @@ export default function SettingsView() {
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
-      <div className="border-b border-bd p-4">
-        <h2 className="text-lg font-semibold">{t('settingsTitle')}</h2>
+      <div className="border-b border-bd/40 p-4">
+        <h2 className="text-xl font-bold tracking-tight">{t('settingsTitle')}</h2>
         <p className="mt-1.5 text-sm text-tx2">{t('settingsDesc')}</p>
       </div>
 
@@ -69,17 +69,17 @@ export default function SettingsView() {
         {!loading && (
           <form onSubmit={handleSave} className="space-y-5">
             {error && (
-              <div className="rounded-lg border border-rd/30 bg-rd/5 p-3 text-sm text-rd">
+              <div className="rounded-lg border border-rd/30 border-l-4 border-l-rd bg-rd/5 p-3 text-sm text-rd">
                 {error}
               </div>
             )}
             {notice && (
-              <div className="rounded-lg border border-gn/30 bg-gn/5 p-3 text-sm text-gn">
+              <div className="rounded-lg border border-gn/30 border-l-4 border-l-gn bg-gn/5 p-3 text-sm text-gn">
                 {notice}
               </div>
             )}
 
-            <section className="rounded-lg border border-bd bg-sf p-5 space-y-4">
+            <section className="rounded-lg border border-bd/30 bg-white p-6 shadow-card space-y-4">
               <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('globalProvider')}</h3>
 
               <label className="flex flex-col gap-1 text-xs text-tx2">
@@ -87,7 +87,7 @@ export default function SettingsView() {
                 <input
                   value={apiBase}
                   onChange={(e) => setApiBase(e.target.value)}
-                  className="bg-bg border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac"
+                  className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
                   placeholder="https://your-openai-compatible-endpoint/v1"
                 />
               </label>
@@ -98,12 +98,12 @@ export default function SettingsView() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  className="bg-bg border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac"
+                  className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
                   placeholder={t('apiKeyPlaceholder')}
                 />
               </label>
 
-              <div className="rounded border border-bd bg-bg p-3 text-sm text-tx2">
+              <div className="rounded-lg border border-bd/30 bg-sf p-3 text-sm text-tx2">
                 <div>{t('savedStatus')}: {hasSavedKey ? t('saved') : t('notSaved')}</div>
                 {savedKeyMask && <div>{t('savedKey')}: {savedKeyMask}</div>}
               </div>
@@ -113,7 +113,7 @@ export default function SettingsView() {
               <button
                 type="submit"
                 disabled={saving}
-                className="border border-gn text-gn px-5 py-2 rounded text-sm transition-colors hover:bg-gn/10 active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed"
+                className="bg-gn text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors hover:bg-gn/90 active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {saving ? t('saving') : t('saveSettings')}
               </button>

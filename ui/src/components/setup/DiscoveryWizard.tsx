@@ -7,10 +7,10 @@ import DeviceNode from './DeviceNode'
 
 const STEPS = ['select', 'scan', 'identify', 'review'] as const
 const btnBack = 'px-4 py-1.5 text-sm text-tx2 hover:text-tx transition-colors'
-const btnPrimary = 'px-4 py-1.5 text-sm bg-ac text-white rounded-md hover:bg-ac/90 disabled:opacity-40 transition-colors'
-const btnOutline = 'px-4 py-1.5 text-sm border border-ac text-ac rounded-md hover:bg-ac/10 transition-colors'
-const formBox = 'mt-1.5 ml-11 p-3 bg-bg border border-bd/50 rounded-lg space-y-2'
-const inputCls = 'w-full px-3 py-1.5 text-sm bg-bg border border-bd rounded-md focus:border-ac outline-none text-tx'
+const btnPrimary = 'px-4 py-1.5 text-sm bg-ac text-white rounded-lg font-medium hover:bg-ac2 disabled:opacity-40 transition-colors'
+const btnOutline = 'px-4 py-1.5 text-sm border border-ac/50 text-ac rounded-lg hover:border-ac hover:bg-ac/5 transition-colors'
+const formBox = 'mt-1.5 ml-11 p-3 bg-sf border border-bd/30 rounded-lg shadow-card space-y-2'
+const inputCls = 'w-full px-3 py-1.5 text-sm bg-sf2 border border-bd text-tx rounded focus:border-ac focus:shadow-glow-ac outline-none'
 
 // -- Step Indicator ----------------------------------------------------------
 
@@ -26,14 +26,14 @@ function StepIndicator({ current }: { current: string }) {
             i === idx ? 'bg-ac/10 text-ac' : i < idx ? 'text-gn' : 'text-tx2'
           }`}>
             <span className={`w-5 h-5 flex items-center justify-center rounded-full text-2xs ${
-              i < idx ? 'bg-gn text-white' : i === idx ? 'bg-ac text-white' : 'bg-bd/50 text-tx2'
+              i < idx ? 'bg-gn text-white' : i === idx ? 'bg-ac text-white' : 'bg-sf2 text-tx3'
             }`}>
               {i < idx ? '✓' : i + 1}
             </span>
             <span className="hidden sm:inline">{labels[i]}</span>
           </div>
           {i < STEPS.length - 1 && (
-            <div className={`w-6 h-px ${i < idx ? 'bg-gn' : 'bg-bd'}`} />
+            <div className={`w-6 h-px ${i < idx ? 'bg-gn/60' : 'bg-bd'}`} />
           )}
         </div>
       ))}
@@ -58,8 +58,8 @@ function ModelSelect() {
         {categories.map((cat) => (
           <button key={cat.id} disabled={!cat.supported} onClick={() => setCategory(cat.id)}
             className={`flex flex-col items-center gap-1 px-4 py-3 rounded-lg border text-sm font-medium transition-all ${
-              !cat.supported ? 'border-bd/40 bg-sf/40 text-tx2/50 cursor-not-allowed'
-              : cat.id === selectedCategory ? 'border-ac bg-ac/5 text-ac shadow-sm' : 'border-bd/60 bg-sf hover:border-ac/50 text-tx'
+              !cat.supported ? 'border-bd/20 bg-sf text-tx3 opacity-50 cursor-not-allowed'
+              : cat.id === selectedCategory ? 'border-ac bg-ac/5 text-ac shadow-card ring-1 ring-ac/20' : 'border-bd/30 bg-white hover:border-ac/40 shadow-card text-tx'
             }`}>
             <span className="text-lg">{categoryIcons[cat.id] || '📦'}</span>
             <span>{cat.id}</span>
@@ -72,7 +72,7 @@ function ModelSelect() {
           {models.map((m) => (
             <button key={m.name} onClick={() => { setModel(m.name); goToStep('scan') }}
               className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
-                m.name === selectedModel ? 'border-ac bg-ac/5 text-ac shadow-sm' : 'border-bd/60 bg-sf hover:border-ac/50 text-tx'
+                m.name === selectedModel ? 'border-ac bg-ac/5 text-ac shadow-card ring-1 ring-ac/20' : 'border-bd/30 bg-white hover:border-ac/40 shadow-card text-tx'
               }`}>
               {m.name}
               {m.roles.length > 0 && <span className="text-2xs text-tx2 ml-1.5">({m.roles.join('/')})</span>}
@@ -136,7 +136,7 @@ function PortAssignForm({ stableId, roles, model }: {
           {roles.map((r) => (
             <button key={r} onClick={() => setRole(r)}
               className={`px-2.5 py-1 text-2xs rounded-md border transition-colors ${
-                role === r ? 'border-ac bg-ac/10 text-ac font-medium' : 'border-bd/50 text-tx2 hover:border-ac/50'
+                role === r ? 'border-ac bg-ac/5 text-ac font-medium ring-1 ring-ac/20' : 'border-bd/50 text-tx2 hover:border-ac/50'
               }`}>
               {r}
             </button>
@@ -149,7 +149,7 @@ function PortAssignForm({ stableId, roles, model }: {
         <p className="text-2xs text-tx2">预览: {role ? `${alias.trim()}_${role}` : alias.trim()}</p>
       )}
       <button onClick={submit} disabled={!alias.trim() || (roles.length > 0 && !role)}
-        className="px-3 py-1 text-xs bg-ac text-white rounded-md disabled:opacity-40 hover:bg-ac/90 transition-colors">
+        className="px-3 py-1 text-xs bg-ac text-white rounded-lg font-medium disabled:opacity-40 hover:bg-ac2 transition-colors">
         确认分配
       </button>
     </div>
@@ -166,7 +166,7 @@ function CameraAssignForm({ stableId }: { stableId: string }) {
         placeholder="摄像头名称" className={inputCls} />
       <button onClick={() => { if (alias.trim()) sessionAssign(stableId, alias.trim(), 'opencv') }}
         disabled={!alias.trim()}
-        className="px-3 py-1 text-xs bg-ac text-white rounded-md disabled:opacity-40 hover:bg-ac/90 transition-colors">
+        className="px-3 py-1 text-xs bg-ac text-white rounded-lg font-medium disabled:opacity-40 hover:bg-ac2 transition-colors">
         确认分配
       </button>
     </div>
@@ -194,7 +194,7 @@ function IdentifyStep() {
       <p className="text-sm text-tx2">{t('moveArmPrompt')}</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Unassigned */}
-        <div className="rounded-lg border border-bd/40 p-3">
+        <div className="rounded-lg border border-bd/30 bg-white p-4 shadow-card">
           <h4 className="text-xs text-tx2 uppercase tracking-wider font-medium mb-2">未分配设备</h4>
           <div className="space-y-1.5">
             {freePorts.map((port) => (
@@ -225,11 +225,11 @@ function IdentifyStep() {
           </div>
         </div>
         {/* Assigned */}
-        <div className="rounded-lg border border-gn/20 bg-gn/[0.02] p-3">
+        <div className="rounded-lg border border-gn/20 bg-gn/[0.02] p-4 shadow-card">
           <h4 className="text-xs text-tx2 uppercase tracking-wider font-medium mb-2">已分配设备</h4>
           <div className="space-y-1.5">
             {assignments.map((a) => (
-              <div key={a.alias} className="flex items-center gap-2 bg-sf border border-gn/20 rounded-lg px-3 py-2">
+              <div key={a.alias} className="flex items-center gap-2 bg-white border border-gn/20 rounded-lg shadow-card px-3 py-2">
                 <span className="w-2 h-2 rounded-full bg-gn shrink-0" />
                 <span className="text-sm font-medium text-tx flex-1 truncate">{a.alias}</span>
                 <span className="text-2xs text-tx2 shrink-0">{a.spec_name}</span>
@@ -255,7 +255,7 @@ function ReviewStep() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-bd/40 overflow-hidden">
+      <div className="rounded-lg border border-bd/30 overflow-hidden shadow-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-tx2 text-xs bg-sf">
@@ -267,7 +267,7 @@ function ReviewStep() {
           </thead>
           <tbody>
             {assignments.map((a) => (
-              <tr key={a.alias} className="border-t border-bd/30">
+              <tr key={a.alias} className="border-t border-bd/20">
                 <td className="px-3 py-2 text-tx font-medium">{a.alias}</td>
                 <td className="px-3 py-2 text-tx2">{a.spec_name}</td>
                 <td className="px-3 py-2 text-tx2 text-2xs truncate max-w-[200px]">{a.interface_stable_id}</td>
@@ -300,9 +300,9 @@ export default function DiscoveryWizard() {
   const { wizardStep, error } = useSetup()
 
   return (
-    <div className="rounded-xl border border-bd/60 bg-bg p-6 space-y-4 shadow-sm">
+    <div className="rounded-xl border border-bd/30 bg-white p-8 space-y-4 shadow-elevated">
       {error && (
-        <div className="rounded-lg border border-rd/30 bg-rd/5 p-3 text-sm text-rd">{error}</div>
+        <div className="rounded-lg border-l-4 border-l-rd bg-rd/5 border-y-0 border-r-0 p-3 text-sm text-rd">{error}</div>
       )}
       <StepIndicator current={wizardStep} />
       {wizardStep === 'select' && <ModelSelect />}

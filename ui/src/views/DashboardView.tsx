@@ -14,7 +14,7 @@ const BASE_HUES = [210, 140, 0, 270, 30, 330] // blue, green, red, purple, orang
 function getArmPalette(armIndex: number): string[] {
   const hue = BASE_HUES[armIndex % BASE_HUES.length]
   return MOTOR_NAMES.map((_, i) => {
-    const lightness = 35 + i * 8 // 35% to 75%
+    const lightness = 30 + i * 8 // 30% to 70%
     return `hsl(${hue}, 70%, ${lightness}%)`
   })
 }
@@ -47,7 +47,7 @@ function UnifiedServoChart({
     ctx.clearRect(0, 0, w, h)
 
     // Grid
-    ctx.strokeStyle = '#e1e4e8'
+    ctx.strokeStyle = '#e9ecf4'
     ctx.lineWidth = 0.5
     for (let y = 0; y <= h; y += h / 4) {
       ctx.beginPath()
@@ -82,11 +82,11 @@ function UnifiedServoChart({
   }, [histories, armNames])
 
   return (
-    <div className="bg-sf border border-bd rounded-lg p-3">
+    <div className="bg-white border border-bd/30 rounded-lg p-3 shadow-card">
       <canvas
         ref={canvasRef}
         style={{ width: '100%', height: '200px' }}
-        className="rounded bg-bg border border-bd"
+        className="rounded bg-white border border-bd/40"
       />
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
         {armNames.map((alias, armIdx) => (
@@ -106,10 +106,10 @@ function UnifiedServoChart({
 // ── Ghost button ──────────────────────────────────────────────
 type BtnVariant = 'gn' | 'rd' | 'yl' | 'ac'
 const variantCls: Record<BtnVariant, string> = {
-  gn: 'border-gn text-gn hover:bg-gn/10',
-  rd: 'border-rd text-rd hover:bg-rd/10',
-  yl: 'border-yl text-yl hover:bg-yl/10',
-  ac: 'border-ac text-ac hover:bg-ac/10',
+  gn: 'border-gn/60 text-gn hover:border-gn hover:bg-gn/10',
+  rd: 'border-rd/60 text-rd hover:border-rd hover:bg-rd/10',
+  yl: 'border-yl/60 text-yl hover:border-yl hover:bg-yl/10',
+  ac: 'border-ac/60 text-ac hover:border-ac hover:bg-ac/10',
 }
 
 function Btn({
@@ -127,7 +127,7 @@ function Btn({
     <button
       disabled={disabled}
       onClick={onClick}
-      className={`px-3.5 py-1.5 border rounded text-sm bg-bg transition-colors active:scale-[0.97]
+      className={`px-3.5 py-1.5 border rounded text-sm bg-white transition-colors active:scale-[0.97]
         disabled:opacity-30 disabled:cursor-not-allowed ${variantCls[variant]}`}
     >
       {children}
@@ -215,13 +215,13 @@ function CameraPreviewPanel({ cameras, busy }: { cameras: any[]; busy: boolean }
   }, [busy, capturing, cameras])
 
   return (
-    <div className="bg-sf border border-bd rounded-lg p-4 col-span-2 max-[900px]:col-span-1">
+    <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card col-span-2 max-[900px]:col-span-1">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('cameras')}</h3>
         <button
           onClick={capture}
           disabled={busy || capturing}
-          className="px-2.5 py-0.5 border border-ac text-ac rounded-sm text-xs hover:bg-ac/10 disabled:opacity-30"
+          className="px-2.5 py-0.5 border border-ac/60 text-ac rounded text-xs hover:border-ac hover:bg-ac/10 disabled:opacity-30"
         >
           {capturing ? '...' : t('refresh')}
         </button>
@@ -229,7 +229,7 @@ function CameraPreviewPanel({ cameras, busy }: { cameras: any[]; busy: boolean }
       {Object.keys(previews).length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {cameras.filter((c: any) => c.connected).map((_: any, i: number) => (
-            <div key={i} className="flex-1 min-w-[200px] max-w-[400px] relative bg-bg rounded-lg overflow-hidden border border-bd">
+            <div key={i} className="flex-1 min-w-[200px] max-w-[400px] relative bg-white rounded-lg overflow-hidden border border-bd/30 shadow-card">
               <img
                 src={previews[i] || ''}
                 alt={`Camera ${i}`}
@@ -315,8 +315,8 @@ export default function DashboardView() {
   return (
     <div className="flex flex-col h-full">
       {/* Stats bar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-bd text-sm flex-wrap">
-        <span className={`px-2 py-0.5 rounded-sm text-xs font-semibold ${stateBadgeCls[state]}`}>
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-bd/40 text-sm flex-wrap">
+        <span className={`px-2 py-0.5 rounded text-xs font-semibold ${stateBadgeCls[state]}`}>
           {stateLabel[state]}
         </span>
         {state === 'recording' && (
@@ -326,14 +326,14 @@ export default function DashboardView() {
 
       {/* Error banner */}
       {session.error && (
-        <div className="px-4 py-2 bg-rd/10 border-b border-rd/30 text-rd text-sm font-mono whitespace-pre-wrap">
+        <div className="px-4 py-2 bg-rd/10 border-b border-rd/30 border-l-4 border-l-rd text-rd text-sm font-mono whitespace-pre-wrap">
           {session.error}
         </div>
       )}
 
       {/* Hardware readiness warning */}
       {!hwReady && hwStatus && (
-        <div className="px-4 py-2 bg-yl/10 border-b border-yl/30 text-yl text-sm">
+        <div className="px-4 py-2 bg-yl/10 border-b border-yl/30 border-l-4 border-l-yl text-yl text-sm">
           {hwStatus.missing.join(' · ')}
         </div>
       )}
@@ -357,7 +357,7 @@ export default function DashboardView() {
           {/* Control grid */}
           <div className="grid grid-cols-2 gap-3 p-4 max-[900px]:grid-cols-1">
             {/* Arms card */}
-            <div className="bg-sf border border-bd rounded-lg p-4">
+            <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card">
               <h3 className="text-xs text-tx2 uppercase tracking-wider mb-2 font-medium">{t('arms')}</h3>
               {hwStatus && hwStatus.arms.length > 0 ? (
                 <div className="space-y-2">
@@ -397,7 +397,7 @@ export default function DashboardView() {
             </div>
 
             {/* Cameras card */}
-            <div className="bg-sf border border-bd rounded-lg p-4">
+            <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card">
               <h3 className="text-xs text-tx2 uppercase tracking-wider mb-2 font-medium">{t('cameras')}</h3>
               {hwStatus && hwStatus.cameras.length > 0 ? (
                 <div className="space-y-2">
@@ -422,7 +422,7 @@ export default function DashboardView() {
             )}
 
             {/* Teleop card */}
-            <div className="bg-sf border border-bd rounded-lg p-4">
+            <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card">
               <h3 className="text-xs text-tx2 uppercase tracking-wider mb-2 font-medium">{t('teleoperation')}</h3>
               <div className="flex gap-2 flex-wrap">
                 <Btn variant="ac" disabled={!ok.teleopStart || !!loading} onClick={store.doTeleopStart}>
@@ -441,7 +441,7 @@ export default function DashboardView() {
             </div>
 
             {/* Recording card (full width) */}
-            <div className="bg-sf border border-bd rounded-lg p-4 col-span-2 max-[900px]:col-span-1">
+            <div className="bg-white border border-bd/30 rounded-lg p-5 shadow-card col-span-2 max-[900px]:col-span-1">
               <h3 className="text-xs text-tx2 uppercase tracking-wider mb-3 font-medium">{t('recording')}</h3>
 
               <div className="flex gap-2 flex-wrap mb-3">
@@ -451,7 +451,7 @@ export default function DashboardView() {
                     value={task}
                     onChange={(e) => setTask(e.target.value)}
                     placeholder="Pick up the red block"
-                    className="bg-bg border border-bd text-tx px-3 py-1.5 rounded text-sm focus:outline-none focus:border-ac"
+                    className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
                   />
                 </label>
               </div>
@@ -464,7 +464,7 @@ export default function DashboardView() {
                     value={numEp}
                     onChange={(e) => setNumEp(Number(e.target.value) || 10)}
                     min={1}
-                    className="bg-bg border border-bd text-tx px-3 py-1.5 rounded text-sm focus:outline-none focus:border-ac"
+                    className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-tx2 w-[100px]">
@@ -474,7 +474,7 @@ export default function DashboardView() {
                     value={episodeTime}
                     onChange={(e) => setEpisodeTime(Number(e.target.value) || 300)}
                     min={1}
-                    className="bg-bg border border-bd text-tx px-3 py-1.5 rounded text-sm focus:outline-none focus:border-ac"
+                    className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-tx2 w-[100px]">
@@ -484,7 +484,7 @@ export default function DashboardView() {
                     value={resetTime}
                     onChange={(e) => setResetTime(Number(e.target.value) || 10)}
                     min={0}
-                    className="bg-bg border border-bd text-tx px-3 py-1.5 rounded text-sm focus:outline-none focus:border-ac"
+                    className="bg-sf2 border border-bd text-tx px-3 py-2 rounded text-sm focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3"
                   />
                 </label>
                 <div className="flex gap-2 flex-1 justify-end">
@@ -507,7 +507,7 @@ export default function DashboardView() {
                     </div>
                     <div className="w-full h-2.5 bg-bd rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-ac rounded-full transition-all duration-500"
+                        className="h-full bg-gradient-to-r from-ac2 to-ac rounded-full transition-all duration-500"
                         style={{ width: `${targetEpisodes > 0 ? (savedEpisodes / targetEpisodes) * 100 : 0}%` }}
                       />
                     </div>
@@ -562,14 +562,14 @@ export default function DashboardView() {
         </div>
 
         {/* Right sidebar */}
-        <div className="bg-sf border-l border-bd flex flex-col overflow-hidden max-[900px]:border-l-0 max-[900px]:border-t max-[900px]:max-h-[50vh]">
+        <div className="bg-sf/60 border-l border-bd/40 flex flex-col overflow-hidden max-[900px]:border-l-0 max-[900px]:border-t max-[900px]:max-h-[50vh]">
           {/* Datasets */}
-          <div className="px-3 py-2.5 border-b border-bd">
+          <div className="px-3 py-2.5 border-b border-bd/40">
             <div className="flex items-center justify-between">
               <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('datasets')}</h3>
               <button
                 onClick={store.loadDatasets}
-                className="px-2.5 py-0.5 border border-ac text-ac rounded-sm text-xs hover:bg-ac/10"
+                className="px-2.5 py-0.5 border border-ac/60 text-ac rounded text-xs hover:border-ac hover:bg-ac/10"
               >
                 {t('refresh')}
               </button>
@@ -582,7 +582,7 @@ export default function DashboardView() {
             {datasets.map((d) => (
               <div
                 key={d.name}
-                className="bg-bg border border-bd rounded mb-1.5 px-3 py-2 flex items-center gap-2 text-sm"
+                className="bg-white border border-bd/30 rounded-lg shadow-card mb-1.5 px-3 py-2 flex items-center gap-2 text-sm"
               >
                 <span className="flex-1 font-semibold text-tx">{d.name}</span>
                 <span className="text-tx2 text-xs whitespace-nowrap">
@@ -593,7 +593,7 @@ export default function DashboardView() {
                   onClick={() => {
                     if (confirm(`${t('deleteConfirm')} "${d.name}"?`)) store.deleteDataset(d.name)
                   }}
-                  className="px-2 py-0.5 border border-rd text-rd rounded-sm text-xs hover:bg-rd/10"
+                  className="px-2 py-0.5 border border-rd/60 text-rd rounded text-xs hover:border-rd hover:bg-rd/10"
                 >
                   {t('del')}
                 </button>
@@ -602,7 +602,7 @@ export default function DashboardView() {
           </div>
 
           {/* Log */}
-          <div className="px-3 py-2.5 border-t border-bd">
+          <div className="px-3 py-2.5 border-t border-bd/40">
             <div className="flex items-center justify-between">
               <h3 className="text-xs text-tx2 uppercase tracking-wider font-medium">{t('log')}</h3>
               <button
@@ -621,7 +621,7 @@ export default function DashboardView() {
                   entry.cls === 'err' ? 'text-rd' : entry.cls === 'ok' ? 'text-gn' : 'text-tx2'
                 }`}
               >
-                <span className="text-tx2 mr-2 text-2xs">{entry.time}</span>
+                <span className="text-tx3 mr-2 text-2xs">{entry.time}</span>
                 {entry.message}
               </div>
             ))}

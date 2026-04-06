@@ -44,15 +44,15 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
 
   if (cal.state === 'done') {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-sf rounded-lg shadow-xl p-6 w-[480px]">
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+        <div className="bg-white rounded-xl shadow-elevated p-6 w-[480px] max-w-[95vw] border border-bd/20">
           <h2 className="text-lg font-bold text-tx mb-4">✓ 校准完成</h2>
           <p className="text-sm text-tx2 mb-4">
             臂 <strong>{cal.arm_alias}</strong> 校准数据已保存。
           </p>
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded bg-ac text-white text-sm hover:bg-ac/90"
+            className="px-4 py-2 rounded-lg bg-ac text-white text-sm font-medium hover:bg-ac2"
           >
             关闭
           </button>
@@ -62,23 +62,23 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-sf rounded-lg shadow-xl p-6 w-[560px] max-h-[80vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-elevated p-6 w-[560px] max-w-[95vw] max-h-[80vh] overflow-y-auto border border-bd/20">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-bold text-tx">
             校准: {cal.arm_alias}
           </h2>
-          <button onClick={handleCancel} className="text-tx2 hover:text-tx text-xl">×</button>
+          <button onClick={handleCancel} className="w-8 h-8 flex items-center justify-center rounded-lg text-tx3 hover:text-tx hover:bg-sf text-lg">×</button>
         </div>
 
         {cal.error && (
-          <div className="bg-rd/10 text-rd text-sm p-3 rounded mb-4">{cal.error}</div>
+          <div className="bg-rd/5 text-rd text-sm p-3 rounded border-l-4 border-l-rd mb-4">{cal.error}</div>
         )}
 
         {/* Step 1: Set middle position */}
         {cal.state === 'connected' && (
           <div>
-            <div className="bg-ac/5 border border-ac/20 rounded p-4 mb-4">
+            <div className="bg-ac/5 border border-ac/15 rounded-lg p-4 mb-4">
               <h3 className="font-semibold text-tx mb-2">步骤 1：设定中位</h3>
               <p className="text-sm text-tx2">
                 把机械臂的每个关节都摆到行程的中间位置，然后点击"确认中位"。
@@ -86,7 +86,7 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
             </div>
             <button
               onClick={handleSetHoming}
-              className="px-4 py-2 rounded bg-ac text-white text-sm hover:bg-ac/90"
+              className="px-4 py-2 rounded-lg bg-ac text-white text-sm font-medium hover:bg-ac2"
             >
               确认中位
             </button>
@@ -96,7 +96,7 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
         {/* Step 2: Record range */}
         {cal.state === 'recording' && (
           <div>
-            <div className="bg-gn/5 border border-gn/20 rounded p-4 mb-4">
+            <div className="bg-gn/5 border border-gn/20 rounded-lg p-4 mb-4">
               <h3 className="font-semibold text-tx mb-2">步骤 2：录制关节范围</h3>
               <p className="text-sm text-tx2">
                 逐个晃动每个关节到两端极限位置。下方表格实时显示各关节的最小值、当前值、最大值。
@@ -108,7 +108,7 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
             <div className="overflow-x-auto mb-4">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-bd">
+                  <tr className="border-b border-bd/40 bg-sf/50">
                     <th className="text-left py-1.5 text-tx2 font-medium">关节</th>
                     <th className="text-right py-1.5 text-tx2 font-medium">最小</th>
                     <th className="text-right py-1.5 text-tx2 font-medium">当前</th>
@@ -125,7 +125,7 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
                       ? max - min : '-'
                     const moved = typeof range === 'number' && range > 50
                     return (
-                      <tr key={motor} className="border-b border-bd/50">
+                      <tr key={motor} className="border-b border-bd/30">
                         <td className="py-1.5 text-tx font-mono">{motor}</td>
                         <td className="text-right py-1.5 font-mono text-tx2">{min}</td>
                         <td className="text-right py-1.5 font-mono text-tx">{pos}</td>
@@ -136,7 +136,7 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
                       </tr>
                     )
                   })}
-                  <tr className="border-b border-bd/50">
+                  <tr className="border-b border-bd/30">
                     <td className="py-1.5 text-tx font-mono">wrist_roll</td>
                     <td colSpan={4} className="text-right py-1.5 text-tx2 text-xs">
                       连续旋转 — 自动 [0, 4095]
@@ -149,13 +149,13 @@ export function CalibrationWizard({ onClose }: { onClose: () => void }) {
             <div className="flex gap-2">
               <button
                 onClick={handleFinish}
-                className="px-4 py-2 rounded bg-gn text-white text-sm hover:bg-gn/90"
+                className="px-4 py-2 rounded-lg bg-gn text-white text-sm font-medium hover:bg-gn/90"
               >
                 保存校准
               </button>
               <button
                 onClick={handleCancel}
-                className="px-4 py-2 rounded bg-sf border border-bd text-tx text-sm hover:bg-bd/20"
+                className="px-4 py-2 rounded-lg bg-sf border border-bd/40 text-tx text-sm hover:bg-sf2"
               >
                 取消
               </button>

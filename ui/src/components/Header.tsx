@@ -21,14 +21,15 @@ export default function Header() {
   ]
 
   return (
-    <header className="flex items-center gap-3 px-4 py-2 bg-sf border-b border-bd flex-wrap">
-      <h1 className="text-lg font-semibold text-ac whitespace-nowrap">RoboClaw</h1>
+    <header className="flex items-center gap-3 px-4 py-2 bg-white border-b border-bd/40 shadow-sm flex-wrap">
+      <h1 className="text-base font-bold tracking-tight text-ac whitespace-nowrap">RoboClaw</h1>
 
       <span
-        className={`inline-block px-2 py-0.5 rounded-sm text-2xs font-semibold tracking-wide ${
-          connected ? 'bg-gn/15 text-gn' : 'bg-rd/15 text-rd'
+        className={`flex items-center gap-1.5 text-2xs font-medium ${
+          connected ? 'text-gn' : 'text-rd'
         }`}
       >
+        <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-gn' : 'bg-rd'}`} />
         {connected ? t('connected') : t('disconnected')}
       </span>
 
@@ -37,10 +38,10 @@ export default function Header() {
           <Link
             key={item.path}
             to={item.path}
-            className={`px-3 py-1 rounded text-sm transition-colors ${
+            className={`px-3 py-1 text-sm transition-colors ${
               location.pathname === item.path
-                ? 'bg-ac/10 text-ac font-medium'
-                : 'text-tx2 hover:text-tx hover:bg-sf'
+                ? 'text-ac font-medium border-b-2 border-ac'
+                : 'text-tx2 hover:text-tx'
             }`}
           >
             {item.label}
@@ -48,10 +49,10 @@ export default function Header() {
         ))}
         <Link
           to="/setup"
-          className={`px-3 py-1 rounded text-sm transition-colors ${
+          className={`px-3 py-1 text-sm transition-colors ${
             location.pathname === '/setup'
-              ? 'bg-ac/10 text-ac font-medium'
-              : 'text-tx2 hover:text-tx hover:bg-sf'
+              ? 'text-ac font-medium border-b-2 border-ac'
+              : 'text-tx2 hover:text-tx'
           }`}
         >
           {t('setup')}
@@ -61,14 +62,14 @@ export default function Header() {
       <div className="flex-1" />
 
       {networkInfo && (
-        <span className="text-2xs text-tx2 whitespace-nowrap mr-2">
+        <span className="text-2xs text-tx3 font-mono whitespace-nowrap mr-2">
           {networkInfo.lan_ip}:{networkInfo.port}
         </span>
       )}
 
       <button
         onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}
-        className="px-2.5 py-1 border border-bd rounded text-sm text-tx2 hover:text-tx hover:bg-sf transition-colors"
+        className="text-tx3 hover:text-tx2 text-xs transition-colors"
       >
         {locale === 'zh' ? 'EN' : '中文'}
       </button>
