@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from roboclaw.embodied.manifest import Manifest
-from roboclaw.embodied.manifest.helpers import save_manifest
-from roboclaw.embodied.tool import create_embodied_tools, EmbodiedToolGroup
+from roboclaw.embodied.embodiment.manifest import Manifest
+from roboclaw.embodied.embodiment.manifest.helpers import save_manifest
+from roboclaw.embodied.toolkit.tools import create_embodied_tools, EmbodiedToolGroup
 
 
 _MOCK_SETUP = {
@@ -55,15 +55,15 @@ async def test_identify_with_tty_uses_tty_session(tmp_path: Path) -> None:
     async def fake_tty_run(self, session):
         return "Setup complete. 2 binding(s) committed to manifest."
 
-    with patch("roboclaw.embodied.adapters.tty.TtySession.run", fake_tty_run):
+    with patch("roboclaw.embodied.toolkit.tty.TtySession.run", fake_tty_run):
         result = await tool.execute(action="identify")
     assert "Setup complete" in result
 
 
 # ── Unit tests for hardware module helpers ─────────────────────────────
 
-from roboclaw.embodied.hardware.motion import detect_motion
-from roboclaw.embodied.hardware.scan import port_candidates
+from roboclaw.embodied.embodiment.hardware.motion import detect_motion
+from roboclaw.embodied.embodiment.hardware.scan import port_candidates
 
 
 def test_detect_motion_above_threshold() -> None:
@@ -88,7 +88,7 @@ def test_detect_motion_missing_ids() -> None:
 
 
 def test_port_candidates_adds_cu_variant_on_macos() -> None:
-    import roboclaw.embodied.hardware.scan as scan_module
+    import roboclaw.embodied.embodiment.hardware.scan as scan_module
     with patch.object(scan_module.sys, "platform", "darwin"):
         assert port_candidates("/dev/tty.usbmodem123") == [
             "/dev/tty.usbmodem123",

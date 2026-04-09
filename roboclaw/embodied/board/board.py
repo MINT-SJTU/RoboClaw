@@ -1,19 +1,24 @@
-"""Board — per-session unified state source (看板).
+"""Board — per-embodiment unified state + pub/sub hub (看板).
 
 Writers: OutputConsumer writes parsed subprocess output.
 Readers: Agent and Frontend read current state and logs.
 Commands: Agent and Frontend post commands (save, discard, stop).
+Pub/Sub: Any component can subscribe to channels; Board broadcasts.
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import threading
 import time
 from collections import deque
-from typing import Any
+from typing import Any, Awaitable, Callable
 
+from loguru import logger
+
+from roboclaw.embodied.board.channels import CH_SESSION
 from roboclaw.embodied.board.constants import SessionState
-from roboclaw.embodied.events import EventBus, SessionStateChangedEvent
 
 IDLE_STATE: dict[str, Any] = {
     "state": SessionState.IDLE,
@@ -28,16 +33,59 @@ IDLE_STATE: dict[str, Any] = {
     "error": "",
 }
 
+Subscriber = Callable[[str, dict[str, Any]], Awaitable[None] | None]
+
 
 class Board:
-    def __init__(self, event_bus: EventBus | None = None, max_log_lines: int = 200) -> None:
-        self._bus = event_bus
+    def __init__(self, max_log_lines: int = 200) -> None:
         self._lock = threading.Lock()
         self._state: dict[str, Any] = dict(IDLE_STATE)
         self._commands: deque[str] = deque()
         self._log: deque[str] = deque(maxlen=max_log_lines)
         self._start_time: float = 0.0
-        self._input_consumer_notify: Any = None  # set by Session when wiring InputConsumer
+        self._input_consumer_notify: Any = None
+        self._subscribers: dict[str | None, list[Subscriber]] = {}
+
+    # ── Pub/Sub ──
+
+    def on(self, channel: str | None, handler: Subscriber) -> None:
+        """Subscribe *handler* to *channel* (``None`` = all channels)."""
+        with self._lock:
+            self._subscribers.setdefault(channel, []).append(handler)
+
+    def off(self, channel: str | None, handler: Subscriber) -> None:
+        """Remove *handler* from *channel*."""
+        with self._lock:
+            handlers = self._subscribers.get(channel, [])
+            if handler in handlers:
+                handlers.remove(handler)
+
+    async def emit(self, channel: str, data: dict[str, Any]) -> None:
+        """Publish *data* to *channel*. Notifies matching + wildcard subscribers."""
+        with self._lock:
+            handlers = [
+                *self._subscribers.get(channel, []),
+                *self._subscribers.get(None, []),
+            ]
+        for handler in handlers:
+            try:
+                result = handler(channel, data)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("Board subscriber error on channel '{}'", channel)
+
+    def emit_sync(self, channel: str, data: dict[str, Any]) -> None:
+        """Fire-and-forget emit for synchronous contexts (e.g. Manifest).
+
+        Schedules emit() on the running event loop. Safe to call from
+        threads that hold synchronous locks.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.emit(channel, data))
+        except RuntimeError:
+            logger.debug("emit_sync(): no running event loop, event on '{}' dropped", channel)
 
     # ── State (OutputConsumer writes, Agent/Frontend reads) ──
 
@@ -51,7 +99,7 @@ class Board:
             return s
 
     async def update(self, **fields: Any) -> None:
-        """Update state fields and emit SessionStateChangedEvent.
+        """Update state fields and emit to CH_SESSION.
 
         Only emits if at least one field actually changed.
         """
@@ -63,15 +111,15 @@ class Board:
             snapshot = dict(self._state)
             if self._start_time and snapshot["state"] not in (SessionState.IDLE, SessionState.ERROR):
                 snapshot["elapsed_seconds"] = round(time.monotonic() - self._start_time, 1)
-        if self._bus:
-            await self._bus.emit(SessionStateChangedEvent(**snapshot))
+        snapshot["timestamp"] = time.time()
+        await self.emit(CH_SESSION, snapshot)
 
     def start_timer(self) -> None:
         with self._lock:
             self._start_time = time.monotonic()
 
     def reset(self) -> None:
-        """Reset to initial idle state."""
+        """Reset session state to idle. Preserves subscriptions."""
         with self._lock:
             self._state = dict(IDLE_STATE)
             self._commands.clear()

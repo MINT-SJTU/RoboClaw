@@ -17,7 +17,7 @@ def _datasets_root(service: EmbodiedService) -> Path:
     root = service.manifest.snapshot.get("datasets", {}).get("root", "")
     if root:
         return Path(root).expanduser()
-    from roboclaw.embodied.manifest.helpers import get_roboclaw_home
+    from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home
     return get_roboclaw_home() / "workspace" / "embodied" / "datasets"
 
 

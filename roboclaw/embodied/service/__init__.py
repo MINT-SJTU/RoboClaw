@@ -6,26 +6,24 @@ import json
 import threading
 from typing import Any
 
-from roboclaw.embodied.board import Command, SessionState
+from roboclaw.embodied.board import Board, Command, SessionState
 from roboclaw.embodied.board.board import IDLE_STATE
 from roboclaw.embodied.command import CommandBuilder, group_arms
-from roboclaw.embodied.events import EventBus
-from roboclaw.embodied.hardware.monitor import (
+from roboclaw.embodied.embodiment.hardware.monitor import (
     ArmStatus, CameraStatus, HardwareMonitor,
     check_arm_status, check_camera_status,
 )
-from roboclaw.embodied.manifest import Manifest
-from roboclaw.embodied.manifest.binding import Binding
-from roboclaw.embodied.session import (
+from roboclaw.embodied.embodiment.manifest import Manifest
+from roboclaw.embodied.embodiment.manifest.binding import Binding
+from roboclaw.embodied.service.session import (
     InferSession, RecordSession, ReplaySession, Session,
     TeleopSession, TrainSession,
 )
-from roboclaw.embodied.session.calibrate import (
-    CalibrationEngine, CalibrationSession as CalibrationCLI,
+from roboclaw.embodied.service.session.calibrate import (
+    CalibrationService, CalibrationSession as CalibrationCLI,
 )
-from roboclaw.embodied.service.calibration import CalibrationService
-from roboclaw.embodied.service.doctor import DoctorService
-from roboclaw.embodied.session.setup import SetupSession
+from roboclaw.embodied.embodiment.doctor import DoctorService
+from roboclaw.embodied.service.session.setup import SetupSession
 
 
 class EmbodimentBusyError(RuntimeError):
@@ -69,12 +67,12 @@ class EmbodiedService:
     def __init__(
         self,
         hardware_monitor: HardwareMonitor | None = None,
-        event_bus: EventBus | None = None,
+        board: Board | None = None,
         manifest: Manifest | None = None,
     ) -> None:
         self._monitor = hardware_monitor
-        self._bus = event_bus or EventBus()
-        self.manifest = manifest or Manifest(event_bus=self._bus)
+        self.board = board or Board()
+        self.manifest = manifest or Manifest(board=self.board)
         self.manifest.ensure()
         self._lock = threading.Lock()
         self._embodiment_owner: str = ""
@@ -82,7 +80,7 @@ class EmbodiedService:
         self._recording_started = False
 
         # Sub-services
-        self.calibration = CalibrationService(self, event_bus=self._bus)
+        self.calibration = CalibrationService(self, board=self.board)
         self.setup = SetupSession(self)
         self.teleop = TeleopSession(self)
         self.record = RecordSession(self)
@@ -91,10 +89,6 @@ class EmbodiedService:
         self.infer = InferSession(self)
         self.doctor = DoctorService(self)
         self.calibration_session = CalibrationCLI(self)
-
-    @property
-    def event_bus(self) -> EventBus:
-        return self._bus
 
     # -- Embodiment lock --
 
@@ -113,14 +107,14 @@ class EmbodiedService:
     def busy_reason(self) -> str:
         with self._lock:
             if self._active_session and self._active_session.busy:
-                return self._active_session.board.state.get("state", "unknown")
+                return self.board.state.get("state", "unknown")
             return self._embodiment_owner
 
     def acquire_embodiment(self, owner: str) -> None:
         with self._lock:
             active = self._active_session is not None and self._active_session.busy
             if active or self._embodiment_owner:
-                reason = self._active_session.board.state.get("state", "") if active else self._embodiment_owner
+                reason = self.board.state.get("state", "") if active else self._embodiment_owner
                 raise EmbodimentBusyError(f"Embodiment busy: {reason}")
             self._embodiment_owner = owner
 
@@ -133,9 +127,7 @@ class EmbodiedService:
     # -- Status --
 
     def get_status(self) -> dict[str, Any]:
-        if self._active_session:
-            return self._active_session.board.state
-        return dict(IDLE_STATE)
+        return self.board.state
 
     # -- Operations (Web entry points) --
 
@@ -160,7 +152,7 @@ class EmbodiedService:
             episode_time_s=episode_time_s,
             reset_time_s=reset_time_s,
         )
-        await self.record.board.update(target_episodes=num_episodes, dataset=dataset_name)
+        await self.board.update(target_episodes=num_episodes, dataset=dataset_name)
         self._active_session = self.record
         await self.record.start(argv)
         self._recording_started = True
@@ -211,15 +203,15 @@ class EmbodiedService:
 
     async def save_episode(self) -> None:
         if self._active_session:
-            self._active_session.board.post_command(Command.SAVE_EPISODE)
+            self.board.post_command(Command.SAVE_EPISODE)
 
     async def discard_episode(self) -> None:
         if self._active_session:
-            self._active_session.board.post_command(Command.DISCARD_EPISODE)
+            self.board.post_command(Command.DISCARD_EPISODE)
 
     async def skip_reset(self) -> None:
         if self._active_session:
-            self._active_session.board.post_command(Command.SKIP_RESET)
+            self.board.post_command(Command.SKIP_RESET)
 
     # -- Calibration (delegated) --
 
@@ -246,7 +238,7 @@ class EmbodiedService:
     def _require_not_busy(self) -> None:
         active = self._active_session is not None and self._active_session.busy
         if active or self._embodiment_owner:
-            reason = self._active_session.board.state.get("state", "") if active else self._embodiment_owner
+            reason = self.board.state.get("state", "") if active else self._embodiment_owner
             raise EmbodimentBusyError(f"Cannot modify config while busy: {reason}")
 
     def bind_arm(self, alias: str, arm_type: str, interface: Any) -> Binding:
@@ -321,7 +313,7 @@ class EmbodiedService:
     def read_servo_positions(self) -> dict[str, Any]:
         if self.busy:
             return {"error": "busy", "arms": {}}
-        from roboclaw.embodied.hardware.motors import read_servo_positions
+        from roboclaw.embodied.embodiment.hardware.motors import read_servo_positions
         return read_servo_positions(self.manifest.arms)
 
     # -- Shutdown --

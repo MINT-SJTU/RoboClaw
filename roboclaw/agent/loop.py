@@ -137,7 +137,7 @@ class AgentLoop:
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
         if not self.restrict_to_workspace:
-            from roboclaw.embodied.tool import create_embodied_tools
+            from roboclaw.embodied.toolkit.tools import create_embodied_tools
             for tool in create_embodied_tools(tty_handoff=self.tty_handoff):
                 tool.embodied_service = self.embodied_service
                 self.tools.register(tool)

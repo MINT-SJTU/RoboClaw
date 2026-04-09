@@ -114,43 +114,26 @@ class WebRuntime:
         return rt
 
     def _build_embodied(self, web_ch: Any) -> None:
-        """Build HardwareMonitor and EmbodiedService with EventBus."""
-        from roboclaw.embodied.events import (
-            CalibrationStateChangedEvent,
-            ConfigChangedEvent,
-            Event,
-            EventBus,
-            FaultDetectedEvent,
-            FaultResolvedEvent,
-            SessionStateChangedEvent,
-        )
-        from roboclaw.embodied.hardware.monitor import HardwareMonitor
-        from roboclaw.embodied.manifest import Manifest
+        """Build HardwareMonitor and EmbodiedService with Board."""
+        from roboclaw.embodied.board import Board, WS_TYPES
+        from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
+        from roboclaw.embodied.embodiment.manifest import Manifest
         from roboclaw.embodied.service import EmbodiedService
 
-        event_bus = EventBus()
+        board = Board()
 
-        # Map domain events → WebSocket type strings
-        _WS_TYPE: dict[type[Event], str] = {
-            SessionStateChangedEvent: "dashboard.session.state_changed",
-            FaultDetectedEvent: "dashboard.fault.detected",
-            FaultResolvedEvent: "dashboard.fault.resolved",
-            CalibrationStateChangedEvent: "dashboard.calibration.state_changed",
-            ConfigChangedEvent: "dashboard.config.changed",
-        }
-
-        async def _web_subscriber(event: Event) -> None:
-            ws_type = _WS_TYPE.get(type(event))
+        async def _board_subscriber(channel: str, data: dict[str, Any]) -> None:
+            ws_type = WS_TYPES.get(channel)
             if ws_type:
-                await web_ch.broadcast({"type": ws_type, **event.to_dict()})
+                await web_ch.broadcast({"type": ws_type, **data})
 
-        event_bus.on(None, _web_subscriber)
+        board.on(None, _board_subscriber)
 
-        manifest = Manifest(event_bus=event_bus)
-        self.hw_monitor = HardwareMonitor(event_bus=event_bus, manifest=manifest)
+        manifest = Manifest(board=board)
+        self.hw_monitor = HardwareMonitor(board=board, manifest=manifest)
         self.embodied_service = EmbodiedService(
             hardware_monitor=self.hw_monitor,
-            event_bus=event_bus,
+            board=board,
             manifest=manifest,
         )
 

@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roboclaw.embodied.session.calibrate import CalibrationEngine as CalibrationSession
+from roboclaw.embodied.service.session.calibrate import CalibrationEngine as CalibrationSession
 # SO101 constant was deleted; tests need rewrite for new spec dict approach
-from roboclaw.embodied.manifest.binding import Binding
+from roboclaw.embodied.embodiment.manifest.binding import Binding
 
 
 @pytest.fixture

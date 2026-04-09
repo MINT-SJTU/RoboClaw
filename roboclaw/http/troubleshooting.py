@@ -10,7 +10,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from roboclaw.embodied.hardware.monitor import HardwareFault
+from roboclaw.embodied.embodiment.hardware.monitor import HardwareFault
 
 
 @dataclass

@@ -16,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.embodied.manifest import Manifest
+from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.service import EmbodiedService, EmbodimentBusyError
 from roboclaw.http.routes import register_all_routes
 
@@ -76,7 +76,7 @@ def service(tmp_path, monkeypatch):
 @pytest.fixture()
 def app_and_service(service):
     """FastAPI app with dashboard routes wired to the same service instance."""
-    from roboclaw.embodied.hardware.monitor import HardwareMonitor
+    from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
 
     app = FastAPI()
     hw = HardwareMonitor(manifest=service.manifest)
@@ -134,8 +134,8 @@ class TestConvergence:
 
     def test_scan_same_method_cli_and_web(self, service, monkeypatch):
         """CLI scan and Web scan call the exact same service method."""
-        from roboclaw.embodied.interface.serial import SerialInterface
-        from roboclaw.embodied.interface.video import VideoInterface
+        from roboclaw.embodied.embodiment.interface.serial import SerialInterface
+        from roboclaw.embodied.embodiment.interface.video import VideoInterface
 
         fake_port = SerialInterface(dev="/dev/ttyACM0", motor_ids=(1, 2, 3))
         fake_cam = VideoInterface(dev="/dev/video0")

@@ -6,14 +6,14 @@ import time
 
 import pytest
 
-from roboclaw.embodied.hardware.monitor import (
+from roboclaw.embodied.embodiment.hardware.monitor import (
     FaultType,
     HardwareFault,
     _check_arms,
     _check_cameras,
     _fault_key,
 )
-from roboclaw.embodied.manifest.binding import Binding
+from roboclaw.embodied.embodiment.manifest.binding import Binding
 
 
 # ---------------------------------------------------------------------------

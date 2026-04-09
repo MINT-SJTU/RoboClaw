@@ -238,7 +238,7 @@ def create_app(
         app.state.embodied_service = runtime.embodied_service
 
         # Wire the service into the agent's embodied tool groups
-        from roboclaw.embodied.tool import EmbodiedToolGroup
+        from roboclaw.embodied.toolkit.tools import EmbodiedToolGroup
 
         runtime.agent.embodied_service = runtime.embodied_service
         for tool in runtime.agent.tools.iter_tools():
@@ -299,7 +299,7 @@ def _check_device_permissions() -> None:
 
     if sys.platform != "linux":
         return
-    from roboclaw.embodied.hardware.scan import list_serial_device_paths
+    from roboclaw.embodied.embodiment.hardware.scan import list_serial_device_paths
     devices = list_serial_device_paths()
     if not devices:
         return
@@ -307,7 +307,7 @@ def _check_device_permissions() -> None:
     if not denied:
         return
     logger.warning("Serial devices without permission: {}", denied)
-    from roboclaw.embodied.hardware.scan import fix_serial_permissions
+    from roboclaw.embodied.embodiment.hardware.scan import fix_serial_permissions
     if fix_serial_permissions():
         logger.info("Auto-fixed serial device permissions")
     else:

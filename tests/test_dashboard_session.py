@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from roboclaw.embodied.session import Session as OperationEngine  # TODO: rewrite tests for new Session API
+from roboclaw.embodied.service.session import Session as OperationEngine  # TODO: rewrite tests for new Session API
 
 
 # ---------------------------------------------------------------------------

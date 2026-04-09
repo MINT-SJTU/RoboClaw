@@ -21,17 +21,17 @@ def app(tmp_path):
         async def broadcast(self, event):
             pass
 
-    from roboclaw.embodied.events import EventBus
-    from roboclaw.embodied.hardware.monitor import HardwareMonitor
-    from roboclaw.embodied.manifest import Manifest
+    from roboclaw.embodied.board import Board
+    from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
+    from roboclaw.embodied.embodiment.manifest import Manifest
 
     manifest_path = tmp_path / "manifest.json"
-    event_bus = EventBus()
-    manifest = Manifest(path=manifest_path, event_bus=event_bus)
-    hw_monitor = HardwareMonitor(event_bus=event_bus, manifest=manifest)
+    board = Board()
+    manifest = Manifest(path=manifest_path, board=board)
+    hw_monitor = HardwareMonitor(board=board, manifest=manifest)
     app.state.hardware_monitor = hw_monitor
 
-    service = EmbodiedService(hardware_monitor=hw_monitor, event_bus=event_bus, manifest=manifest)
+    service = EmbodiedService(hardware_monitor=hw_monitor, board=board, manifest=manifest)
     app.state.embodied_service = service
 
     register_all_routes(app, FakeChannel(), service, get_config=lambda: ("0.0.0.0", 8080))

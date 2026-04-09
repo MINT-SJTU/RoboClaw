@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from roboclaw.embodied.hardware.monitor import HardwareMonitor
+from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
 from roboclaw.embodied.service import EmbodiedService
 from roboclaw.http.troubleshooting import generate_fault_snapshot, get_troubleshoot_map_json
 

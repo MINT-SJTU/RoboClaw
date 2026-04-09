@@ -12,9 +12,9 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.embodied.interface.serial import SerialInterface
-from roboclaw.embodied.interface.video import VideoInterface
-from roboclaw.embodied.manifest import Manifest
+from roboclaw.embodied.embodiment.interface.serial import SerialInterface
+from roboclaw.embodied.embodiment.interface.video import VideoInterface
+from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.http.routes.setup import register_setup_routes
 
 
@@ -36,11 +36,11 @@ def _scan_context(cameras: list | None = None):
     runs, populates _scanned_ports, and returns motor-bearing ports."""
     cam_list = cameras if cameras is not None else []
     return contextlib.ExitStack(), [
-        patch("roboclaw.embodied.hardware.discovery.scan_serial_ports", return_value=_RAW_PORTS),
-        patch("roboclaw.embodied.hardware.discovery.scan_cameras", return_value=cam_list),
-        patch("roboclaw.embodied.hardware.probers.feetech.FeetechProber.probe", return_value=[1, 2, 3, 4, 5, 6]),
-        patch("roboclaw.embodied.hardware.discovery.suppress_stderr", return_value=99),
-        patch("roboclaw.embodied.hardware.discovery.restore_stderr"),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.scan_serial_ports", return_value=_RAW_PORTS),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.scan_cameras", return_value=cam_list),
+        patch("roboclaw.embodied.embodiment.hardware.probers.feetech.FeetechProber.probe", return_value=[1, 2, 3, 4, 5, 6]),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.suppress_stderr", return_value=99),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.restore_stderr"),
     ]
 
 
@@ -49,18 +49,18 @@ def _patched_scan(cameras: list | None = None):
     """Convenience wrapper: enter all scan patches at once."""
     cam_list = cameras if cameras is not None else []
     with (
-        patch("roboclaw.embodied.hardware.discovery.scan_serial_ports", return_value=_RAW_PORTS),
-        patch("roboclaw.embodied.hardware.discovery.scan_cameras", return_value=cam_list),
-        patch("roboclaw.embodied.hardware.probers.feetech.FeetechProber.probe", return_value=[1, 2, 3, 4, 5, 6]),
-        patch("roboclaw.embodied.hardware.discovery.suppress_stderr", return_value=99),
-        patch("roboclaw.embodied.hardware.discovery.restore_stderr"),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.scan_serial_ports", return_value=_RAW_PORTS),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.scan_cameras", return_value=cam_list),
+        patch("roboclaw.embodied.embodiment.hardware.probers.feetech.FeetechProber.probe", return_value=[1, 2, 3, 4, 5, 6]),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.suppress_stderr", return_value=99),
+        patch("roboclaw.embodied.embodiment.hardware.discovery.restore_stderr"),
     ):
         yield
 
 
 def _make_app(session_busy: bool = False) -> FastAPI:
     """Create a minimal FastAPI app with setup routes registered."""
-    from roboclaw.embodied.hardware.discovery import HardwareDiscovery
+    from roboclaw.embodied.embodiment.hardware.discovery import HardwareDiscovery
 
     app = FastAPI()
     svc = MagicMock()
@@ -123,7 +123,7 @@ def test_motion_start_after_scan() -> None:
     with _patched_scan():
         client.post("/api/setup/scan")
 
-    with patch("roboclaw.embodied.hardware.motion_detector.MotionDetector._read_positions", return_value={1: 100, 2: 200}):
+    with patch("roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions", return_value={1: 100, 2: 200}):
         resp = client.post("/api/setup/motion/start")
 
     assert resp.status_code == 200
@@ -143,9 +143,9 @@ def test_motion_poll_returns_deltas() -> None:
     client = TestClient(app)
     with _patched_scan():
         client.post("/api/setup/scan")
-    with patch("roboclaw.embodied.hardware.motion_detector.MotionDetector._read_positions", return_value={1: 100, 2: 200}):
+    with patch("roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions", return_value={1: 100, 2: 200}):
         client.post("/api/setup/motion/start")
-    with patch("roboclaw.embodied.hardware.motion_detector.MotionDetector._read_positions", return_value={1: 200, 2: 300}):
+    with patch("roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions", return_value={1: 200, 2: 300}):
         resp = client.get("/api/setup/motion/poll")
 
     assert resp.status_code == 200
@@ -213,7 +213,7 @@ def test_add_camera() -> None:
     app = _make_app()
     client = TestClient(app)
     svc = app.state.embodied_service
-    with patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_CAMERAS):
+    with patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=_MOCK_CAMERAS):
         resp = client.post(
             "/api/manifest/cameras",
             json={"alias": "top", "camera_index": 0},

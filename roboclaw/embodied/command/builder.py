@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from roboclaw.embodied.manifest.binding import Binding
+from roboclaw.embodied.embodiment.manifest.binding import Binding
 
 from roboclaw.embodied.command.helpers import (
     ActionError,
@@ -35,7 +35,7 @@ _DEFAULT_REPLAY_ROOT = Path("~/.cache/huggingface/lerobot").expanduser()
 
 def _wrapper_args(action: str) -> list[str]:
     """Base argv for invoking lerobot via the wrapper."""
-    return [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", action]
+    return [sys.executable, "-m", "roboclaw.embodied.command.wrapper", action]
 
 
 def _arm_args(prefix: str, binding: Binding) -> list[str]:
@@ -59,7 +59,7 @@ def _bimanual_args(
     cameras: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     """Bimanual CLI args for one role (robot or teleop)."""
-    from roboclaw.embodied.manifest.helpers import ensure_bimanual_cal_dir
+    from roboclaw.embodied.embodiment.manifest.helpers import ensure_bimanual_cal_dir
 
     role = _PREFIX_TO_ROLE[prefix]
     cal_dir = ensure_bimanual_cal_dir(left, right, role)

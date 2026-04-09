@@ -12,8 +12,8 @@ import pytest
 
 from unittest.mock import patch as std_patch
 
-from roboclaw.embodied.manifest import Manifest
-from roboclaw.embodied.manifest.helpers import (
+from roboclaw.embodied.embodiment.manifest import Manifest
+from roboclaw.embodied.embodiment.manifest.helpers import (
     arm_display_name,
     find_arm,
     find_camera,
@@ -30,10 +30,10 @@ from roboclaw.embodied.manifest.helpers import (
     set_hand,
 )
 from roboclaw.embodied.command.helpers import dataset_path, group_arms, resolve_action_arms as _resolve_arms
-from roboclaw.embodied.interface.serial import SerialInterface
-from roboclaw.embodied.interface.video import VideoInterface
-from roboclaw.embodied.sensor.camera import resolve_cameras as _resolve_cameras
-from roboclaw.embodied.tool import EmbodiedToolGroup, create_embodied_tools
+from roboclaw.embodied.embodiment.interface.serial import SerialInterface
+from roboclaw.embodied.embodiment.interface.video import VideoInterface
+from roboclaw.embodied.command.helpers import resolve_cameras as _resolve_cameras
+from roboclaw.embodied.toolkit.tools import EmbodiedToolGroup, create_embodied_tools
 
 _MOCK_SCANNED_PORTS = [
     SerialInterface(
@@ -95,8 +95,8 @@ def _manifest_from_data(tmp_path: Path, data: dict) -> Manifest:
 def calibration_root(tmp_path: Path) -> Path:
     root = tmp_path / "calibration"
     with (
-        std_patch("roboclaw.embodied.manifest.helpers.get_calibration_root", return_value=root),
-        std_patch("roboclaw.embodied.manifest.state.get_calibration_root", return_value=root),
+        std_patch("roboclaw.embodied.embodiment.manifest.helpers.get_calibration_root", return_value=root),
+        std_patch("roboclaw.embodied.embodiment.manifest.state.get_calibration_root", return_value=root),
     ):
         yield root
 
@@ -168,7 +168,7 @@ async def test_calibration_action(tmp_path: Path) -> None:
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 
-    with patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner):
+    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
         result = await tool.execute(action="calibrate")
 
     assert "2 succeeded" in result
@@ -186,7 +186,7 @@ async def test_teleop_action(tmp_path: Path) -> None:
         assert session._kwargs["fps"] == 20
         return "Teleoperation finished."
 
-    with patch("roboclaw.embodied.adapters.tty.TtySession.run", fake_tty_run):
+    with patch("roboclaw.embodied.toolkit.tty.TtySession.run", fake_tty_run):
         result = await tool.execute(action="teleoperate", fps=20, arms=f"{_FOLLOWER_PORT},{_LEADER_PORT}")
 
     assert result == "Teleoperation finished."
@@ -203,7 +203,7 @@ async def test_record_action(tmp_path: Path) -> None:
         assert session._kwargs["dataset_name"] == "test"
         return "Recording finished."
 
-    with patch("roboclaw.embodied.adapters.tty.TtySession.run", fake_tty_run):
+    with patch("roboclaw.embodied.toolkit.tty.TtySession.run", fake_tty_run):
         result = await tool.execute(
             action="record",
             dataset_name="test",
@@ -224,7 +224,7 @@ async def test_replay_action(tmp_path: Path) -> None:
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 
-    with patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner):
+    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
         result = await tool.execute(action="replay", dataset_name="test", episode=2)
 
     assert result == "Replay finished."
@@ -242,7 +242,7 @@ async def test_train_action(tmp_path: Path) -> None:
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 
-    with patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner):
+    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
         result = await tool.execute(action="train", dataset_name="test", steps=5000)
 
     assert "job-abc-123" in result
@@ -257,7 +257,7 @@ async def test_infer_action(tmp_path: Path) -> None:
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 
-    with patch("roboclaw.embodied.runner.LocalLeRobotRunner", return_value=mock_runner):
+    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
         await tool.execute(action="run_policy", checkpoint_path="/models/act")
 
     argv = mock_runner.run.call_args[0][0]
@@ -331,7 +331,7 @@ def manifest_file(tmp_path: Path) -> Path:
 
 
 def test_set_arm(manifest_file: Path, calibration_root: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     arm = find_arm(result["arms"], "my_follower")
     assert arm is not None
@@ -343,7 +343,7 @@ def test_set_arm(manifest_file: Path, calibration_root: Path) -> None:
 
 
 def test_set_arm_replaces_existing(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         set_arm("my_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
         result = set_arm("my_arm", "so101_leader", "/dev/ttyACM1", path=manifest_file)
     assert len(result["arms"]) == 1
@@ -351,27 +351,27 @@ def test_set_arm_replaces_existing(manifest_file: Path) -> None:
 
 
 def test_set_arm_rejects_duplicate_port(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
         with pytest.raises(ValueError, match="already assigned"):
             set_arm("right_arm", "so101_leader", "/dev/ttyACM0", path=manifest_file)
 
 
 def test_set_arm_resolves_volatile_port(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         result = set_arm("my_leader", "so101_leader", "/dev/ttyACM1", path=manifest_file)
     assert find_arm(result["arms"], "my_leader")["port"] == _MOCK_SCANNED_PORTS[1].by_id
 
 
 def test_set_arm_keeps_stable_port(manifest_file: Path) -> None:
     stable = "/dev/serial/by-id/usb-custom-device"
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]):
         result = set_arm("my_follower", "so101_follower", stable, path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["port"] == stable
 
 
 def test_set_arm_unmatched_volatile_port(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]):
         result = set_arm("my_follower", "so101_follower", "/dev/ttyUSB99", path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["port"] == "/dev/ttyUSB99"
 
@@ -381,7 +381,7 @@ def test_set_arm_marks_existing_calibration(manifest_file: Path, calibration_roo
     calibration_dir = calibration_root / serial
     calibration_dir.mkdir(parents=True)
     (calibration_dir / f"{serial}.json").write_text("{}", encoding="utf-8")
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["calibrated"] is True
 
@@ -393,7 +393,7 @@ def test_set_arm_migrates_none_json(manifest_file: Path, calibration_root: Path)
     legacy = calibration_dir / "None.json"
     target = calibration_dir / f"{serial}.json"
     legacy.write_text("{}", encoding="utf-8")
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     assert find_arm(result["arms"], "my_follower")["calibrated"] is True
     assert not legacy.exists()
@@ -401,7 +401,7 @@ def test_set_arm_migrates_none_json(manifest_file: Path, calibration_root: Path)
 
 
 def test_set_arm_invalid_type(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid arm_type"):
             set_arm("my_follower", "bogus_arm", "/dev/ttyACM0", path=manifest_file)
 
@@ -412,7 +412,7 @@ def test_set_arm_empty_alias(manifest_file: Path) -> None:
 
 
 def test_remove_arm(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]):
         set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     result = remove_arm("my_follower", path=manifest_file)
     assert find_arm(result["arms"], "my_follower") is None
@@ -428,7 +428,7 @@ def test_rename_arm_preserves_fields(manifest_file: Path, calibration_root: Path
     calibration_dir = calibration_root / serial
     calibration_dir.mkdir(parents=True)
     (calibration_dir / f"{serial}.json").write_text("{}", encoding="utf-8")
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         set_arm("old_alias", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     result = rename_arm("old_alias", "new_alias", path=manifest_file)
     arm = find_arm(result["arms"], "new_alias")
@@ -438,7 +438,7 @@ def test_rename_arm_preserves_fields(manifest_file: Path, calibration_root: Path
 
 
 def test_rename_arm_rejects_duplicate_alias(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
         set_arm("right_arm", "so101_leader", "/dev/ttyACM1", path=manifest_file)
     with pytest.raises(ValueError, match="already exists"):
@@ -452,7 +452,7 @@ _MOCK_SCANNED_CAMERAS = [
 
 
 def test_set_camera(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
         result = set_camera("front", 0, path=manifest_file)
     cam = find_camera(result["cameras"], "front")
     assert cam is not None
@@ -464,13 +464,13 @@ def test_set_camera(manifest_file: Path) -> None:
 
 
 def test_set_camera_bad_index(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
         with pytest.raises(ValueError, match="out of range"):
             set_camera("front", 99, path=manifest_file)
 
 
 def test_remove_camera(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=_MOCK_SCANNED_CAMERAS):
         set_camera("front", 0, path=manifest_file)
     result = remove_camera("front", path=manifest_file)
     assert find_camera(result["cameras"], "front") is None
@@ -552,7 +552,7 @@ def test_group_arms(tmp_path: Path) -> None:
 
 def test_calibration_dir_uses_serial_number(manifest_file: Path, calibration_root: Path) -> None:
     """calibration_dir should be based on serial number extracted from by_id port."""
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         result = set_arm("my_follower", "so101_follower", "/dev/ttyACM0", path=manifest_file)
     arm = find_arm(result["arms"], "my_follower")
     assert arm["calibration_dir"] == str(calibration_root / "5B14032630")
@@ -563,8 +563,8 @@ def test_calibration_dir_uses_serial_number(manifest_file: Path, calibration_roo
 
 def test_set_hand(manifest_file: Path) -> None:
     with (
-        std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
-        std_patch("roboclaw.embodied.manifest.helpers._probe_hand_slave_id", return_value=1),
+        std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
+        std_patch("roboclaw.embodied.embodiment.manifest.helpers._probe_hand_slave_id", return_value=1),
     ):
         result = set_hand("left_hand", "inspire_rh56", "/dev/ttyACM0", path=manifest_file)
     hand = find_hand(result["hands"], "left_hand")
@@ -580,8 +580,8 @@ def test_set_hand(manifest_file: Path) -> None:
 
 def test_set_hand_replaces_existing(manifest_file: Path) -> None:
     with (
-        std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
-        std_patch("roboclaw.embodied.manifest.helpers._probe_hand_slave_id", return_value=1),
+        std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS),
+        std_patch("roboclaw.embodied.embodiment.manifest.helpers._probe_hand_slave_id", return_value=1),
     ):
         set_hand("h", "inspire_rh56", "/dev/ttyACM0", path=manifest_file)
         result = set_hand("h", "revo2", "/dev/ttyACM1", path=manifest_file)
@@ -590,15 +590,15 @@ def test_set_hand_replaces_existing(manifest_file: Path) -> None:
 
 
 def test_set_hand_invalid_type(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid hand_type"):
             set_hand("h", "so101_follower", "/dev/ttyUSB0", path=manifest_file)
 
 
 def test_remove_hand(manifest_file: Path) -> None:
     with (
-        std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]),
-        std_patch("roboclaw.embodied.manifest.helpers._probe_hand_slave_id", return_value=1),
+        std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]),
+        std_patch("roboclaw.embodied.embodiment.manifest.helpers._probe_hand_slave_id", return_value=1),
     ):
         set_hand("left_hand", "inspire_rh56", "/dev/ttyUSB0", path=manifest_file)
     result = remove_hand("left_hand", path=manifest_file)
@@ -622,7 +622,7 @@ def test_find_hand() -> None:
 
 
 def test_set_arm_rejects_revo2(manifest_file: Path) -> None:
-    with std_patch("roboclaw.embodied.hardware.scan.scan_serial_ports", return_value=[]):
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=[]):
         with pytest.raises(ValueError, match="Invalid arm_type"):
             set_arm("h", "revo2", "/dev/ttyUSB0", path=manifest_file)
 
