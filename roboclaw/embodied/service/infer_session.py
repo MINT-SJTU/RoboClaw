@@ -32,7 +32,6 @@ class InferSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        from roboclaw.embodied.learning.act import ACTPipeline
         from roboclaw.embodied.runner import LocalLeRobotRunner
         from roboclaw.embodied.sensor.camera import resolve_cameras
 
@@ -48,10 +47,8 @@ class InferSession:
         checkpoint = kwargs.get("checkpoint_path")
         if not checkpoint:
             source_dataset = kwargs.get("source_dataset", kwargs.get("dataset_name", ""))
-            if source_dataset:
-                checkpoint = ACTPipeline().checkpoint_path(str(Path(policies_root) / source_dataset))
-            else:
-                checkpoint = ACTPipeline().checkpoint_path(policies_root)
+            base = str(Path(policies_root) / source_dataset) if source_dataset else policies_root
+            checkpoint = str(Path(base).expanduser() / "checkpoints" / "last" / "pretrained_model")
 
         result = self._resolve_dataset_name(kwargs, "eval")
         if isinstance(result, str):

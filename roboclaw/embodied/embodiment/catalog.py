@@ -1,44 +1,44 @@
 """Embodiment catalog — aggregates all registries into a unified lookup."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from roboclaw.embodied.embodiment.base import EmbodimentSpec
+from typing import Any
 
 
 class EmbodimentCategory(str, Enum):
     ARM = "arm"
     HAND = "hand"
-    HUMANOID = "humanoid"
-    MOBILE = "mobile"
 
 
-def categories() -> list[EmbodimentCategory]:
-    """Return all embodiment categories."""
-    return list(EmbodimentCategory)
+@dataclass(frozen=True)
+class DeviceInfo:
+    """Lightweight device info for catalog API."""
+    name: str
+    roles: tuple[str, ...] = ()
 
 
-def models_for(category: EmbodimentCategory) -> list[EmbodimentSpec]:
-    """Return all registered specs for a category."""
+def models_for(category: EmbodimentCategory) -> list[Any]:
+    """Return all registered specs/infos for a category."""
     if category == EmbodimentCategory.ARM:
-        from roboclaw.embodied.embodiment.arm.registry import all_arm_specs
-        return list(all_arm_specs().values())
+        from roboclaw.embodied.embodiment.arm.registry import _PROBES
+        return [DeviceInfo(name=name, roles=("follower", "leader")) for name in _PROBES]
     if category == EmbodimentCategory.HAND:
         from roboclaw.embodied.embodiment.hand.registry import all_hand_specs
         return list(all_hand_specs().values())
     return []
 
 
-def get_spec(name: str) -> EmbodimentSpec:
+def get_spec(name: str) -> Any:
     """Look up any embodiment spec by name, across all registries."""
-    from roboclaw.embodied.embodiment.arm.registry import get_arm_spec_by_name
+    from roboclaw.embodied.embodiment.arm.registry import get_probe_config
     from roboclaw.embodied.embodiment.hand.registry import get_hand_spec
 
     name = name.lower()
     try:
-        return get_arm_spec_by_name(name)
+        cfg = get_probe_config(name)
+        return DeviceInfo(name=name, roles=("follower", "leader"))
     except ValueError:
         pass
     try:

@@ -23,7 +23,6 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        from roboclaw.embodied.learning.act import ACTPipeline
         from roboclaw.embodied.runner import LocalLeRobotRunner
 
         dataset_name = kwargs.get("dataset_name", "default")
@@ -33,14 +32,26 @@ class TrainSession:
         ds_root = dataset_path(manifest, dataset_name)
         policies_root = manifest.snapshot.get("policies", {}).get("root", "")
         output_dir = Path(policies_root).expanduser() / dataset_name
-        argv = ACTPipeline().train(
-            repo_id=f"local/{dataset_name}",
-            dataset_root=str(ds_root),
-            output_dir=str(output_dir),
-            steps=kwargs.get("steps", 100_000),
-            device=kwargs.get("device", "cuda"),
-            resume=output_dir.is_dir(),
-        )
+        steps = kwargs.get("steps", 100_000)
+        device = kwargs.get("device", "cuda")
+        resume = output_dir.is_dir()
+        argv = [
+            "lerobot-train",
+            f"--dataset.repo_id=local/{dataset_name}",
+            f"--dataset.root={ds_root}",
+            "--dataset.video_backend=pyav",
+            "--policy.type=act",
+            "--policy.push_to_hub=false",
+            f"--policy.repo_id=local/{dataset_name}",
+            f"--output_dir={output_dir}",
+            f"--steps={steps}",
+            f"--policy.device={device}",
+        ]
+        if resume:
+            argv.append("--resume=true")
+            config_path = output_dir / "checkpoints" / "last" / "pretrained_model" / "train_config.json"
+            if config_path.exists():
+                argv.append(f"--config_path={config_path}")
         job_id = await LocalLeRobotRunner().run_detached(argv=argv, log_dir=_logs_dir())
         return f"Training started. Job ID: {job_id}"
 

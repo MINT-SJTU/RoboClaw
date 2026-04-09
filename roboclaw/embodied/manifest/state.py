@@ -223,8 +223,6 @@ class Manifest:
         calibration_dir = get_calibration_root() / serial
         _migrate_none_calibration_file(calibration_dir, serial)
 
-        from roboclaw.embodied.embodiment.arm.registry import get_arm_spec
-
         with self._lock:
             for binding in self._bindings.values():
                 if binding.kind != "arm":
@@ -235,7 +233,6 @@ class Manifest:
                     )
             binding = Binding(
                 alias=alias,
-                spec=get_arm_spec(arm_type),
                 interface=interface,
                 guard=self._guard_for_binding(interface),
                 calibration_dir=str(calibration_dir),

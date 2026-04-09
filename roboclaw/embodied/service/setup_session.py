@@ -83,7 +83,7 @@ class SetupSession:
 
     @property
     def _current_spec(self):
-        """Look up the EmbodimentSpec for the current model."""
+        """Look up the device spec for the current model."""
         if not self._model:
             return None
         from roboclaw.embodied.embodiment.catalog import get_spec

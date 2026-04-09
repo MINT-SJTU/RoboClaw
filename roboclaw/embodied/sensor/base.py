@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from roboclaw.embodied.embodiment.base import EmbodimentSpec
-
 
 @dataclass(frozen=True)
-class SensorSpec(EmbodimentSpec):
+class SensorSpec:
     """Base class for all sensor specifications."""
 
-    pass
+    name: str = ""
 
 
 @dataclass(frozen=True)

@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from roboclaw.embodied.embodiment.base import EmbodimentSpec
 from roboclaw.embodied.guard import InterfaceGuard
 from roboclaw.embodied.interface.base import Interface
 from roboclaw.embodied.interface.serial import SerialInterface
@@ -15,16 +14,16 @@ from roboclaw.embodied.interface.video import VideoInterface
 
 @dataclass
 class Binding:
-    """A named link between an EmbodimentSpec and a physical Interface.
+    """A named link between a device type and a physical Interface.
 
     Bindings are the runtime representation of manifest entries.
     Each Binding is guarded by an InterfaceGuard for mutual exclusion.
     """
 
     alias: str
-    spec: EmbodimentSpec
     interface: Interface
     guard: InterfaceGuard
+    spec: Any = None              # HandSpec for hands, None for arms/cameras
     calibration_dir: str = ""     # arm-specific
     calibrated: bool = False      # arm-specific
     slave_id: int = 0             # hand-specific
@@ -37,9 +36,7 @@ class Binding:
 
     @property
     def type_name(self) -> str:
-        if self._type_name:
-            return self._type_name
-        return self.spec.name
+        return self._type_name
 
     @property
     def arm_id(self) -> str:
@@ -75,9 +72,7 @@ class Binding:
 
     def _arm_or_hand_dict(self) -> dict[str, Any]:
         """Serialize arm or hand binding."""
-        from roboclaw.embodied.embodiment.hand.base import HandSpec
-
-        if isinstance(self.spec, HandSpec):
+        if self._kind == "hand":
             return {
                 "alias": self.alias,
                 "type": self.type_name,
@@ -135,10 +130,7 @@ class Binding:
     def _arm_from_dict(
         cls, data: dict[str, Any], guards: dict[str, InterfaceGuard],
     ) -> Binding:
-        from roboclaw.embodied.embodiment.arm.registry import get_arm_spec
-
         arm_type = data["type"]
-        spec = get_arm_spec(arm_type)
         interface = SerialInterface(
             by_id=data.get("port", ""),
             dev=data.get("dev", ""),
@@ -146,7 +138,6 @@ class Binding:
         guard = _ensure_guard(interface, guards)
         return cls(
             alias=data["alias"],
-            spec=spec,
             interface=interface,
             guard=guard,
             calibration_dir=data.get("calibration_dir", ""),
@@ -178,9 +169,6 @@ class Binding:
     def _camera_from_dict(
         cls, data: dict[str, Any], guards: dict[str, InterfaceGuard],
     ) -> Binding:
-        from roboclaw.embodied.sensor.registry import get_camera_spec
-
-        spec = get_camera_spec("opencv")
         interface = VideoInterface(
             dev=data.get("port", ""),
             width=data.get("width", 640),
@@ -191,11 +179,10 @@ class Binding:
         guard = _ensure_guard(interface, guards)
         return cls(
             alias=data["alias"],
-            spec=spec,
             interface=interface,
             guard=guard,
             _kind="camera",
-            _type_name=spec.name,
+            _type_name="opencv",
         )
 
 

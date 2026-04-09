@@ -1,88 +1,39 @@
-"""Arm spec registry — single source of truth for supported arm types."""
+"""Arm type registry — thin index pointing at lerobot robot configs.
+
+Motor specs, calibration, bus classes are all in lerobot.
+We only keep: type name enumeration + hardware probe config.
+"""
 
 from __future__ import annotations
 
-from roboclaw.embodied.embodiment.arm.base import ServoArmSpec
+from dataclasses import dataclass
 
-# ---------------------------------------------------------------------------
-# SO101 (Feetech STS3215)
-# ---------------------------------------------------------------------------
 
-_SO101_MOTORS = (
-    "shoulder_pan", "shoulder_lift", "elbow_flex",
-    "wrist_flex", "wrist_roll", "gripper",
-)
-_SO101_MODEL = "sts3215"
+@dataclass(frozen=True)
+class ArmProbeConfig:
+    """Hardware discovery probe parameters — lerobot doesn't provide these."""
 
-SO101 = ServoArmSpec(
-    name="so101",
-    motor_names=_SO101_MOTORS,
-    supports_bimanual=True,
-    bimanual_follower_type="bi_so_follower",
-    bimanual_leader_type="bi_so_leader",
-    motor_bus_module="lerobot.motors.feetech",
-    motor_bus_class="FeetechMotorsBus",
-    follower_motor_models={m: _SO101_MODEL for m in _SO101_MOTORS},
-    leader_motor_models={m: _SO101_MODEL for m in _SO101_MOTORS},
-    full_turn_motors=("wrist_roll",),
-    probe_protocol="feetech",
-    probe_motor_ids=(1, 2, 3, 4, 5, 6),
-    probe_baudrate=1_000_000,
-)
+    protocol: str  # "feetech" | "dynamixel"
+    motor_ids: tuple[int, ...]
+    baudrate: int
 
-# ---------------------------------------------------------------------------
-# Koch v1.1 (Dynamixel XL430 / XL330)
-# ---------------------------------------------------------------------------
 
-_KOCH_MOTORS = (
-    "shoulder_pan", "shoulder_lift", "elbow_flex",
-    "wrist_flex", "wrist_roll", "gripper",
-)
-
-KOCH = ServoArmSpec(
-    name="koch",
-    motor_names=_KOCH_MOTORS,
-    supports_bimanual=False,
-    motor_bus_module="lerobot.motors.dynamixel",
-    motor_bus_class="DynamixelMotorsBus",
-    follower_motor_models={
-        "shoulder_pan": "xl430-w250",
-        "shoulder_lift": "xl430-w250",
-        "elbow_flex": "xl330-m288",
-        "wrist_flex": "xl330-m288",
-        "wrist_roll": "xl330-m288",
-        "gripper": "xl330-m288",
-    },
-    leader_motor_models={m: "xl330-m077" for m in _KOCH_MOTORS},
-    full_turn_motors=("wrist_roll",),
-    probe_protocol="dynamixel",
-    probe_motor_ids=(1, 2, 3, 4, 5, 6),
-    probe_baudrate=1_000_000,
-)
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
-
-_REGISTRY: dict[str, ServoArmSpec] = {
-    "so101": SO101,
-    "koch": KOCH,
+_PROBES: dict[str, ArmProbeConfig] = {
+    "so101": ArmProbeConfig("feetech", (1, 2, 3, 4, 5, 6), 1_000_000),
+    "koch": ArmProbeConfig("dynamixel", (1, 2, 3, 4, 5, 6), 1_000_000),
 }
 
+_ALL_TYPES = (
+    "so101_follower",
+    "so101_leader",
+    "koch_follower",
+    "koch_leader",
+)
 
-def get_arm_spec(arm_type: str) -> ServoArmSpec:
-    """Extract spec from arm type string.
 
-    >>> get_arm_spec("so101_follower").name
-    'so101'
-    >>> get_arm_spec("koch_leader").name
-    'koch'
-    """
-    name = arm_type.rsplit("_", 1)[0]
-    spec = _REGISTRY.get(name)
-    if spec is None:
-        raise ValueError(f"Unknown arm type '{name}' from '{arm_type}'")
-    return spec
+def all_arm_types() -> tuple[str, ...]:
+    """Return all registered arm types."""
+    return _ALL_TYPES
 
 
 def get_role(arm_type: str) -> str:
@@ -94,22 +45,18 @@ def get_role(arm_type: str) -> str:
     return arm_type.rsplit("_", 1)[1]
 
 
-def get_arm_spec_by_name(name: str) -> ServoArmSpec:
-    """Look up arm spec by model name (e.g., 'so101', 'koch')."""
-    name = name.lower()
-    if name not in _REGISTRY:
-        raise ValueError(f"Unknown arm model: {name}")
-    return _REGISTRY[name]
+def get_model(arm_type: str) -> str:
+    """Extract model name from arm type string.
+
+    >>> get_model("so101_follower")
+    'so101'
+    """
+    return arm_type.rsplit("_", 1)[0]
 
 
-def all_arm_types() -> tuple[str, ...]:
-    """Return all registered arm types (follower + leader for each spec)."""
-    result: list[str] = []
-    for spec in _REGISTRY.values():
-        result.extend(spec.arm_types)
-    return tuple(result)
-
-
-def all_arm_specs() -> dict[str, ServoArmSpec]:
-    """Return a copy of the registry."""
-    return dict(_REGISTRY)
+def get_probe_config(model: str) -> ArmProbeConfig:
+    """Look up probe config by model name (e.g., 'so101', 'koch')."""
+    model = model.lower()
+    if model not in _PROBES:
+        raise ValueError(f"Unknown arm model: {model}")
+    return _PROBES[model]

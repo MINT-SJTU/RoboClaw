@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from roboclaw.embodied.embodiment.base import EmbodimentSpec
-
 
 @dataclass(frozen=True)
-class HandSpec(EmbodimentSpec):
+class HandSpec:
     """Static specification for a dexterous hand model.
 
     Captures the fixed hardware characteristics: finger count, labels,
@@ -16,6 +14,7 @@ class HandSpec(EmbodimentSpec):
     is referenced by module path for lazy import.
     """
 
+    name: str = ""
     roles: tuple[str, ...] = ("follower", "leader")
     finger_labels: tuple[str, ...] = ()
     num_fingers: int = 0

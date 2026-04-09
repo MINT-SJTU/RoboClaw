@@ -24,6 +24,12 @@ if TYPE_CHECKING:
     from roboclaw.embodied.service import EmbodiedService
 
 
+_MOTOR_BUS_INFO: dict[str, tuple[str, str, str]] = {
+    "so101": ("lerobot.motors.feetech", "FeetechMotorsBus", "sts3215"),
+    "koch": ("lerobot.motors.dynamixel", "DynamixelMotorsBus", "xl330-m288"),
+}
+
+
 class CalibrationSession:
     """Wraps the CLI interactive calibration flow."""
 
@@ -90,18 +96,16 @@ class CalibrationSession:
             logger.debug("lerobot.motors not installed, skipping EEPROM sync")
             return
 
-        from roboclaw.embodied.embodiment.arm.registry import get_arm_spec, get_role
+        from roboclaw.embodied.embodiment.arm.registry import get_model
 
-        spec = get_arm_spec(arm.type_name)
-        role = get_role(arm.type_name)
-        model_map = spec.motor_models(role)
+        model_name = get_model(arm.type_name)
+        bus_module, bus_cls_name, default_motor = _MOTOR_BUS_INFO[model_name]
         cal = json.loads(cal_path.read_text())
 
         motors = {}
         calibration = {}
         for name, cfg in cal.items():
-            model = model_map.get(name, list(model_map.values())[0])
-            motors[name] = Motor(id=cfg["id"], model=model, norm_mode=MotorNormMode.DEGREES)
+            motors[name] = Motor(id=cfg["id"], model=default_motor, norm_mode=MotorNormMode.DEGREES)
             calibration[name] = MotorCalibration(
                 id=cfg["id"],
                 drive_mode=cfg["drive_mode"],
@@ -112,8 +116,8 @@ class CalibrationSession:
 
         import importlib
 
-        mod = importlib.import_module(spec.motor_bus_module)
-        bus_class = getattr(mod, spec.motor_bus_class)
+        mod = importlib.import_module(bus_module)
+        bus_class = getattr(mod, bus_cls_name)
         bus = bus_class(port=arm.port, motors=motors, calibration=calibration)
         try:
             bus.connect()
