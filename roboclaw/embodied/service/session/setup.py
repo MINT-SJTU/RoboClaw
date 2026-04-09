@@ -453,9 +453,12 @@ class SetupSession:
             return
         ports = result["ports"]
         cameras = result["cameras"]
+        bound_count = len(self._parent.manifest.bindings)
         self._messages.append(t("foundPorts", lang, ports=len(ports), cameras=len(cameras)))
+        if bound_count > 0:
+            self._messages.append(t("alreadyBound", lang, count=bound_count))
         if not ports and not cameras:
-            self._set_result("no_hardware")
+            self._set_result("all_configured" if bound_count > 0 else "no_hardware")
             return
         for i, port in enumerate(ports):
             port_id = port.by_id or port.dev or "?"

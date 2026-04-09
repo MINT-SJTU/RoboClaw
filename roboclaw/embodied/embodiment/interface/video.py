@@ -22,10 +22,10 @@ class VideoInterface(Interface):
 
     @property
     def label(self) -> str:
-        """Human-readable short label: last segment of by_id, fallback to dev."""
-        if self.by_id:
-            tail = self.by_id.rsplit("/", 1)[-1]
-            return tail or self.dev or "?"
+        """Human-readable short label: by_path preferred for cameras (stable across reboots)."""
+        best = self.by_path or self.by_id
+        if best:
+            return best.rsplit("/", 1)[-1] or self.dev or "?"
         return self.dev or "?"
 
     @property

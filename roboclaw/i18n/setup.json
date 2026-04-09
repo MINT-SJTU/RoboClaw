@@ -39,6 +39,10 @@
     "zh": "发现 {ports} 个串口和 {cameras} 个摄像头。",
     "en": "Found {ports} serial port(s) and {cameras} camera(s)."
   },
+  "alreadyBound": {
+    "zh": "（已有 {count} 个设备已识别，已跳过）",
+    "en": "({count} device(s) already configured, skipped)"
+  },
   "unassignedPorts": {
     "zh": "{n} 个未分配端口，晃动一个机械臂...",
     "en": "{n} unassigned port(s). Move an arm..."
