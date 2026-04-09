@@ -90,11 +90,39 @@ def check_arm_status(arm: Binding) -> ArmStatus:
 def check_camera_status(cam: Binding) -> CameraStatus:
     """Check a single camera's connectivity."""
     alias = cam.alias
-    connected = bool(cam.port and Path(cam.port).exists())
+    port = (cam.port or "").strip()
+    connected = False
+    if port:
+        if Path(port).exists():
+            connected = True
+        elif port.isdigit():
+            connected = port in scan_connected_camera_ports()
     return CameraStatus(
         alias=alias, connected=connected,
         width=cam.interface.width, height=cam.interface.height,
     )
+
+
+def scan_connected_camera_ports() -> set[str]:
+    """Return currently discoverable camera identifiers.
+
+    Includes dev/by-id/by-path values from the active camera scan.
+    On macOS this captures numeric indexes like "0", "1", "2".
+    """
+    try:
+        from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
+    except Exception:
+        return set()
+
+    ports: set[str] = set()
+    try:
+        for cam in scan_cameras():
+            for value in (cam.dev, cam.by_id, cam.by_path):
+                if value:
+                    ports.add(str(value))
+    except Exception:
+        return set()
+    return ports
 
 
 def _fault_key(fault: HardwareFault) -> str:
@@ -228,4 +256,3 @@ def _check_cameras(
                 message=f"Camera '{status.alias}' device not found",
                 timestamp=now,
             ))
-

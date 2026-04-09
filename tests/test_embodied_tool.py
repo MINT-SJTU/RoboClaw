@@ -101,13 +101,13 @@ def calibration_root(tmp_path: Path) -> Path:
         yield root
 
 
-def test_create_embodied_tools_returns_eight_groups() -> None:
+def test_create_embodied_tools_returns_nine_groups() -> None:
     tools = create_embodied_tools()
-    assert len(tools) == 8
+    assert len(tools) == 9
     names = {t.name for t in tools}
     assert names == {
         "setup", "doctor", "calibration", "teleop",
-        "record", "replay", "train", "infer",
+        "record", "replay", "train", "infer", "perception",
     }
 
 
@@ -120,8 +120,9 @@ def test_create_embodied_tools_returns_eight_groups() -> None:
         ("teleop", {"teleoperate"}, {"arms", "fps"}, {"dataset_name", "checkpoint_path", "positions"}),
         ("record", {"record"}, {"arms", "dataset_name", "task", "num_episodes", "fps", "episode_time_s", "reset_time_s", "use_cameras"}, {"checkpoint_path", "positions"}),
         ("replay", {"replay"}, {"arms", "dataset_name", "episode", "fps"}, {"checkpoint_path", "positions"}),
-        ("train", {"train", "job_status", "list_datasets", "list_policies"}, {"dataset_name", "steps", "device", "job_id"}, {"positions", "port"}),
+        ("train", {"train", "job_status", "eval_policy", "serve_policy", "list_checkpoints", "best_checkpoint"}, {"dataset_name", "steps", "device", "job_id"}, {"positions", "port"}),
         ("infer", {"run_policy"}, {"arms", "dataset_name", "source_dataset", "checkpoint_path", "task", "num_episodes", "use_cameras"}, {"positions", "port"}),
+        ("perception", {"scene_understand", "object_detect", "what_changed"}, {"camera_alias", "question", "object_name", "model"}, {"arms", "dataset_name", "fps", "port"}),
     ],
 )
 def test_tool_group_schemas(
@@ -162,17 +163,59 @@ async def test_doctor_check_action(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_calibration_action(tmp_path: Path) -> None:
     tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "calibration")
-    mock_runner = AsyncMock()
-    mock_runner.run_interactive.return_value = (0, "")
     manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 
-    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
+    async def fake_start(self, argv, **kwargs):
+        await self.board.update(calibration_step="done")
+
+    async def fake_tty_run(self, session):
+        return "Calibration completed."
+
+    with (
+        patch("roboclaw.embodied.service.session.calibrate.CalibrationSession.start", fake_start),
+        patch("roboclaw.embodied.service.session.calibrate._sync_calibration_to_motors"),
+        patch("roboclaw.embodied.toolkit.tty.TtySession.run", fake_tty_run),
+    ):
         result = await tool.execute(action="calibrate")
 
     assert "2 succeeded" in result
-    assert mock_runner.run_interactive.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_calibration_action_prints_recalibration_tip_for_existing_files(tmp_path: Path) -> None:
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "calibration")
+
+    data = copy.deepcopy(_MOCK_SETUP)
+    cal_root = tmp_path / "calibration"
+    for idx, arm in enumerate(data["arms"]):
+        cal_dir = cal_root / f"arm_{idx}"
+        cal_dir.mkdir(parents=True)
+        arm["calibration_dir"] = str(cal_dir)
+    existing_dir = Path(data["arms"][0]["calibration_dir"])
+    (existing_dir / f"{existing_dir.name}.json").write_text("{}", encoding="utf-8")
+
+    manifest = _manifest_from_data(tmp_path, data)
+    from roboclaw.embodied.service import EmbodiedService
+    tool.embodied_service = EmbodiedService(manifest=manifest)
+    arms_arg = ",".join(arm["port"] for arm in data["arms"])
+
+    async def fake_start(self, argv, **kwargs):
+        await self.board.update(calibration_step="done")
+
+    async def fake_tty_run(self, session):
+        return "Calibration completed."
+
+    with (
+        patch("roboclaw.embodied.service.session.calibrate.CalibrationSession.start", fake_start),
+        patch("roboclaw.embodied.service.session.calibrate._sync_calibration_to_motors"),
+        patch("roboclaw.embodied.service.session.calibrate._print_existing_calibration_tip") as mock_print,
+        patch("roboclaw.embodied.toolkit.tty.TtySession.run", fake_tty_run),
+    ):
+        await tool.execute(action="calibrate", arms=arms_arg)
+
+    mock_print.assert_called_once()
 
 
 @pytest.mark.asyncio

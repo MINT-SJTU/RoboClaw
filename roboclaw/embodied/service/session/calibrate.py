@@ -52,6 +52,21 @@ def _get_spec(arm_type: str) -> dict[str, Any]:
     return _MOTOR_SPECS[model]
 
 
+def _has_existing_calibration(arm: Binding) -> bool:
+    cal_dir = Path(arm.calibration_dir).expanduser()
+    serial = cal_dir.name
+    return bool(serial) and (cal_dir / f"{serial}.json").exists()
+
+
+def _print_existing_calibration_tip() -> None:
+    print(
+        "Calibration tip: if LeRobot asks "
+        "'Press ENTER to use provided calibration file...', "
+        "then ENTER reuses the existing calibration and "
+        "c + ENTER starts a fresh calibration."
+    )
+
+
 # ── Consumers ────────────────────────────────────────────────────────────
 
 
@@ -234,6 +249,8 @@ class CalibrationSession(Session):
             self._arm = arm
             self._cal_manifest = manifest
             argv = CommandBuilder.calibrate(arm)
+            if _has_existing_calibration(arm):
+                _print_existing_calibration_tip()
 
             await tty_handoff(start=True, label=f"Calibrating: {arm.alias}")
             try:

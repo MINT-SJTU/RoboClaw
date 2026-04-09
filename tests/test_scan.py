@@ -37,7 +37,7 @@ def test_list_serial_ports_uses_pyserial_devices_on_windows() -> None:
     assert ports == ["/dev/cu.debug-console", "/dev/cu.usbmodemA", "/dev/cu.usbmodemB"]
 
 
-def test_list_serial_ports_matches_lerobot_range_on_unix() -> None:
+def test_list_serial_ports_matches_lerobot_range_on_linux() -> None:
     class _FakePath:
         def __init__(self, value: str) -> None:
             self._value = value
@@ -47,11 +47,13 @@ def test_list_serial_ports_matches_lerobot_range_on_unix() -> None:
 
     with patch(
         "pathlib.Path.glob",
-        return_value=[_FakePath("/dev/tty.usbmodemA"), _FakePath("/dev/ttys001"), _FakePath("/dev/tty.debug-console")],
-    ), patch("roboclaw.embodied.embodiment.hardware.scan.os.name", "posix"):
+        return_value=[_FakePath("/dev/ttyACM0"), _FakePath("/dev/ttyUSB1")],
+    ), patch("roboclaw.embodied.embodiment.hardware.scan.os.name", "posix"), patch(
+        "roboclaw.embodied.embodiment.hardware.scan.sys.platform", "linux",
+    ):
         ports = _list_serial_ports()
 
-    assert ports == ["/dev/tty.debug-console", "/dev/tty.usbmodemA", "/dev/ttys001"]
+    assert ports == ["/dev/ttyACM0", "/dev/ttyUSB1"]
 
 
 def test_scan_serial_ports_merges_port_list_with_linux_symlink_aliases() -> None:
@@ -75,10 +77,10 @@ def test_scan_serial_ports_merges_port_list_with_linux_symlink_aliases() -> None
 
 def test_scan_serial_ports_uses_lerobot_compatible_range() -> None:
     with (
-        patch("roboclaw.embodied.embodiment.hardware.scan._list_serial_ports", return_value=["/dev/tty.usbmodemA"]),
         patch("roboclaw.embodied.embodiment.hardware.scan._read_symlink_map", return_value={}),
         patch("roboclaw.embodied.embodiment.hardware.scan.os.path.exists", return_value=True),
+        patch("roboclaw.embodied.embodiment.hardware.scan._list_serial_ports", return_value=["/dev/cu.usbmodemA"]),
     ):
         ports = scan_serial_ports()
 
-    assert ports == [SerialInterface(dev="/dev/tty.usbmodemA")]
+    assert ports == [SerialInterface(dev="/dev/cu.usbmodemA")]

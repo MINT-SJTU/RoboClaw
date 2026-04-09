@@ -53,11 +53,16 @@ def _list_serial_ports(device_patterns: dict[str, tuple[str, ...]] | None = None
         platform_key = "darwin" if sys.platform == "darwin" else "linux"
         patterns = device_patterns.get(platform_key, ())
     else:
-        patterns = (
-            ("tty.usb*", "tty.usbserial*", "cu.usb*", "cu.usbserial*")
-            if sys.platform == "darwin"
-            else ("ttyACM*", "ttyUSB*")
-        )
+        if sys.platform == "darwin":
+            # On macOS, /dev/cu.* (user-space callout) and /dev/tty.* (BSD
+            # modem-control) are two device nodes pointing to the same physical
+            # USB serial adapter.  Only the cu.* variant is the correct endpoint
+            # for serial communication.  Skipping tty.* also halves the motion
+            # detection results and prevents the same arm from being identified
+            # twice during setup-identify.
+            patterns = ("cu.usb*", "cu.usbserial*")
+        else:
+            patterns = ("ttyACM*", "ttyUSB*")
 
     return sorted({str(p) for pat in patterns for p in Path("/dev").glob(pat)})
 
@@ -92,7 +97,7 @@ def list_serial_device_paths() -> list[str]:
     checks and udev rule installation.
     """
     if sys.platform == "darwin":
-        return sorted(glob.glob("/dev/tty.usb*") + glob.glob("/dev/cu.usb*"))
+        return sorted(glob.glob("/dev/cu.usb*") + glob.glob("/dev/cu.usbserial*"))
     return sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
 
 
@@ -136,6 +141,8 @@ def scan_cameras() -> list[VideoInterface]:
 
     saved = suppress_stderr()
     try:
+        if sys.platform == "darwin":
+            return _probe_cameras_mac(cv2)
         by_path = _read_symlink_map("/dev/v4l/by-path")
         by_id = _read_symlink_map("/dev/v4l/by-id")
         return _probe_cameras(cv2, by_path, by_id)
@@ -177,6 +184,42 @@ def _probe_cameras(cv2, by_path: dict, by_id: dict) -> list[VideoInterface]:
         if info:
             raw.append(info)
     return _dedupe_by_usb_device(raw)
+
+
+def _probe_cameras_mac(cv2) -> list[VideoInterface]:
+    """Probe cameras on macOS via OpenCV + AVFoundation."""
+    AVF = getattr(cv2, "CAP_AVFOUNDATION", None)
+    result: list[VideoInterface] = []
+    for index in range(10):
+        cam = _try_open_camera_mac(cv2, index, AVF)
+        if cam:
+            result.append(cam)
+    return result
+
+
+def _try_open_camera_mac(cv2, index: int, backend=None) -> VideoInterface | None:
+    """Open a single camera by index on macOS, return VideoInterface or None."""
+    cap = cv2.VideoCapture(index, backend) if backend else cv2.VideoCapture(index)
+    try:
+        if not cap.isOpened():
+            return None
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Try to switch to MJPEG for higher resolution/framerate
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps < 30:
+            cap.set(cv2.CAP_PROP_FPS, 30)
+        return VideoInterface(
+            by_path="",
+            by_id="",
+            dev=str(index),
+            width=w,
+            height=h,
+            fps=int(fps),
+        )
+    finally:
+        cap.release()
 
 
 def _usb_device_key(by_path_str: str) -> str:
@@ -257,7 +300,13 @@ def _capture_camera_frame(
     if not source:
         return None
 
-    cap = cv2.VideoCapture(source)
+    if sys.platform == "darwin":
+        backend = getattr(cv2, "CAP_AVFOUNDATION", None)
+        cap = cv2.VideoCapture(int(source), backend) if backend else cv2.VideoCapture(int(source))
+        label = source
+    else:
+        label = source
+        cap = cv2.VideoCapture(label)
     try:
         if not cap.isOpened():
             return None
