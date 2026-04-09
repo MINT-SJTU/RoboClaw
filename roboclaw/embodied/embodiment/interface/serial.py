@@ -31,6 +31,14 @@ class SerialInterface(Interface):
         return object.__getattribute__(self, "_motion_detector")
 
     @property
+    def label(self) -> str:
+        """Human-readable short label: last segment of by_id, fallback to dev."""
+        if self.by_id:
+            tail = self.by_id.rsplit("/", 1)[-1]
+            return tail or self.dev or "?"
+        return self.dev or "?"
+
+    @property
     def address(self) -> str:
         return self.by_id or self.by_path or self.dev
 
@@ -48,6 +56,7 @@ class SerialInterface(Interface):
             "dev": self.dev,
             "by_id": self.by_id,
             "by_path": self.by_path,
+            "label": self.label,
             "bus_type": self.bus_type,
             "motor_ids": list(self.motor_ids),
         }

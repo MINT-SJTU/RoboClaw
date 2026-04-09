@@ -21,6 +21,14 @@ class VideoInterface(Interface):
     interface_type: str = field(default="video", init=False)
 
     @property
+    def label(self) -> str:
+        """Human-readable short label: last segment of by_id, fallback to dev."""
+        if self.by_id:
+            tail = self.by_id.rsplit("/", 1)[-1]
+            return tail or self.dev or "?"
+        return self.dev or "?"
+
+    @property
     def address(self) -> str:
         return self.by_path or self.by_id or self.dev
 
@@ -38,6 +46,7 @@ class VideoInterface(Interface):
             "dev": self.dev,
             "by_id": self.by_id,
             "by_path": self.by_path,
+            "label": self.label,
             "width": self.width,
             "height": self.height,
             "fps": self.fps,

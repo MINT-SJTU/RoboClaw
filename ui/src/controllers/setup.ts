@@ -70,7 +70,8 @@ export interface ConfiguredHand {
 
 export type WizardStep = 'select' | 'scan' | 'identify' | 'review'
 
-export function deviceLabel(device: { by_id: string; dev: string }): string {
+export function deviceLabel(device: { label?: string; by_id: string; dev: string }): string {
+  if (device.label) return device.label
   return device.by_id ? device.by_id.split('/').pop() || device.dev : device.dev
 }
 

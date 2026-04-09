@@ -588,9 +588,9 @@ class SetupSession:
         if cam.stable_id in assigned_ids:
             self._camera_index += 1
             return self._next_camera_step()
-        dev = cam.dev or "?"
+        label = cam.label
         res = f"{cam.width}x{cam.height}" if cam.width else "?"
-        self._messages.append(f"  [{self._camera_index}] {dev} ({res} @ {cam.fps}fps)")
+        self._messages.append(f"  [{self._camera_index}] {label} ({res} @ {cam.fps}fps)")
         return PromptStep(
             f"camera_{self._camera_index}",
             t("cameraNamePrompt", lang, index=self._camera_index),
