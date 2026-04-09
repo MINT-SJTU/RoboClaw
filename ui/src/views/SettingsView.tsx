@@ -7,6 +7,7 @@ import { useI18n } from '../controllers/i18n'
 import DeviceList from '../components/setup/DeviceList'
 import DiscoveryWizard from '../components/setup/DiscoveryWizard'
 import { CalibrationWizard } from '../components/CalibrationWizard'
+import { TemperatureHeatMap } from '../components/TemperatureHeatMap'
 
 // Providers that make sense to show in the UI selector
 const UI_PROVIDERS = [
@@ -158,6 +159,10 @@ export default function SettingsView() {
 
           <DeviceList onCalibrate={handleCalibrate} />
           {wizardActive && <div className="mt-4"><DiscoveryWizard /></div>}
+
+          <div className="mt-4">
+            <TemperatureHeatMap />
+          </div>
         </section>
 
         {/* Provider section */}
