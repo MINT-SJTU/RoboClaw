@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -41,6 +42,7 @@ class Session:
         self._wait_task: asyncio.Task | None = None
         self._runner = SubprocessExecutor()
         self._stopped = False
+        self._exit_callback: Callable[[], Any] | None = None
 
     # -- Subclass hooks ----------------------------------------------------
 
@@ -130,12 +132,8 @@ class Session:
         await self._process.wait()
         await self._cleanup()
 
-    async def _wait_process(self) -> None:
-        """Wait for subprocess to exit naturally, update Board."""
-        assert self._process is not None
-        rc = await self._process.wait()
-        logger.info("Session subprocess exited with code {}", rc)
-
+    async def _teardown(self) -> None:
+        """Stop consumers, close stdin, clear process reference."""
         if self._output_consumer:
             await self._output_consumer.stop()
         if self._input_consumer:
@@ -147,12 +145,21 @@ class Session:
                 pass
         self._process = None
 
+    async def _wait_process(self) -> None:
+        """Wait for subprocess to exit naturally, update Board."""
+        assert self._process is not None
+        rc = await self._process.wait()
+        logger.info("Session subprocess exited with code {}", rc)
+        await self._teardown()
+
         if not self._stopped:
-            # 0=OK, -2/130=SIGINT, -15=SIGTERM — all considered clean exit
             if rc in (0, None, -2, 130, -15):
                 await self.board.update(state=SessionState.IDLE)
             else:
                 await self.board.update(state=SessionState.ERROR, error=self._format_exit_error(rc))
+            # Release embodiment lock — subprocess is dead, hardware is free
+            if self._exit_callback:
+                self._exit_callback()
 
     def _format_exit_error(self, rc: int) -> str:
         """Extract error info from Board logs after a non-zero exit."""
@@ -167,23 +174,13 @@ class Session:
 
     async def _cleanup(self) -> None:
         """Stop consumers and update board to idle."""
-        if self._output_consumer:
-            await self._output_consumer.stop()
-        if self._input_consumer:
-            await self._input_consumer.stop()
-        if self._process and self._process.stdin:
-            try:
-                self._process.stdin.close()
-            except OSError:
-                pass
-        # Cancel the wait task if we are handling cleanup ourselves
+        await self._teardown()
         if self._wait_task and not self._wait_task.done():
             self._wait_task.cancel()
             try:
                 await self._wait_task
             except asyncio.CancelledError:
                 pass
-        self._process = None
         await self.board.update(state=SessionState.IDLE)
 
     @property

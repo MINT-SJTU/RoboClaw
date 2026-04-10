@@ -85,6 +85,9 @@ class EmbodiedService:
         self.infer = InferSession(self)
         self.doctor = DoctorService(self)
 
+        for session in (self.teleop, self.record, self.replay, self.infer):
+            session._exit_callback = self._on_session_exit
+
     # -- Embodiment lock --
 
     @property
@@ -131,6 +134,11 @@ class EmbodiedService:
         if not status.get("embodiment_owner"):
             status["embodiment_owner"] = self._embodiment_owner or self._file_lock.owner()
         return status
+
+    def _on_session_exit(self) -> None:
+        """Called when a subprocess exits unexpectedly (not via stop())."""
+        self.release_embodiment()
+        self._active_session = None
 
     # -- Operations (Web entry points) --
 
@@ -199,6 +207,11 @@ class EmbodiedService:
         self.acquire_embodiment("inferring")
         self._active_session = self.infer
         await self.infer.start(argv, initial_state=SessionState.INFERRING)
+
+    async def dismiss_error(self) -> None:
+        """Clear error state and release embodiment lock so user can retry."""
+        self._on_session_exit()
+        await self.board.update(**IDLE_STATE)
 
     async def stop(self) -> None:
         if self._active_session:

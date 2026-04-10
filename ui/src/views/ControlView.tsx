@@ -6,21 +6,21 @@ import { CameraPreviewPanel } from '../components/CameraPreviewPanel'
 import { ServoPanel } from '../components/ServoPanel'
 
 function canDo(state: SessionState, hwReady: boolean) {
-  const idle = state === 'idle'
+  const canStart = state === 'idle' || state === 'error'
   const tele = state === 'teleoperating'
   const rec = state === 'recording'
   const rep = state === 'replaying'
   const inf = state === 'inferring'
   return {
-    teleopStart: idle && hwReady,
+    teleopStart: canStart && hwReady,
     teleopStop: tele,
-    recStart: (idle || tele) && hwReady,
+    recStart: (canStart || tele) && hwReady,
     recStop: rec,
     saveEp: rec,
     discardEp: rec,
-    replayStart: idle && hwReady,
+    replayStart: canStart && hwReady,
     replayStop: rep,
-    inferStart: idle && hwReady,
+    inferStart: canStart && hwReady,
     inferStop: inf,
   }
 }
@@ -105,7 +105,7 @@ export default function ControlView() {
     calibrating: 'bg-yl/15 text-yl border-yl/30',
   }
 
-  const busy = state !== 'idle'
+  const busy = state !== 'idle' && state !== 'error'
   const busyReason = busy ? `${stateLabel[state] || state}${owner ? ` (${owner})` : ''}` : ''
   const hwAccent = !hwStatus ? 'shadow-inset-ac' : hwStatus.ready ? 'shadow-inset-gn' : 'shadow-inset-yl'
   const camerasExist = hwStatus && hwStatus.cameras.length > 0 && hwStatus.cameras.some((c: any) => c.connected)
@@ -115,8 +115,14 @@ export default function ControlView() {
     <div className="flex flex-col h-full overflow-y-auto">
       {/* Error & hardware warning bars */}
       {session.error && (
-        <div className="px-4 py-2 bg-rd/10 border-b border-rd/30 border-l-4 border-l-rd text-rd text-sm font-mono whitespace-pre-wrap">
-          {session.error}
+        <div className="px-4 py-2 bg-rd/10 border-b border-rd/30 border-l-4 border-l-rd text-rd text-sm font-mono whitespace-pre-wrap flex items-start gap-2">
+          <span className="flex-1">{session.error}</span>
+          <button
+            onClick={store.doDismissError}
+            className="shrink-0 px-2 py-0.5 rounded text-xs font-semibold bg-rd/20 hover:bg-rd/30 transition-colors"
+          >
+            {t('dismissError')}
+          </button>
         </div>
       )}
       {!hwReady && hwStatus && (
@@ -356,7 +362,7 @@ export default function ControlView() {
         {/* Bottom: Camera + Servo monitoring */}
         <div className="grid grid-cols-2 gap-3 min-h-[240px] max-[900px]:grid-cols-1">
           {camerasExist ? (
-            <CameraPreviewPanel cameras={hwStatus!.cameras} busy={state !== 'idle'} />
+            <CameraPreviewPanel cameras={hwStatus!.cameras} busy={busy} />
           ) : (
             <div className="bg-sf rounded-lg p-4 shadow-card flex items-center justify-center text-sm text-tx3">
               {t('noCameraFeed')}

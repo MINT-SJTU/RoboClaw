@@ -65,11 +65,6 @@ class ReplaySession(Session):
             if k in ("dataset_name", "episode", "fps", "arms")
         }
 
-    async def _wait_process(self) -> None:
-        """Release embodiment lock on natural subprocess exit (web path)."""
-        await super()._wait_process()
-        self._parent.release_embodiment()
-
     # -- CLI protocol ------------------------------------------------------
 
     def interaction_spec(self):

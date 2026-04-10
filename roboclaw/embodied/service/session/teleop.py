@@ -78,11 +78,6 @@ class TeleopSession(Session):
         elapsed = s.get("elapsed_seconds", 0)
         return f"  teleoperating  | {elapsed:.0f}s  (press Ctrl+C or ESC to stop)"
 
-    async def _wait_process(self) -> None:
-        """Release embodiment lock on natural subprocess exit (web path)."""
-        await super()._wait_process()
-        self._parent.release_embodiment()
-
     async def on_key(self, key: str) -> None:
         if key in ("ctrl_c", "esc"):
             await self.stop()

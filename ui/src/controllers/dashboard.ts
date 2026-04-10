@@ -5,7 +5,7 @@ import { api, postJson } from './api'
 // Types
 // ---------------------------------------------------------------------------
 
-export type SessionState = 'idle' | 'preparing' | 'calibrating' | 'teleoperating' | 'recording' | 'replaying' | 'inferring'
+export type SessionState = 'idle' | 'preparing' | 'calibrating' | 'teleoperating' | 'recording' | 'replaying' | 'inferring' | 'error'
 export type EpisodePhase = '' | 'recording' | 'saving' | 'resetting'
 
 export interface ArmStatus {
@@ -115,6 +115,7 @@ interface DashboardStore {
   calibration: CalibrationStatus
 
   // Session actions
+  doDismissError: () => Promise<void>
   doTeleopStart: () => Promise<void>
   doTeleopStop: () => Promise<void>
   doRecordStart: (params: StartRecordingParams) => Promise<void>
@@ -217,6 +218,14 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
   clearLog: () => set({ logs: [] }),
 
   // -- Session lifecycle --------------------------------------------------
+
+  doDismissError: async () => {
+    try {
+      await postJson(`${SESSION}/dismiss-error`)
+    } catch (e: unknown) {
+      get().addLog(`Dismiss error failed: ${(e as Error).message}`, 'err')
+    }
+  },
 
   fetchSessionStatus: async () => {
     try {

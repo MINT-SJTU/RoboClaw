@@ -100,7 +100,7 @@ export default function DataView() {
               </label>
             </div>
             <button
-              disabled={session.state !== 'idle' || !trainDataset || !!loading}
+              disabled={(session.state !== 'idle' && session.state !== 'error') || !trainDataset || !!loading}
               onClick={() => store.doTrainStart({ dataset_name: trainDataset, steps: trainSteps, device: trainDevice })}
               className="w-full px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-ac hover:bg-ac2 shadow-glow-ac
                 transition-all active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed disabled:shadow-none"

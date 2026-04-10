@@ -28,6 +28,11 @@ def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
     async def session_status() -> dict[str, Any]:
         return service.get_status()
 
+    @app.post("/api/session/dismiss-error")
+    async def dismiss_error() -> dict[str, str]:
+        await service.dismiss_error()
+        return {"status": "idle"}
+
     @app.post("/api/teleop/start")
     async def teleop_start(body: TeleopStartRequest | None = None) -> dict[str, str]:
         fps = body.fps if body else 30
