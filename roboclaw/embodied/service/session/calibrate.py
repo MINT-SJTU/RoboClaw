@@ -179,7 +179,7 @@ class CalibrationSession(Session):
             return
         await super().stop()
 
-    # -- Agent entry point -------------------------------------------------
+    # -- Agent entry point (passthrough to TTY) ------------------------------
 
     async def calibrate(
         self,
@@ -187,7 +187,12 @@ class CalibrationSession(Session):
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        """Agent/CLI entry: calibrate arms via TtySession."""
+        """Agent/CLI entry: run calibration subprocess with inherited TTY.
+
+        Unlike the web path (start_calibration → Session.start), the agent
+        path passes the subprocess directly to the terminal so the user
+        can interact with lerobot-calibrate's input() prompts natively.
+        """
         if not tty_handoff:
             return "This action requires a local terminal."
 
@@ -199,36 +204,47 @@ class CalibrationSession(Session):
         if not targets:
             return "All arms are already calibrated."
 
-        from roboclaw.embodied.toolkit.tty import TtySession
+        from roboclaw.embodied.executor import SubprocessExecutor
 
+        runner = SubprocessExecutor()
         results: list[str] = []
         for arm in targets:
-            self._arm = arm
-            self._cal_manifest = manifest
-            argv = CommandBuilder.calibrate(arm)
-
-            await tty_handoff(start=True, label=f"Calibrating: {arm.alias}")
-            try:
-                await self.board.update(calibration_arm=arm.alias)
-                await self.start(argv, initial_state=SessionState.CALIBRATING, auto_confirm=False)
-                await TtySession(tty_handoff).run(self)
-                step = self.board.get("calibration_step", "")
-                if step == "done":
-                    manifest.mark_arm_calibrated(arm.alias)
-                    _sync_calibration_to_motors(arm)
-                    results.append(f"{arm.alias}: OK")
-                else:
-                    results.append(f"{arm.alias}: incomplete")
-            except Exception:
-                logger.exception("Calibration failed for {}", arm.alias)
-                results.append(f"{arm.alias}: FAILED")
-            finally:
-                await tty_handoff(start=False, label=f"Calibrating: {arm.alias}")
+            result = await self._calibrate_one_tty(arm, manifest, runner, tty_handoff)
+            if result == "interrupted":
+                return "interrupted"
+            results.append(result)
 
         manifest.reload()
         ok = sum(1 for r in results if r.endswith(": OK"))
         fail = len(results) - ok
         return f"{ok} succeeded, {fail} failed.\n" + "\n".join(results)
+
+    async def _calibrate_one_tty(
+        self,
+        arm: Binding,
+        manifest: Manifest,
+        runner: Any,
+        tty_handoff: Any,
+    ) -> str:
+        """Calibrate one arm with inherited TTY (agent/CLI path)."""
+        display = arm.alias
+        argv = CommandBuilder.calibrate(arm)
+        await tty_handoff(start=True, label=f"Calibrating: {display}")
+        try:
+            rc, stderr_text = await runner.run_interactive(argv)
+        finally:
+            await tty_handoff(start=False, label=f"Calibrating: {display}")
+
+        if rc in (130, -2):
+            return "interrupted"
+        if rc == 0:
+            manifest.mark_arm_calibrated(arm.alias)
+            _sync_calibration_to_motors(arm)
+            return f"{display}: OK"
+        msg = f"{display}: FAILED (exit {rc})"
+        if stderr_text.strip():
+            msg += f"\nstderr: {stderr_text.strip()}"
+        return msg
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
