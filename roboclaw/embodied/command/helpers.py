@@ -78,21 +78,21 @@ def resolve_cameras(cameras: list[Binding]) -> dict[str, dict[str, Any]]:
 
 
 def resolve_action_arms(manifest: Any, arms_filter: str = "") -> list[Binding]:
-    """Resolve arms from manifest, optionally filtered by port string."""
+    """Resolve arms from manifest, optionally filtered by alias or port."""
     configured = manifest.arms
     if not configured:
         return []
     if not arms_filter:
         return list(configured)
-    ports = {p.strip() for p in arms_filter.split(",") if p.strip()}
+    tokens = {t.strip() for t in arms_filter.split(",") if t.strip()}
     resolved = []
     seen: set[str] = set()
-    for port in ports:
-        if port in seen:
-            raise ActionError(f"Duplicate arm port '{port}'.")
-        seen.add(port)
-        arm = next((a for a in configured if a.port == port), None)
+    for token in tokens:
+        if token in seen:
+            raise ActionError(f"Duplicate arm identifier '{token}'.")
+        seen.add(token)
+        arm = next((a for a in configured if a.alias == token or a.port == token), None)
         if arm is None:
-            raise ActionError(f"No arm with port '{port}' in manifest.")
+            raise ActionError(f"No arm with alias or port '{token}' in manifest.")
         resolved.append(arm)
     return resolved

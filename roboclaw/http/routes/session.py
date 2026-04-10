@@ -16,10 +16,14 @@ class RecordStartRequest(BaseModel):
     fps: int = 30
     episode_time_s: int = 300
     reset_time_s: int = 10
+    dataset_name: str = ""
+    use_cameras: bool = True
+    arms: str = ""
 
 
 class TeleopStartRequest(BaseModel):
     fps: int = 30
+    arms: str = ""
 
 
 def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
@@ -36,7 +40,8 @@ def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
     @app.post("/api/teleop/start")
     async def teleop_start(body: TeleopStartRequest | None = None) -> dict[str, str]:
         fps = body.fps if body else 30
-        await service.start_teleop(fps=fps)
+        arms = body.arms if body else ""
+        await service.start_teleop(fps=fps, arms=arms)
         return {"status": "teleoperating"}
 
     @app.post("/api/teleop/stop")
@@ -52,6 +57,9 @@ def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
             fps=body.fps,
             episode_time_s=body.episode_time_s,
             reset_time_s=body.reset_time_s,
+            dataset_name=body.dataset_name,
+            use_cameras=body.use_cameras,
+            arms=body.arms,
         )
         return {"status": "recording", "dataset_name": dataset_name}
 

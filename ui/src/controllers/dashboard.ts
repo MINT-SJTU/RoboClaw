@@ -90,6 +90,9 @@ export interface StartRecordingParams {
   fps?: number
   episode_time_s: number
   reset_time_s: number
+  dataset_name?: string
+  use_cameras?: boolean
+  arms?: string
 }
 
 interface LogEntry {
@@ -116,7 +119,7 @@ interface DashboardStore {
 
   // Session actions
   doDismissError: () => Promise<void>
-  doTeleopStart: () => Promise<void>
+  doTeleopStart: (params?: { fps?: number; arms?: string }) => Promise<void>
   doTeleopStop: () => Promise<void>
   doRecordStart: (params: StartRecordingParams) => Promise<void>
   doRecordStop: () => Promise<void>
@@ -234,11 +237,11 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
     } catch { /* ignore */ }
   },
 
-  doTeleopStart: async () => {
+  doTeleopStart: async (params?) => {
     set({ loading: 'teleop' })
     get().addLog('Starting teleoperation...')
     try {
-      await postJson(`${TELEOP}/start`)
+      await postJson(`${TELEOP}/start`, params || {})
       get().addLog('Teleoperation started', 'ok')
     } catch (e: unknown) {
       get().addLog(`Teleop start failed: ${(e as Error).message}`, 'err')

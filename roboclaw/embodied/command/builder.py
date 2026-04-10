@@ -100,7 +100,7 @@ def _dataset_args(
         "--dataset.push_to_hub=false",
         f"--dataset.fps={fps}",
         f"--dataset.num_episodes={num_episodes}",
-        "--dataset.vcodec=h264",
+        "--dataset.vcodec=auto",
         "--dataset.streaming_encoding=true",
         f"--dataset.episode_time_s={episode_time_s}",
         f"--dataset.reset_time_s={reset_time_s}",
@@ -174,13 +174,12 @@ class CommandBuilder:
 
     @staticmethod
     def teleop(manifest: Any, *, fps: int = 30, arms: str = "") -> list[str]:
-        """Build teleoperation argv."""
+        """Build teleoperation argv (no cameras — only arms)."""
         resolved = resolve_action_arms(manifest, arms)
         grouped = group_arms(resolved)
         _validate_pairing(grouped["followers"], grouped["leaders"])
-        cameras = resolve_cameras(manifest.cameras)
         argv = _wrapper_args("teleoperate")
-        argv.extend(_robot_argv(grouped["followers"], grouped["leaders"], cameras))
+        argv.extend(_robot_argv(grouped["followers"], grouped["leaders"]))
         return argv
 
     @staticmethod

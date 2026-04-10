@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDashboard, type SessionState } from '../controllers/dashboard'
 import { useI18n } from '../controllers/i18n'
+import { ArmPairingPanel } from '../components/ArmPairingPanel'
 import { CameraPreviewPanel } from '../components/CameraPreviewPanel'
 import { ServoPanel } from '../components/ServoPanel'
 
@@ -63,6 +64,11 @@ export default function ControlView() {
   const [numEp, setNumEp] = useState(10)
   const [episodeTime, setEpisodeTime] = useState(300)
   const [resetTime, setResetTime] = useState(10)
+  const [datasetName, setDatasetName] = useState('')
+  const [fps, setFps] = useState(30)
+  const [useCameras, setUseCameras] = useState(true)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [selectedArms, setSelectedArms] = useState('')
   const [replayDataset, setReplayDataset] = useState('')
   const [replayEpisode, setReplayEpisode] = useState(0)
   const [inferCheckpoint, setInferCheckpoint] = useState('')
@@ -85,6 +91,10 @@ export default function ControlView() {
       num_episodes: numEp,
       episode_time_s: episodeTime,
       reset_time_s: resetTime,
+      dataset_name: datasetName.trim() || undefined,
+      fps,
+      use_cameras: useCameras,
+      arms: selectedArms || undefined,
     })
   }
 
@@ -181,13 +191,21 @@ export default function ControlView() {
                 </div>
               </div>
             )}
+
+            {/* Arm pairing */}
+            {hwStatus && hwStatus.arms.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-bd/40">
+                <ArmPairingPanel arms={hwStatus.arms} onChange={setSelectedArms} />
+              </div>
+            )}
           </div>
 
           {/* Teleop */}
           <div className="w-[190px] max-[900px]:w-full shrink-0 bg-sf rounded-lg p-3.5 shadow-card animate-slide-up stagger-2">
             <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest mb-3">{t('teleoperation')}</h3>
             <div className="space-y-2">
-              <ActionBtn color="ac" disabled={!ok.teleopStart || !!loading} onClick={store.doTeleopStart}
+              <ActionBtn color="ac" disabled={!ok.teleopStart || !!loading}
+                onClick={() => store.doTeleopStart(selectedArms ? { arms: selectedArms } : undefined)}
                 title={busy ? busyReason : undefined}>
                 {loading === 'teleop' ? t('startingTeleop') : t('startTeleop')}
               </ActionBtn>
@@ -229,6 +247,57 @@ export default function ControlView() {
                 <input type="number" value={resetTime} onChange={(e) => setResetTime(Number(e.target.value) || 10)} min={0}
                   className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
               </label>
+            </div>
+
+            {/* Collapsible advanced options */}
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-1.5 text-2xs text-tx3 font-mono uppercase tracking-widest
+                hover:text-tx2 transition-colors my-2"
+            >
+              <svg
+                className={`w-3 h-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+              {t('advancedOptions')}
+            </button>
+
+            {showAdvanced && (
+              <div className="flex gap-2 items-end flex-wrap mb-3 pl-4 border-l-2 border-bd/40">
+                <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1 min-w-[120px]">
+                  {t('datasetName')}
+                  <input
+                    value={datasetName}
+                    onChange={(e) => setDatasetName(e.target.value)}
+                    placeholder="rec_20260410_..."
+                    className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono
+                      focus:outline-none focus:border-ac placeholder:text-tx3"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[72px]">
+                  {t('fps')}
+                  <input
+                    type="number" value={fps}
+                    onChange={(e) => setFps(Number(e.target.value) || 30)} min={1} max={120}
+                    className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono
+                      focus:outline-none focus:border-ac"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-2xs text-tx3 font-mono cursor-pointer self-center pb-1.5">
+                  <input
+                    type="checkbox" checked={useCameras}
+                    onChange={(e) => setUseCameras(e.target.checked)}
+                    className="w-4 h-4 rounded border-bd accent-ac"
+                  />
+                  {t('useCameras')}
+                </label>
+              </div>
+            )}
+
+            <div className="flex gap-2 items-end flex-wrap">
               <div className="flex gap-2 ml-auto">
                 <ActionBtn color="gn" disabled={!ok.recStart || !!loading} onClick={handleRecordStart}
                   title={busy && state !== 'teleoperating' ? busyReason : undefined}>

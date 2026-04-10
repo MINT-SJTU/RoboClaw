@@ -142,9 +142,9 @@ class EmbodiedService:
 
     # -- Operations (Web entry points) --
 
-    async def start_teleop(self, *, fps: int = 30) -> None:
+    async def start_teleop(self, *, fps: int = 30, arms: str = "") -> None:
         self.acquire_embodiment("teleop")
-        argv = CommandBuilder.teleop(self.manifest, fps=fps)
+        argv = CommandBuilder.teleop(self.manifest, fps=fps, arms=arms)
         self._active_session = self.teleop
         await self.teleop.start(argv)
 
@@ -155,14 +155,20 @@ class EmbodiedService:
         fps: int = 30,
         episode_time_s: int = 300,
         reset_time_s: int = 10,
+        dataset_name: str = "",
+        use_cameras: bool = True,
+        arms: str = "",
     ) -> str:
         argv, dataset_name = CommandBuilder.record(
             self.manifest,
             task=task,
+            dataset_name=dataset_name,
             num_episodes=num_episodes,
             fps=fps,
             episode_time_s=episode_time_s,
             reset_time_s=reset_time_s,
+            use_cameras=use_cameras,
+            arms=arms,
         )
         self.acquire_embodiment("recording")
         await self.board.update(target_episodes=num_episodes, dataset=dataset_name)
