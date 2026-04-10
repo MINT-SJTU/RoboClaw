@@ -17,16 +17,18 @@ DOMAIN_ID="${ROS_DOMAIN_ID:-2}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--mode gazebo|nav] [--world LAUNCH_FILE] [--map PATH] [--model MODEL] [--ros-domain-id ID] [--rviz|--no-rviz]
+Usage: $(basename "$0") [--mode gazebo|nav|nav-only] [--world LAUNCH_FILE] [--map PATH] [--model MODEL] [--ros-domain-id ID] [--rviz|--no-rviz]
 
 Modes:
   gazebo   Launch Gazebo only.
   nav      Launch Gazebo first, then launch Nav2. RViz is enabled by default.
+  nav-only Launch Nav2 against an already running Gazebo runtime.
 
 Examples:
   bash robotics/scripts/run_sim.sh --mode gazebo
   bash robotics/scripts/run_sim.sh --mode nav --map "robotics/ros_ws/src/roboclaw_tb3_sim/maps/map.yaml"
   bash robotics/scripts/run_sim.sh --mode nav
+  bash robotics/scripts/run_sim.sh --mode nav-only
   bash robotics/scripts/run_sim.sh --mode nav --no-rviz
 EOF
 }
@@ -164,7 +166,7 @@ if [[ ! -f "$WS_SETUP" ]]; then
   exit 1
 fi
 
-if [[ "$MODE" == "nav" && ! -f "$MAP_PATH" ]]; then
+if [[ "$MODE" == "nav" || "$MODE" == "nav-only" ]] && [[ ! -f "$MAP_PATH" ]]; then
   echo "Map file not found: $MAP_PATH" >&2
   exit 1
 fi
@@ -194,6 +196,10 @@ case "$MODE" in
     launch_gazebo_background
     echo "Waiting for Gazebo to start before launching Nav2..."
     sleep 5
+    launch_nav2
+    ;;
+  nav-only)
+    echo "Launching Nav2 against an existing Gazebo runtime."
     launch_nav2
     ;;
   *)
