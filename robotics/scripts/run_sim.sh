@@ -38,15 +38,37 @@ WITH_RVIZ="true"
 
 cleanup() {
   if [[ -n "$GAZEBO_PID" ]] && kill -0 "$GAZEBO_PID" 2>/dev/null; then
-    echo "Stopping Gazebo (pid=$GAZEBO_PID)"
-    kill "$GAZEBO_PID" 2>/dev/null || true
+    echo "Stopping Gazebo process group (pid=$GAZEBO_PID)"
+    kill -- -"$GAZEBO_PID" 2>/dev/null || kill "$GAZEBO_PID" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$GAZEBO_PID" 2>/dev/null; then
+      echo "Force-stopping Gazebo process group (pid=$GAZEBO_PID)"
+      kill -9 -- -"$GAZEBO_PID" 2>/dev/null || kill -9 "$GAZEBO_PID" 2>/dev/null || true
+    fi
     wait "$GAZEBO_PID" 2>/dev/null || true
+  fi
+}
+
+activate_ros_python_runtime() {
+  # ROS Humble binaries on Ubuntu are built against system Python 3.10.
+  # If this script is launched from a conda shell (for example Python 3.13),
+  # subprocesses such as gazebo_ros/spawn_entity.py may pick the wrong
+  # interpreter via /usr/bin/env python3 and fail to import rclpy extensions.
+  export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export PATH="$(printf '%s' "$PATH" | awk -v RS=: -v ORS=: -v skip="$CONDA_PREFIX/" '$0 != "" && index($0, skip) != 1 {print}' | sed 's/:$//')"
+    if [[ -n "${PYTHONPATH:-}" ]]; then
+      export PYTHONPATH="$(printf '%s' "$PYTHONPATH" | awk -v RS=: -v ORS=: -v skip="$CONDA_PREFIX/" '$0 != "" && index($0, skip) != 1 {print}' | sed 's/:$//')"
+    fi
+    if [[ -n "${PYTHONHOME:-}" && "$PYTHONHOME" == "$CONDA_PREFIX"* ]]; then
+      unset PYTHONHOME
+    fi
   fi
 }
 
 launch_gazebo_background() {
   echo "Launching Gazebo in background with turtlebot3_gazebo/$WORLD_LAUNCH"
-  ros2 launch turtlebot3_gazebo "$WORLD_LAUNCH" &
+  setsid ros2 launch turtlebot3_gazebo "$WORLD_LAUNCH" &
   GAZEBO_PID=$!
   echo "Gazebo pid=$GAZEBO_PID"
 }
@@ -179,12 +201,14 @@ set -u
 
 export TURTLEBOT3_MODEL="$MODEL"
 export ROS_DOMAIN_ID="$DOMAIN_ID"
+activate_ros_python_runtime
 
 echo "REPO_ROOT=$REPO_ROOT"
 echo "TURTLEBOT3_MODEL=$TURTLEBOT3_MODEL"
 echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 echo "MODE=$MODE"
 echo "WITH_RVIZ=$WITH_RVIZ"
+echo "python3=$(command -v python3)"
 
 case "$MODE" in
   gazebo)

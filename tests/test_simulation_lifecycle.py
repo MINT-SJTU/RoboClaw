@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+from types import SimpleNamespace
 
 from roboclaw.embodied.ros2.discovery import CommandResult
 from roboclaw.embodied.simulation import lifecycle as lifecycle_module
@@ -73,7 +74,9 @@ def test_lifecycle_bringup_builds_nav_command(tmp_path) -> None:
         "7",
         "--no-rviz",
     ]
+    assert seen["env"]["ROBOCLAW_SIM_LOG_PATH"].endswith("-nav.log")
     assert lifecycle.status()["running"] is True
+    assert lifecycle.status()["log_path"].endswith("-nav.log")
 
 
 def test_lifecycle_shutdown_stops_tracked_process(tmp_path, monkeypatch) -> None:
@@ -91,6 +94,18 @@ def test_lifecycle_shutdown_stops_tracked_process(tmp_path, monkeypatch) -> None
     calls: list[tuple[int, signal.Signals]] = []
     monkeypatch.setattr(lifecycle_module.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(lifecycle_module.os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
+    monkeypatch.setattr(lifecycle_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        lifecycle_module.pwd,
+        "getpwuid",
+        lambda uid: SimpleNamespace(pw_name="tester"),
+    )
+    monkeypatch.setattr(lifecycle_module.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(
+        lifecycle_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
 
     result = lifecycle.shutdown(timeout_s=3.0)
 
@@ -98,6 +113,51 @@ def test_lifecycle_shutdown_stops_tracked_process(tmp_path, monkeypatch) -> None
     assert fake_process.wait_calls == [3.0]
     assert calls == [(5151, signal.SIGTERM)]
     assert lifecycle.status()["tracked"] is False
+
+
+def test_lifecycle_shutdown_cleans_orphaned_simulation_processes(monkeypatch) -> None:
+    lifecycle = SimulationLifecycle(repo_root=".")
+    kills: list[tuple[int, signal.Signals]] = []
+    snapshots = iter(
+        [
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "2000 tester /usr/bin/python3 /opt/ros/humble/bin/ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py\n"
+                    "2001 tester /opt/ros/humble/lib/rclcpp_components/component_container_isolated --ros-args -r __node:=nav2_container\n"
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="2001 tester /opt/ros/humble/lib/rclcpp_components/component_container_isolated --ros-args -r __node:=nav2_container\n",
+                stderr="",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(lifecycle_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        lifecycle_module.pwd,
+        "getpwuid",
+        lambda uid: SimpleNamespace(pw_name="tester"),
+    )
+    monkeypatch.setattr(lifecycle_module.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(lifecycle_module.subprocess, "run", lambda *args, **kwargs: next(snapshots))
+    monkeypatch.setattr(lifecycle_module.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+
+    result = lifecycle.shutdown(timeout_s=1.0)
+
+    assert result["ok"] is True
+    assert result["orphan_cleanup"] == {
+        "terminated": [2000, 2001],
+        "killed": [2001],
+    }
+    assert kills == [
+        (2000, signal.SIGTERM),
+        (2001, signal.SIGTERM),
+        (2001, signal.SIGKILL),
+    ]
 
 
 def test_lifecycle_reset_world_falls_back_to_reset_world_service(tmp_path) -> None:
