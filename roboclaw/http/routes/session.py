@@ -32,6 +32,10 @@ def register_session_routes(app: FastAPI, service: EmbodiedService) -> None:
     async def session_status() -> dict[str, Any]:
         return service.get_status()
 
+    @app.get("/api/session/logs")
+    async def session_logs() -> dict[str, Any]:
+        return {"logs": service.board.recent_logs(50)}
+
     @app.post("/api/session/dismiss-error")
     async def dismiss_error() -> dict[str, str]:
         await service.dismiss_error()
