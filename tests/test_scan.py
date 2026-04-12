@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from roboclaw.embodied.embodiment.hardware.discovery import HardwareDiscovery
 from roboclaw.embodied.embodiment.hardware.scan import _list_serial_ports, scan_serial_ports
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 
@@ -82,3 +83,31 @@ def test_scan_serial_ports_uses_lerobot_compatible_range() -> None:
         ports = scan_serial_ports()
 
     assert ports == [SerialInterface(dev="/dev/tty.usbmodemA")]
+
+
+def test_scan_serial_ports_dedupes_macos_tty_and_cu_variants() -> None:
+    with (
+        patch(
+            "roboclaw.embodied.embodiment.hardware.scan._list_serial_ports",
+            return_value=["/dev/cu.usbmodem123", "/dev/tty.usbmodem123"],
+        ),
+        patch("roboclaw.embodied.embodiment.hardware.scan._read_symlink_map", return_value={}),
+        patch("roboclaw.embodied.embodiment.hardware.scan.os.path.exists", return_value=True),
+        patch("roboclaw.embodied.embodiment.hardware.scan.sys.platform", "darwin"),
+    ):
+        ports = scan_serial_ports()
+
+    assert ports == [SerialInterface(dev="/dev/tty.usbmodem123")]
+
+
+def test_discovery_probes_cu_fallback_for_macos_without_duplicate_device() -> None:
+    class _FakeProber:
+        def probe(self, port_path: str, baudrate: int = 1_000_000, motor_ids: list[int] | None = None) -> list[int]:
+            return [1, 2, 3] if port_path == "/dev/cu.usbmodem123" else []
+
+    ports = [SerialInterface(dev="/dev/tty.usbmodem123")]
+
+    with patch("roboclaw.embodied.embodiment.hardware.scan.sys.platform", "darwin"):
+        result = HardwareDiscovery._do_probe(ports, _FakeProber(), "feetech")
+
+    assert result == [SerialInterface(dev="/dev/cu.usbmodem123", bus_type="feetech", motor_ids=(1, 2, 3))]
