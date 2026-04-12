@@ -8,6 +8,7 @@ from dataclasses import replace
 from roboclaw.embodied.embodiment.hardware.probers import _REGISTRY, get_prober
 from roboclaw.embodied.embodiment.hardware.scan import (
     capture_camera_frames,
+    port_candidates,
     scan_cameras,
     scan_serial_ports,
     suppress_stderr,
@@ -181,7 +182,14 @@ class HardwareDiscovery:
             path = port.dev or port.by_id or port.by_path
             if not path:
                 continue
-            ids = prober.probe(path, baudrate=baudrate, motor_ids=motor_ids)
-            if ids:
-                result.append(replace(port, motor_ids=tuple(ids), bus_type=protocol))
+            for candidate in port_candidates(path):
+                ids = prober.probe(candidate, baudrate=baudrate, motor_ids=motor_ids)
+                if ids:
+                    result.append(replace(
+                        port,
+                        dev=candidate if port.dev else port.dev,
+                        motor_ids=tuple(ids),
+                        bus_type=protocol,
+                    ))
+                    break
         return result

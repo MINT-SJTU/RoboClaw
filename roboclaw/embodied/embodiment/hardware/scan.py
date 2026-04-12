@@ -81,7 +81,35 @@ def scan_serial_ports(device_patterns: dict[str, tuple[str, ...]] | None = None)
             by_id=by_id.get(dev, ""),
             dev=dev,
         ))
+    if sys.platform == "darwin":
+        return _dedupe_macos_serial_ports(ports)
     return ports
+
+
+def _macos_serial_key(port: SerialInterface) -> str:
+    """Collapse /dev/tty.* and /dev/cu.* siblings into one physical device key."""
+    if port.by_id:
+        return f"by-id:{port.by_id}"
+    if port.by_path:
+        return f"by-path:{port.by_path}"
+    name = os.path.basename(port.dev)
+    if name.startswith(("tty.", "cu.")):
+        return f"dev:{name.split('.', 1)[1]}"
+    return f"dev:{name}"
+
+
+def _macos_port_sort_key(port: SerialInterface) -> tuple[int, str]:
+    """Prefer tty.* as the display identity; cu.* remains a runtime fallback."""
+    name = os.path.basename(port.dev)
+    return (0 if name.startswith("tty.") else 1, port.dev)
+
+
+def _dedupe_macos_serial_ports(ports: list[SerialInterface]) -> list[SerialInterface]:
+    """Keep one SerialInterface per physical macOS USB serial device."""
+    grouped: dict[str, list[SerialInterface]] = {}
+    for port in ports:
+        grouped.setdefault(_macos_serial_key(port), []).append(port)
+    return [sorted(group, key=_macos_port_sort_key)[0] for _, group in sorted(grouped.items())]
 
 
 def list_serial_device_paths() -> list[str]:
@@ -109,7 +137,7 @@ def port_candidates(port_path: str) -> list[str]:
             candidates.append(port_path.replace("/dev/tty.", "/dev/cu.", 1))
         elif name.startswith("cu."):
             candidates.append(port_path.replace("/dev/cu.", "/dev/tty.", 1))
-    return candidates
+    return list(dict.fromkeys(candidates))
 
 
 def suppress_stderr() -> int:
