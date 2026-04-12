@@ -5,7 +5,7 @@ import {
   type AnnotationItem,
   type AnnotationWorkspacePayload,
   type WorkflowTaskContext,
-} from '../../controllers/workflow'
+} from '../../controllers/curation'
 import AnnotationWorkspaceCard from './AnnotationWorkspaceCard'
 
 const ANNOTATION_SEED_COLORS = [

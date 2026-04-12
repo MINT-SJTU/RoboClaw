@@ -364,7 +364,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
   loadDatasets: async () => {
     set({ datasetsLoading: true })
     try {
-      const datasets = await fetchJson<DatasetSummary[]>('/api/workflow/datasets')
+      const datasets = await fetchJson<DatasetSummary[]>('/api/curation/datasets')
       set({ datasets })
     } finally {
       set({ datasetsLoading: false })
@@ -382,7 +382,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       propagationResults: null,
     })
     const info = await fetchJson<DatasetSummary>(
-      `/api/workflow/datasets/${encodeURIComponent(name)}`,
+      `/api/curation/datasets/${encodeURIComponent(name)}`,
     )
     set({ datasetInfo: info })
     await get().refreshState()
@@ -390,7 +390,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
 
   importDatasetFromHf: async (datasetId: string, includeVideos = true) => {
     const payload = await fetchJson<{ job_id: string; status: string }>(
-      '/api/workflow/datasets/import-hf',
+      '/api/curation/datasets/import-hf',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -404,7 +404,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     let active = true
     while (active) {
       const job = await fetchJson<DatasetImportJob>(
-        `/api/workflow/datasets/import-status/${payload.job_id}`,
+        `/api/curation/datasets/import-status/${payload.job_id}`,
       )
       set({ datasetImportJob: job })
       if (job.status === 'completed') {
@@ -444,7 +444,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     const { selectedDataset, selectedValidators, qualityThresholds } = get()
     if (!selectedDataset) return
     set({ qualityRunning: true })
-    await fetchJson('/api/workflow/quality-run', {
+    await fetchJson('/api/curation/quality-run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -461,7 +461,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (!selectedDataset) {
       throw new Error('No dataset selected')
     }
-    await fetchJson('/api/workflow/quality-pause', {
+    await fetchJson('/api/curation/quality-pause', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset: selectedDataset }),
@@ -475,7 +475,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
     set({ qualityRunning: true })
-    await fetchJson('/api/workflow/quality-resume', {
+    await fetchJson('/api/curation/quality-resume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -491,7 +491,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     const { selectedDataset } = get()
     if (!selectedDataset) return
     set({ prototypeRunning: true })
-    await fetchJson('/api/workflow/prototype-run', {
+    await fetchJson('/api/curation/prototype-run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -507,7 +507,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (!selectedDataset) return null
     const results = normalizeQualityResults(
       await fetchJson<QualityResults>(
-        `/api/workflow/quality-results?dataset=${encodeURIComponent(selectedDataset)}`,
+        `/api/curation/quality-results?dataset=${encodeURIComponent(selectedDataset)}`,
       ),
     )
     set((state) => ({
@@ -532,7 +532,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (!selectedDataset) return null
     const results = normalizePrototypeResults(
       await fetchJson<PrototypeResults>(
-        `/api/workflow/prototype-results?dataset=${encodeURIComponent(selectedDataset)}`,
+        `/api/curation/prototype-results?dataset=${encodeURIComponent(selectedDataset)}`,
       ),
     )
     set({ prototypeResults: results })
@@ -544,7 +544,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (!selectedDataset) return null
     const results = normalizePropagationResults(
       await fetchJson<PropagationResults>(
-        `/api/workflow/propagation-results?dataset=${encodeURIComponent(selectedDataset)}`,
+        `/api/curation/propagation-results?dataset=${encodeURIComponent(selectedDataset)}`,
       ),
     )
     set({ propagationResults: results })
@@ -557,7 +557,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
     await fetchJson<{ status: string }>(
-      '/api/workflow/quality-results/delete',
+      '/api/curation/quality-results/delete',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -574,7 +574,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
     const result = await fetchJson<{ path: string; row_count: number }>(
-      '/api/workflow/quality-publish',
+      '/api/curation/quality-publish',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -591,7 +591,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
     const result = await fetchJson<{ path: string; row_count: number }>(
-      '/api/workflow/text-annotations-publish',
+      '/api/curation/text-annotations-publish',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -613,7 +613,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (failedOnly) {
       params.set('failed_only', 'true')
     }
-    return `/api/workflow/quality-results.csv?${params.toString()}`
+    return `/api/curation/quality-results.csv?${params.toString()}`
   },
 
   fetchAnnotationWorkspace: async (episodeIndex: number) => {
@@ -622,7 +622,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
     return fetchJson<AnnotationWorkspacePayload>(
-      `/api/workflow/annotation-workspace?dataset=${encodeURIComponent(
+      `/api/curation/annotation-workspace?dataset=${encodeURIComponent(
         selectedDataset,
       )}&episode_index=${episodeIndex}`,
     )
@@ -634,7 +634,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
 
-    const saved = await fetchJson<SavedAnnotationsPayload>('/api/workflow/annotations', {
+    const saved = await fetchJson<SavedAnnotationsPayload>('/api/curation/annotations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -655,7 +655,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       throw new Error('No dataset selected')
     }
 
-    await fetchJson('/api/workflow/propagation-run', {
+    await fetchJson('/api/curation/propagation-run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -671,7 +671,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (!selectedDataset) return
 
     const state = await fetchJson<WorkflowState>(
-      `/api/workflow/state?dataset=${encodeURIComponent(selectedDataset)}`,
+      `/api/curation/state?dataset=${encodeURIComponent(selectedDataset)}`,
     )
     set((current) => ({
       workflowState: state,

@@ -436,3 +436,23 @@ def _collect_joint_values(
             has_values = True
 
     return action_values, state_values, has_values
+
+
+# ---------------------------------------------------------------------------
+# Info-level feature name extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_action_names(info: dict[str, Any]) -> list[str]:
+    features = info.get("features", {})
+    names = features.get("action", {}).get("names", [])
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+def extract_state_names(info: dict[str, Any]) -> list[str]:
+    features = info.get("features", {})
+    for key in ("observation.state", "state"):
+        names = features.get(key, {}).get("names", [])
+        if isinstance(names, list) and names:
+            return [str(n) for n in names]
+    return []

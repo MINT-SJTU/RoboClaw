@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../controllers/i18n'
-import { useWorkflow, type QualityEpisodeResult } from '../controllers/workflow'
+import { useWorkflow, type QualityEpisodeResult } from '../controllers/curation'
 import { ActionButton, GlassPanel, MetricCard } from '../components/ux'
 
 function cn(...values: Array<string | false | null | undefined>) {

@@ -42,8 +42,8 @@ def register_all_routes(
     register_infer_routes(app, service)
     register_hub_routes(app, service)
 
-    # Workflow + Explorer routes (standalone APIRouters)
-    from roboclaw.http.workflow_routes import router as workflow_router
+    # Curation + Explorer routes (standalone APIRouters)
+    from roboclaw.http.curation_routes import router as curation_router
     from roboclaw.http.explorer_routes import router as explorer_router
-    app.include_router(workflow_router)
+    app.include_router(curation_router)
     app.include_router(explorer_router)

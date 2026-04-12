@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import AnnotationPanel from '../components/workflow/AnnotationPanel'
-import PrototypePanel from '../components/workflow/PrototypePanel'
+import AnnotationPanel from '../components/curation/AnnotationPanel'
+import PrototypePanel from '../components/curation/PrototypePanel'
 import { ActionButton, GlassPanel, MetricCard } from '../components/ux'
 import { useI18n } from '../controllers/i18n'
-import { useWorkflow } from '../controllers/workflow'
+import { useWorkflow } from '../controllers/curation'
 
 export default function TextAlignmentView() {
   const { t } = useI18n()

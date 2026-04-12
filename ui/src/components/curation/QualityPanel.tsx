@@ -1,5 +1,5 @@
 import { useI18n } from '../../controllers/i18n'
-import { useWorkflow } from '../../controllers/workflow'
+import { useWorkflow } from '../../controllers/curation'
 
 const VALIDATOR_OPTIONS = [
   { key: 'metadata', labelKey: 'metadata' as const },

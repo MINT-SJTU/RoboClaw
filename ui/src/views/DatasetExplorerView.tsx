@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../controllers/i18n'
 import { useExplorer, type FeatureStat, type ModalityItem } from '../controllers/explorer'
-import { useWorkflow } from '../controllers/workflow'
+import { useWorkflow } from '../controllers/curation'
 import { ActionButton, GlassPanel, MetricCard } from '../components/ux'
 
 function cn(...values: Array<string | false | null | undefined>) {

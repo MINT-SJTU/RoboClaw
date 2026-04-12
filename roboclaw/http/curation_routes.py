@@ -1,4 +1,4 @@
-"""FastAPI routes for the workflow quality/prototype/annotation pipeline."""
+"""FastAPI routes for the curation quality/prototype/annotation pipeline."""
 
 from __future__ import annotations
 
@@ -14,8 +14,6 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
 from huggingface_hub import snapshot_download
-from huggingface_hub.errors import HFValidationError
-from huggingface_hub.utils import validate_repo_id
 from loguru import logger
 from pydantic import BaseModel
 
@@ -28,7 +26,7 @@ from roboclaw.http.dashboard_datasets import (
     resolve_dataset_path,
 )
 from roboclaw.http.remote_explorer import build_remote_dataset_info
-from roboclaw.embodied.workflow.exports import (
+from roboclaw.embodied.curation.exports import (
     dataset_quality_parquet_path,
     dataset_text_annotations_parquet_path,
     export_quality_csv,
@@ -36,13 +34,13 @@ from roboclaw.embodied.workflow.exports import (
     publish_text_annotations_metadata_parquet,
     workflow_quality_parquet_path,
 )
-from roboclaw.embodied.workflow.features import (
+from roboclaw.embodied.curation.features import (
     build_joint_trajectory_payload,
     resolve_task_value,
     resolve_timestamp,
 )
-from roboclaw.embodied.workflow.service import WorkflowService
-from roboclaw.embodied.workflow.state import (
+from roboclaw.embodied.curation.service import CurationService
+from roboclaw.embodied.curation.state import (
     load_annotations,
     load_propagation_results,
     load_prototype_results,
@@ -52,9 +50,9 @@ from roboclaw.embodied.workflow.state import (
     save_workflow_state,
     set_stage_pause_requested,
 )
-from roboclaw.embodied.workflow.validators import load_episode_data
+from roboclaw.embodied.curation.validators import load_episode_data
 
-router = APIRouter(prefix="/api/workflow")
+router = APIRouter(prefix="/api/curation")
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +71,10 @@ class PrototypeRunRequest(BaseModel):
     dataset: str
     cluster_count: int | None = None
     candidate_limit: int = 50
+
+    def model_post_init(self, _context: Any) -> None:
+        if self.candidate_limit > 200:
+            self.candidate_limit = 200
 
 
 class AnnotationSaveRequest(BaseModel):
@@ -184,12 +186,20 @@ def _record_import_job(
     }
 
 
+def _validate_dataset_id_path(dataset_id: str) -> None:
+    root = datasets_root()
+    target = (root / dataset_id).resolve()
+    if not str(target).startswith(str(root.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid dataset_id: path traversal detected")
+
+
 def _import_dataset_snapshot(
     dataset_id: str,
     *,
     include_videos: bool,
     force: bool,
 ) -> dict[str, Any]:
+    _validate_dataset_id_path(dataset_id)
     root = datasets_root()
     target_dir = root / dataset_id
     target_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -225,17 +235,7 @@ def _import_dataset_snapshot(
     }
 
 
-def _ensure_dataset_workspace(dataset_id: str, *, include_videos: bool = False) -> Path:
-    try:
-        return resolve_dataset_path(dataset_id)
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-    try:
-        validate_repo_id(dataset_id)
-    except HFValidationError as exc:
-        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found") from exc
-    _import_dataset_snapshot(dataset_id, include_videos=include_videos, force=False)
+def _ensure_dataset_workspace(dataset_id: str) -> Path:
     return resolve_dataset_path(dataset_id)
 
 
@@ -435,7 +435,7 @@ def _build_workspace_payload(dataset: str, dataset_path: Path, episode_index: in
         "videos": [
             {
                 "path": relative_path,
-                "url": f"/api/workflow/video/{quote(relative_path, safe='/')}?dataset={quote(dataset, safe='')}",
+                "url": f"/api/curation/video/{quote(relative_path, safe='/')}?dataset={quote(dataset, safe='')}",
                 "stream": Path(relative_path).stem,
                 "from_timestamp": 0,
                 "to_timestamp": duration_s if duration_s > 0 else None,
@@ -528,7 +528,7 @@ async def workflow_dataset_detail(name: str) -> dict:
 @router.get("/state")
 async def workflow_state(dataset: str) -> dict[str, Any]:
     """Get the current workflow state for a dataset."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     state = load_workflow_state(dataset_path)
     return _reconcile_stale_running_state(dataset_path, state)
 
@@ -536,7 +536,7 @@ async def workflow_state(dataset: str) -> dict[str, Any]:
 @router.get("/quality-results")
 async def workflow_quality_results(dataset: str) -> dict[str, Any]:
     """Get the latest detailed quality-validation results for a dataset."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     payload = _serialize_quality_results(load_quality_results(dataset_path))
     payload["working_parquet_path"] = str(workflow_quality_parquet_path(dataset_path))
     payload["published_parquet_path"] = str(dataset_quality_parquet_path(dataset_path))
@@ -544,7 +544,7 @@ async def workflow_quality_results(dataset: str) -> dict[str, Any]:
 
 
 def _delete_quality_results(dataset: str) -> dict[str, Any]:
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     state = load_workflow_state(dataset_path)
     quality_stage = state["stages"]["quality_validation"]
     if quality_stage.get("status") == "running":
@@ -577,23 +577,20 @@ async def workflow_delete_quality_results(dataset: str) -> dict[str, Any]:
     return _delete_quality_results(dataset)
 
 
-@router.post("/quality-results/delete")
-async def workflow_delete_quality_results_post(body: DatasetPublishRequest) -> dict[str, Any]:
-    """POST fallback for environments that restrict DELETE methods."""
-    return _delete_quality_results(body.dataset)
+
 
 
 @router.get("/prototype-results")
 async def workflow_prototype_results(dataset: str) -> dict[str, Any]:
     """Get the latest detailed prototype-discovery results for a dataset."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     return _serialize_prototype_results(load_prototype_results(dataset_path))
 
 
 @router.get("/propagation-results")
 async def workflow_propagation_results(dataset: str) -> dict[str, Any]:
     """Get the latest semantic-propagation results for a dataset."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     payload = _serialize_propagation_results(load_propagation_results(dataset_path))
     payload["published_parquet_path"] = str(dataset_text_annotations_parquet_path(dataset_path))
     return payload
@@ -607,8 +604,8 @@ async def workflow_propagation_results(dataset: str) -> dict[str, Any]:
 @router.post("/quality-run")
 async def quality_run(body: QualityRunRequest) -> dict[str, str]:
     """Start batch quality validation as a background task."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
-    service = WorkflowService(dataset_path, body.dataset)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
+    service = CurationService(dataset_path, body.dataset)
 
     async def _task() -> None:
         await asyncio.to_thread(
@@ -626,7 +623,7 @@ async def quality_run(body: QualityRunRequest) -> dict[str, str]:
 @router.post("/quality-pause")
 async def quality_pause(body: DatasetPublishRequest) -> dict[str, Any]:
     """Request that a running quality-validation task pause after the current episode."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
     state = load_workflow_state(dataset_path)
     quality_stage = state["stages"]["quality_validation"]
     if quality_stage.get("status") != "running":
@@ -639,7 +636,7 @@ async def quality_pause(body: DatasetPublishRequest) -> dict[str, Any]:
 @router.post("/quality-resume")
 async def quality_resume(body: QualityRunRequest) -> dict[str, str]:
     """Resume a paused quality-validation task from the latest partial results."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
     state = load_workflow_state(dataset_path)
     quality_stage = state["stages"]["quality_validation"]
     if quality_stage.get("status") != "paused":
@@ -660,7 +657,7 @@ async def quality_resume(body: QualityRunRequest) -> dict[str, str]:
     else:
         remaining = [index for index in range(total) if index not in completed]
 
-    service = WorkflowService(dataset_path, body.dataset)
+    service = CurationService(dataset_path, body.dataset)
     selected_validators = existing.get("selected_validators") or body.selected_validators
     threshold_overrides = existing.get("threshold_overrides") or body.threshold_overrides
 
@@ -689,7 +686,7 @@ async def workflow_quality_results_csv(
     failed_only: bool = False,
 ) -> PlainTextResponse:
     """Export the current quality-result table as CSV."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     csv_text = export_quality_csv(dataset, dataset_path, failed_only=failed_only)
     filename = f"{Path(dataset).name}-quality-results.csv"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
@@ -699,7 +696,7 @@ async def workflow_quality_results_csv(
 @router.post("/quality-publish")
 async def workflow_quality_publish(body: DatasetPublishRequest) -> dict[str, Any]:
     """Publish the current quality results into dataset metadata as parquet."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
     return publish_quality_metadata_parquet(body.dataset, dataset_path)
 
 
@@ -711,8 +708,8 @@ async def workflow_quality_publish(body: DatasetPublishRequest) -> dict[str, Any
 @router.post("/prototype-run")
 async def prototype_run(body: PrototypeRunRequest) -> dict[str, str]:
     """Start prototype discovery as a background task."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
-    service = WorkflowService(dataset_path, body.dataset)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
+    service = CurationService(dataset_path, body.dataset)
 
     async def _task() -> None:
         await asyncio.to_thread(
@@ -734,7 +731,7 @@ async def prototype_run(body: PrototypeRunRequest) -> dict[str, str]:
 @router.get("/annotations")
 async def get_annotations(dataset: str, episode_index: int) -> dict[str, Any]:
     """Get annotations for a specific episode."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     result = load_annotations(dataset_path, episode_index)
     if result is None:
         return {
@@ -749,14 +746,14 @@ async def get_annotations(dataset: str, episode_index: int) -> dict[str, Any]:
 @router.get("/annotation-workspace")
 async def get_annotation_workspace(dataset: str, episode_index: int) -> dict[str, Any]:
     """Load the annotation workspace payload for a specific episode."""
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     return _build_workspace_payload(dataset, dataset_path, episode_index)
 
 
 @router.post("/annotations")
 async def post_annotations(body: AnnotationSaveRequest) -> dict[str, Any]:
     """Save annotations for a specific episode."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
     data: dict[str, Any] = {
         "episode_index": body.episode_index,
         "task_context": body.task_context,
@@ -779,8 +776,8 @@ async def post_annotations(body: AnnotationSaveRequest) -> dict[str, Any]:
 @router.post("/propagation-run")
 async def propagation_run(body: PropagationRunRequest) -> dict[str, str]:
     """Start semantic propagation as a background task."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
-    service = WorkflowService(dataset_path, body.dataset)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
+    service = CurationService(dataset_path, body.dataset)
 
     async def _task() -> None:
         await asyncio.to_thread(
@@ -799,7 +796,7 @@ async def propagation_run(body: PropagationRunRequest) -> dict[str, str]:
 @router.post("/text-annotations-publish")
 async def workflow_text_annotations_publish(body: DatasetPublishRequest) -> dict[str, Any]:
     """Publish current annotation state into dataset metadata as parquet."""
-    dataset_path = _ensure_dataset_workspace(body.dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(body.dataset)
     return publish_text_annotations_metadata_parquet(body.dataset, dataset_path)
 
 
@@ -816,7 +813,7 @@ async def serve_video(path: str, dataset: str) -> FileResponse:
     path traversal attacks.  The dataset name is passed as a query parameter
     to support nested names containing slashes (e.g. ``cadene/droid_1.0.1``).
     """
-    dataset_path = _ensure_dataset_workspace(dataset, include_videos=False)
+    dataset_path = _ensure_dataset_workspace(dataset)
     video_path = (dataset_path / path).resolve()
 
     # Prevent path traversal

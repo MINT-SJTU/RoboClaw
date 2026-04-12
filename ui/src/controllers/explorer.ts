@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { JointTrajectoryPayload } from './workflow'
+import type { JointTrajectoryPayload } from './curation'
 
 // ---------------------------------------------------------------------------
 // Types

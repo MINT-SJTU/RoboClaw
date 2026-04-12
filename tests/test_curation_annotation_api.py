@@ -10,10 +10,10 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.http import workflow_routes
-from roboclaw.embodied.workflow import exports as workflow_exports
-from roboclaw.embodied.workflow import service as workflow_service
-from roboclaw.embodied.workflow.state import (
+from roboclaw.http import curation_routes
+from roboclaw.embodied.curation import exports as curation_exports
+from roboclaw.embodied.curation import service as curation_service
+from roboclaw.embodied.curation.state import (
     load_workflow_state,
     save_prototype_results,
     save_quality_results,
@@ -63,17 +63,17 @@ def _build_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Test
     video_path = dataset_path / "videos" / "chunk-000" / "episode_000000" / "front.mp4"
 
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "datasets_root",
         lambda: dataset_root,
     )
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "resolve_dataset_path",
         lambda name: (dataset_root / name).resolve(),
     )
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "load_episode_data",
         lambda _dataset_path, _episode_index: {
             "info": info,
@@ -99,7 +99,7 @@ def _build_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Test
     )
 
     app = FastAPI()
-    app.include_router(workflow_routes.router)
+    app.include_router(curation_routes.router)
     return TestClient(app), dataset_path
 
 
@@ -127,19 +127,19 @@ def test_annotation_save_versions_and_updates_state(
         ],
     }
 
-    first = client.post("/api/workflow/annotations", json=body)
+    first = client.post("/api/curation/annotations", json=body)
     assert first.status_code == 200
     first_payload = first.json()
     assert first_payload["version_number"] == 1
     assert first_payload["episode_index"] == 0
     assert first_payload["task_context"]["label"] == "Pick"
 
-    second = client.post("/api/workflow/annotations", json=body)
+    second = client.post("/api/curation/annotations", json=body)
     assert second.status_code == 200
     second_payload = second.json()
     assert second_payload["version_number"] == 2
 
-    state_response = client.get("/api/workflow/state", params={"dataset": "demo"})
+    state_response = client.get("/api/curation/state", params={"dataset": "demo"})
     assert state_response.status_code == 200
     stage = state_response.json()["stages"]["annotation"]
     assert stage["annotated_episodes"] == [0]
@@ -154,7 +154,7 @@ def test_annotation_workspace_returns_video_and_joint_payload(
     client, _dataset_path = _build_client(tmp_path, monkeypatch)
 
     response = client.get(
-        "/api/workflow/annotation-workspace",
+        "/api/curation/annotation-workspace",
         params={"dataset": "demo", "episode_index": 0},
     )
     assert response.status_code == 200
@@ -216,14 +216,14 @@ def test_workflow_result_endpoints_serialize_ui_shapes(
     )
 
     quality_response = client.get(
-        "/api/workflow/quality-results",
+        "/api/curation/quality-results",
         params={"dataset": "demo"},
     )
     assert quality_response.status_code == 200
     assert quality_response.json()["overall_score"] == 92.5
 
     prototype_response = client.get(
-        "/api/workflow/prototype-results",
+        "/api/curation/prototype-results",
         params={"dataset": "demo"},
     )
     assert prototype_response.status_code == 200
@@ -243,7 +243,7 @@ def test_quality_pause_request_marks_state(
     state["stages"]["quality_validation"]["status"] = "running"
     save_workflow_state(dataset_path, state)
 
-    response = client.post("/api/workflow/quality-pause", json={"dataset": "demo"})
+    response = client.post("/api/curation/quality-pause", json={"dataset": "demo"})
     assert response.status_code == 200
     assert response.json()["status"] == "pause_requested"
 
@@ -258,7 +258,7 @@ def test_quality_batch_can_pause_and_resume(
     dataset_root = tmp_path / "datasets"
     dataset_root.mkdir()
     dataset_path = _write_demo_dataset(dataset_root, total_episodes=3)
-    service = workflow_service.WorkflowService(dataset_path, "demo")
+    service = curation_service.CurationService(dataset_path, "demo")
 
     def _fake_run_quality_validators(
         target_dataset_path: Path,
@@ -281,7 +281,7 @@ def test_quality_batch_can_pause_and_resume(
             "issues": [] if episode_index != 1 else [{"check_name": "fps", "passed": False}],
         }
 
-    monkeypatch.setattr(workflow_service, "run_quality_validators", _fake_run_quality_validators)
+    monkeypatch.setattr(curation_service, "run_quality_validators", _fake_run_quality_validators)
 
     paused = service.run_quality_batch(["metadata"], threshold_overrides={"metadata_min_duration_s": 1.0})
     assert paused["episodes"][0]["episode_index"] == 0
@@ -324,11 +324,11 @@ def test_delete_quality_results_clears_artifacts_and_stage(
         },
     )
 
-    working_parquet = workflow_exports.workflow_quality_parquet_path(dataset_path)
+    working_parquet = curation_exports.workflow_quality_parquet_path(dataset_path)
     working_parquet.parent.mkdir(parents=True, exist_ok=True)
     working_parquet.write_bytes(b"working")
 
-    published_parquet = workflow_exports.dataset_quality_parquet_path(dataset_path)
+    published_parquet = curation_exports.dataset_quality_parquet_path(dataset_path)
     published_parquet.parent.mkdir(parents=True, exist_ok=True)
     published_parquet.write_bytes(b"published")
 
@@ -342,7 +342,7 @@ def test_delete_quality_results_clears_artifacts_and_stage(
     save_workflow_state(dataset_path, state)
 
     response = client.delete(
-        "/api/workflow/quality-results",
+        "/api/curation/quality-results",
         params={"dataset": "demo"},
     )
     assert response.status_code == 200
@@ -362,51 +362,12 @@ def test_delete_quality_results_clears_artifacts_and_stage(
     assert quality_stage["summary"] is None
 
     quality_response = client.get(
-        "/api/workflow/quality-results",
+        "/api/curation/quality-results",
         params={"dataset": "demo"},
     )
     assert quality_response.status_code == 200
     assert quality_response.json()["episodes"] == []
 
-
-def test_delete_quality_results_post_fallback_clears_stage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client, dataset_path = _build_client(tmp_path, monkeypatch)
-
-    save_quality_results(
-        dataset_path,
-        {
-            "total": 1,
-            "passed": 0,
-            "failed": 1,
-            "overall_score": 50.0,
-            "episodes": [{"episode_index": 0, "passed": False, "score": 50.0}],
-            "selected_validators": ["timing"],
-        },
-    )
-
-    state = load_workflow_state(dataset_path)
-    state["stages"]["quality_validation"] = {
-        "status": "completed",
-        "selected_validators": ["timing"],
-        "latest_run": {"id": "quality-run-2"},
-        "summary": {"total": 1, "failed": 1},
-    }
-    save_workflow_state(dataset_path, state)
-
-    response = client.post(
-        "/api/workflow/quality-results/delete",
-        json={"dataset": "demo"},
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "deleted"
-
-    refreshed_state = load_workflow_state(dataset_path)
-    quality_stage = refreshed_state["stages"]["quality_validation"]
-    assert quality_stage["status"] == "idle"
-    assert quality_stage["selected_validators"] == []
 
 
 def test_workflow_publish_endpoints_build_quality_and_text_parquet(
@@ -420,7 +381,7 @@ def test_workflow_publish_endpoints_build_quality_and_text_parquet(
         written.append((str(path), rows))
         return {"path": str(path), "row_count": len(rows)}
 
-    monkeypatch.setattr(workflow_exports, "write_parquet_rows", _fake_write_parquet)
+    monkeypatch.setattr(curation_exports, "write_parquet_rows", _fake_write_parquet)
 
     save_quality_results(
         dataset_path,
@@ -466,7 +427,7 @@ def test_workflow_publish_endpoints_build_quality_and_text_parquet(
     )
 
     client.post(
-        "/api/workflow/annotations",
+        "/api/curation/annotations",
         json={
             "dataset": "demo",
             "episode_index": 0,
@@ -487,12 +448,12 @@ def test_workflow_publish_endpoints_build_quality_and_text_parquet(
         },
     )
 
-    quality_publish = client.post("/api/workflow/quality-publish", json={"dataset": "demo"})
+    quality_publish = client.post("/api/curation/quality-publish", json={"dataset": "demo"})
     assert quality_publish.status_code == 200
     assert quality_publish.json()["row_count"] == 1
 
     text_publish = client.post(
-        "/api/workflow/text-annotations-publish",
+        "/api/curation/text-annotations-publish",
         json={"dataset": "demo"},
     )
     assert text_publish.status_code == 200
@@ -516,26 +477,26 @@ def test_workflow_datasets_preserve_nested_hf_names(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "datasets_root",
         lambda: dataset_root,
     )
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "resolve_dataset_path",
         lambda name: (dataset_root / name).resolve(),
     )
     app = FastAPI()
-    app.include_router(workflow_routes.router)
+    app.include_router(curation_routes.router)
     client = TestClient(app)
 
-    response = client.get("/api/workflow/datasets")
+    response = client.get("/api/curation/datasets")
     assert response.status_code == 200
     payload = response.json()
     assert payload[0]["name"] == "cadene/droid_1.0.1"
 
     # Detail route must handle the nested name with slash
-    detail = client.get("/api/workflow/datasets/cadene/droid_1.0.1")
+    detail = client.get("/api/curation/datasets/cadene/droid_1.0.1")
     assert detail.status_code == 200
     assert detail.json()["name"] == "cadene/droid_1.0.1"
 
@@ -547,16 +508,16 @@ def test_resolve_dataset_path_rejects_traversal(
     dataset_root = tmp_path / "datasets"
     dataset_root.mkdir()
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "datasets_root",
         lambda: dataset_root,
     )
     app = FastAPI()
-    app.include_router(workflow_routes.router)
+    app.include_router(curation_routes.router)
     client = TestClient(app)
 
     response = client.get(
-        "/api/workflow/state",
+        "/api/curation/state",
         params={"dataset": "../../etc/passwd"},
     )
     assert response.status_code == 404
@@ -578,23 +539,23 @@ def test_workflow_import_hf_dataset_job(
         )
         return str(target_dir)
 
-    monkeypatch.setattr(workflow_routes, "snapshot_download", _fake_snapshot_download)
+    monkeypatch.setattr(curation_routes, "snapshot_download", _fake_snapshot_download)
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "datasets_root",
         lambda: dataset_root,
     )
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "resolve_dataset_path",
         lambda name: (dataset_root / name).resolve(),
     )
     app = FastAPI()
-    app.include_router(workflow_routes.router)
+    app.include_router(curation_routes.router)
     client = TestClient(app)
 
     queued = client.post(
-        "/api/workflow/datasets/import-hf",
+        "/api/curation/datasets/import-hf",
         json={"dataset_id": "cadene/droid_1.0.1", "include_videos": False},
     )
     assert queued.status_code == 200
@@ -602,7 +563,7 @@ def test_workflow_import_hf_dataset_job(
 
     final_payload = None
     for _ in range(100):
-        status = client.get(f"/api/workflow/datasets/import-status/{job_id}")
+        status = client.get(f"/api/curation/datasets/import-status/{job_id}")
         assert status.status_code == 200
         final_payload = status.json()
         if final_payload["status"] in {"completed", "error"}:
@@ -616,16 +577,16 @@ def test_workflow_import_hf_dataset_job(
 
 def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
-    app.include_router(workflow_routes.router)
+    app.include_router(curation_routes.router)
     client = TestClient(app)
 
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "get_dataset_info",
         lambda _root, _name: None,
     )
     monkeypatch.setattr(
-        workflow_routes,
+        curation_routes,
         "build_remote_dataset_info",
         lambda dataset: {
             "name": dataset,
@@ -639,7 +600,7 @@ def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.Mo
         },
     )
 
-    response = client.get("/api/workflow/datasets/cadene/droid_1.0.1")
+    response = client.get("/api/curation/datasets/cadene/droid_1.0.1")
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "cadene/droid_1.0.1"

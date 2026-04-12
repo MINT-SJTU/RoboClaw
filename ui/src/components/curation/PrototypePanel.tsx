@@ -1,5 +1,5 @@
 import { useI18n } from '../../controllers/i18n'
-import { useWorkflow } from '../../controllers/workflow'
+import { useWorkflow } from '../../controllers/curation'
 
 export default function PrototypePanel() {
   const { t } = useI18n()

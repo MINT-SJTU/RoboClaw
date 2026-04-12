@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("av")
 pytest.importorskip("cv2")
 
-from roboclaw.embodied.workflow.validators import validate_action
+from roboclaw.embodied.curation.validators import validate_action
 
 
 def test_validate_action_accepts_vector_series_without_false_missing_ratio() -> None:

@@ -11,22 +11,10 @@ from loguru import logger
 
 
 # ---------------------------------------------------------------------------
-# Shared path helpers (used by workflow_routes, explorer_routes, etc.)
+# Shared path helpers (used by curation_routes, explorer_routes, etc.)
 # ---------------------------------------------------------------------------
 
-
-def datasets_root() -> Path:
-    """Return the datasets root directory, respecting manifest config."""
-    from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home, get_manifest_path
-
-    manifest_path = get_manifest_path()
-    if manifest_path.exists():
-        import json
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        root = data.get("datasets", {}).get("root", "")
-        if root:
-            return Path(root).expanduser()
-    return get_roboclaw_home() / "workspace" / "embodied" / "datasets"
+from roboclaw.embodied.curation.paths import datasets_root
 
 
 def resolve_dataset_path(name: str) -> Path:
@@ -57,25 +45,12 @@ def resolve_dataset_path(name: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Feature name extraction (used by workflow_routes, explorer_routes, etc.)
+# Feature name extraction (used by curation_routes, explorer_routes, etc.)
 # ---------------------------------------------------------------------------
 
+from roboclaw.embodied.curation.features import extract_action_names, extract_state_names
 
-def extract_action_names(info: dict) -> list[str]:
-    """Extract action joint names from info.json features."""
-    features = info.get("features", {})
-    names = features.get("action", {}).get("names", [])
-    return [str(n) for n in names] if isinstance(names, list) else []
-
-
-def extract_state_names(info: dict) -> list[str]:
-    """Extract state joint names from info.json features."""
-    features = info.get("features", {})
-    for key in ("observation.state", "state"):
-        names = features.get(key, {}).get("names", [])
-        if isinstance(names, list) and names:
-            return [str(n) for n in names]
-    return []
+__all__ = ["extract_action_names", "extract_state_names"]
 
 
 # ---------------------------------------------------------------------------

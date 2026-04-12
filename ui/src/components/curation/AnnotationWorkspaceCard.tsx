@@ -8,7 +8,7 @@ import {
   type PointerEvent,
 } from 'react'
 import { useI18n } from '../../controllers/i18n'
-import type { AnnotationItem } from '../../controllers/workflow'
+import type { AnnotationItem } from '../../controllers/curation'
 
 const BASE_PIXELS_PER_SECOND = 120
 const MIN_PIXELS_PER_SECOND = 36

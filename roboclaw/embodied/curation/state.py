@@ -17,6 +17,13 @@ from typing import Any
 _STATE_VERSION = 1
 
 
+def load_dataset_info(dataset_path: Path) -> dict[str, Any]:
+    info_path = dataset_path / "meta" / "info.json"
+    if not info_path.exists():
+        return {}
+    return json.loads(info_path.read_text(encoding="utf-8"))
+
+
 def _workflow_dir(dataset_path: Path) -> Path:
     return dataset_path / ".workflow"
 

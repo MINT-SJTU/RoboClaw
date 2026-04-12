@@ -1,8 +1,7 @@
-"""Workflow service — orchestrates the 3-stage quality/prototype/annotation pipeline."""
+"""Curation service — orchestrates the 3-stage quality/prototype/annotation pipeline."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,6 +14,8 @@ from .exports import save_working_quality_parquet
 from .features import (
     build_episode_sequence,
     build_joint_trajectory_payload,
+    extract_action_names,
+    extract_state_names,
     normalize_joint_names,
     resolve_action_vector,
     resolve_state_vector,
@@ -28,6 +29,7 @@ from .propagation import (
 from .state import (
     is_stage_pause_requested,
     load_annotations,
+    load_dataset_info,
     load_propagation_results,
     load_prototype_results,
     load_quality_results,
@@ -47,11 +49,7 @@ from .validators import VALIDATOR_REGISTRY, load_episode_data, run_quality_valid
 # ---------------------------------------------------------------------------
 
 
-def _load_info(dataset_path: Path) -> dict[str, Any]:
-    info_path = dataset_path / "meta" / "info.json"
-    if not info_path.exists():
-        return {}
-    return json.loads(info_path.read_text(encoding="utf-8"))
+_load_info = load_dataset_info
 
 
 def _episode_range(info: dict[str, Any]) -> list[int]:
@@ -115,12 +113,12 @@ def _load_episode_duration(dataset_path: Path, episode_index: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# WorkflowService
+# CurationService
 # ---------------------------------------------------------------------------
 
 
-class WorkflowService:
-    """Orchestrates the 3-stage workflow pipeline for a single dataset."""
+class CurationService:
+    """Orchestrates the 3-stage curation pipeline for a single dataset."""
 
     def __init__(self, dataset_path: Path, dataset_name: str | None = None):
         self.dataset_path = dataset_path
@@ -363,41 +361,17 @@ class WorkflowService:
         persisted_annotation_targets: set[int] = {source_episode_index}
         total = len(targets)
         for position, target in enumerate(targets):
-            target_idx = target["episode_index"]
-            target_duration = _load_episode_duration(self.dataset_path, target_idx)
-            target_spans = propagate_annotation_spans(
+            result, persisted = _propagate_single_target(
+                self.dataset_path,
+                target,
                 spans,
-                source_duration=source_duration,
-                target_duration=target_duration,
-                target_record_key=str(target_idx),
-                prototype_score=target.get("prototype_score", 0.0),
+                source_duration,
+                source_annotations,
+                source_episode_index,
             )
-            propagated.append({
-                "episode_index": target_idx,
-                "spans": target_spans,
-                "prototype_score": target.get("prototype_score", 0.0),
-            })
-            existing = load_annotations(self.dataset_path, target_idx) or {}
-            existing_annotations = existing.get("annotations", []) or []
-            has_manual_annotations = any(
-                isinstance(span, dict) and span.get("source") == "user"
-                for span in existing_annotations
-            )
-            if not has_manual_annotations:
-                save_annotations(
-                    self.dataset_path,
-                    target_idx,
-                    {
-                        "episode_index": target_idx,
-                        "task_context": {
-                            **(source_annotations.get("task_context", {}) or {}),
-                            "source_episode_index": source_episode_index,
-                            "source": "propagation",
-                        },
-                        "annotations": target_spans,
-                    },
-                )
-                persisted_annotation_targets.add(target_idx)
+            propagated.append(result)
+            if persisted:
+                persisted_annotation_targets.add(target["episode_index"])
             if progress_callback is not None:
                 progress_callback({
                     "phase": "semantic_propagation",
@@ -520,23 +494,8 @@ def _build_canonical_entries(
     return entries
 
 
-def _extract_action_names(info: dict[str, Any]) -> list[str]:
-    features = info.get("features", {})
-    action_feature = features.get("action", {})
-    names = action_feature.get("names", [])
-    if isinstance(names, list):
-        return [str(n) for n in names]
-    return []
-
-
-def _extract_state_names(info: dict[str, Any]) -> list[str]:
-    features = info.get("features", {})
-    for key in ("observation.state", "state"):
-        state_feature = features.get(key, {})
-        names = state_feature.get("names", [])
-        if isinstance(names, list) and names:
-            return [str(n) for n in names]
-    return []
+_extract_action_names = extract_action_names
+_extract_state_names = extract_state_names
 
 
 def _episode_quality_summary(dataset_path: Path, episode_index: int) -> dict[str, Any]:
@@ -570,6 +529,52 @@ def _finish_prototype_empty(dataset_path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Propagation helpers
 # ---------------------------------------------------------------------------
+
+
+def _propagate_single_target(
+    dataset_path: Path,
+    target: dict[str, Any],
+    spans: list[dict[str, Any]],
+    source_duration: float,
+    source_annotations: dict[str, Any],
+    source_episode_index: int,
+) -> tuple[dict[str, Any], bool]:
+    target_idx = target["episode_index"]
+    target_duration = _load_episode_duration(dataset_path, target_idx)
+    target_spans = propagate_annotation_spans(
+        spans,
+        source_duration=source_duration,
+        target_duration=target_duration,
+        target_record_key=str(target_idx),
+        prototype_score=target.get("prototype_score", 0.0),
+    )
+    result = {
+        "episode_index": target_idx,
+        "spans": target_spans,
+        "prototype_score": target.get("prototype_score", 0.0),
+    }
+    existing = load_annotations(dataset_path, target_idx) or {}
+    existing_annotations = existing.get("annotations", []) or []
+    has_manual = any(
+        isinstance(span, dict) and span.get("source") == "user"
+        for span in existing_annotations
+    )
+    if has_manual:
+        return result, False
+    save_annotations(
+        dataset_path,
+        target_idx,
+        {
+            "episode_index": target_idx,
+            "task_context": {
+                **(source_annotations.get("task_context", {}) or {}),
+                "source_episode_index": source_episode_index,
+                "source": "propagation",
+            },
+            "annotations": target_spans,
+        },
+    )
+    return result, True
 
 
 def _collect_propagation_targets(

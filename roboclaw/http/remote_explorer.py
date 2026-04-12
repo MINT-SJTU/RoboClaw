@@ -22,7 +22,7 @@ from loguru import logger
 
 from roboclaw.http.dashboard_datasets import extract_action_names, extract_state_names
 from roboclaw.http.explorer import build_explorer_payload_from_artifacts
-from roboclaw.embodied.workflow.features import build_joint_trajectory_payload, resolve_timestamp
+from roboclaw.embodied.curation.features import build_joint_trajectory_payload, resolve_timestamp
 
 _HF_API = HfApi()
 _HF_BASE_URL = os.getenv(

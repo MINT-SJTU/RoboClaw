@@ -8,7 +8,7 @@ from typing import Any
 
 from .bridge import write_parquet_rows
 from .propagation import build_hf_annotation_rows
-from .state import load_annotations, load_prototype_results, load_quality_results
+from .state import load_annotations, load_dataset_info, load_prototype_results, load_quality_results
 from .validators import load_episode_data
 
 
@@ -28,11 +28,7 @@ def dataset_text_annotations_parquet_path(dataset_path: Path) -> Path:
     return dataset_path / "meta" / "text_annotations.parquet"
 
 
-def _load_info(dataset_path: Path) -> dict[str, Any]:
-    info_path = dataset_path / "meta" / "info.json"
-    if not info_path.exists():
-        return {}
-    return json.loads(info_path.read_text(encoding="utf-8"))
+_load_info = load_dataset_info
 
 
 def _load_episode_meta_map(dataset_path: Path) -> dict[int, dict[str, Any]]:

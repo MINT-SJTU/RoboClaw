@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../controllers/i18n'
-import { useWorkflow } from '../../controllers/workflow'
+import { useWorkflow } from '../../controllers/curation'
 import { ActionButton } from '../ux'
 
 export default function DatasetWorkbenchHeader() {
