@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from loguru import logger
+
+
+class _CancelToken(Protocol):
+    @property
+    def is_cancelled(self) -> bool: ...
 
 from .canonical import build_canonical_trajectory
 from .clustering import discover_prototype_clusters, refine_clusters_with_dba
@@ -135,6 +140,7 @@ class CurationService:
         threshold_overrides: dict[str, float] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         resume_existing: bool = False,
+        cancel_token: _CancelToken | None = None,
     ) -> dict[str, Any]:
         """Run quality validation across episodes.
 
@@ -224,6 +230,8 @@ class CurationService:
             return aggregated
 
         for position, ep_idx in enumerate(indices):
+            if cancel_token is not None and cancel_token.is_cancelled:
+                return finalize_quality_run("paused")
             if is_stage_pause_requested(self.dataset_path, "quality_validation"):
                 return finalize_quality_run("paused")
             logger.info("Validating episode {}/{}", initial_completed + position + 1, total)
@@ -279,6 +287,7 @@ class CurationService:
         cluster_count: int | None = None,
         candidate_limit: int = 50,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        cancel_token: _CancelToken | None = None,
     ) -> dict[str, Any]:
         """Run DTW + k-medoids prototype discovery on quality-passed episodes."""
         _set_stage_status(self.dataset_path, "prototype_discovery", "running")
@@ -289,7 +298,9 @@ class CurationService:
             return _finish_prototype_empty(self.dataset_path)
 
         candidates = passed_episodes[:candidate_limit]
-        entries = _build_canonical_entries(self.dataset_path, candidates, progress_callback)
+        entries = _build_canonical_entries(
+            self.dataset_path, candidates, progress_callback, cancel_token
+        )
         if not entries:
             return _finish_prototype_empty(self.dataset_path)
 
@@ -335,6 +346,7 @@ class CurationService:
         self,
         source_episode_index: int,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        cancel_token: _CancelToken | None = None,
     ) -> dict[str, Any]:
         """Propagate annotations from source episode to cluster members."""
         _set_stage_status(self.dataset_path, "annotation", "running")
@@ -361,6 +373,8 @@ class CurationService:
         persisted_annotation_targets: set[int] = {source_episode_index}
         total = len(targets)
         for position, target in enumerate(targets):
+            if cancel_token is not None and cancel_token.is_cancelled:
+                break
             result, persisted = _propagate_single_target(
                 self.dataset_path,
                 target,
@@ -457,10 +471,13 @@ def _build_canonical_entries(
     dataset_path: Path,
     episode_indices: list[int],
     progress_callback: Callable[[dict[str, Any]], None] | None,
+    cancel_token: _CancelToken | None = None,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     total = len(episode_indices)
     for position, ep_idx in enumerate(episode_indices):
+        if cancel_token is not None and cancel_token.is_cancelled:
+            break
         logger.info("Building canonical trajectory for episode {}/{}", position + 1, total)
         data = load_episode_data(dataset_path, ep_idx)
         rows = data["rows"]

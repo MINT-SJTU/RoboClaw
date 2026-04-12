@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,28 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 _STATE_VERSION = 1
+
+# ---------------------------------------------------------------------------
+# Annotation file locking (issue #2)
+# ---------------------------------------------------------------------------
+
+_ANNOTATION_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_LOCK = threading.Lock()
+
+
+def _get_annotation_lock(path: Path) -> threading.Lock:
+    key = str(path)
+    with _LOCKS_LOCK:
+        if key not in _ANNOTATION_LOCKS:
+            _ANNOTATION_LOCKS[key] = threading.Lock()
+        return _ANNOTATION_LOCKS[key]
+
+
+# ---------------------------------------------------------------------------
+# Pause request mtime cache (issue #3)
+# ---------------------------------------------------------------------------
+
+_PAUSE_CACHE: dict[str, tuple[float, bool]] = {}
 
 
 def load_dataset_info(dataset_path: Path) -> dict[str, Any]:
@@ -119,9 +142,20 @@ def save_workflow_state(dataset_path: Path, state: dict[str, Any]) -> None:
 
 
 def is_stage_pause_requested(dataset_path: Path, stage_key: str) -> bool:
+    state_path = _workflow_dir(dataset_path) / "state.json"
+    cache_key = f"{state_path}:{stage_key}"
+    try:
+        mtime = state_path.stat().st_mtime
+    except OSError:
+        return False
+    cached = _PAUSE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
     state = load_workflow_state(dataset_path)
     stage = state.get("stages", {}).get(stage_key, {})
-    return bool(stage.get("pause_requested"))
+    result = bool(stage.get("pause_requested"))
+    _PAUSE_CACHE[cache_key] = (mtime, result)
+    return result
 
 
 def set_stage_pause_requested(dataset_path: Path, stage_key: str, requested: bool) -> dict[str, Any]:
@@ -169,23 +203,25 @@ def load_annotations(dataset_path: Path, episode_index: int) -> dict[str, Any] |
 
 def save_annotations(dataset_path: Path, episode_index: int, data: dict[str, Any]) -> None:
     path = _workflow_dir(dataset_path) / "annotations" / f"ep_{episode_index}.json"
-    existing = _read_json(path) or {}
-    created_at = existing.get("created_at") or data.get("created_at") or _now_iso()
-    version_number = existing.get("version_number", 0)
-    try:
-        next_version = int(version_number) + 1
-    except (TypeError, ValueError):
-        next_version = 1
+    lock = _get_annotation_lock(path)
+    with lock:
+        existing = _read_json(path) or {}
+        created_at = existing.get("created_at") or data.get("created_at") or _now_iso()
+        version_number = existing.get("version_number", 0)
+        try:
+            next_version = int(version_number) + 1
+        except (TypeError, ValueError):
+            next_version = 1
 
-    payload = {
-        **existing,
-        **data,
-        "episode_index": episode_index,
-        "created_at": created_at,
-        "updated_at": _now_iso(),
-        "version_number": next_version,
-    }
-    _write_json(path, payload)
+        payload = {
+            **existing,
+            **data,
+            "episode_index": episode_index,
+            "created_at": created_at,
+            "updated_at": _now_iso(),
+            "version_number": next_version,
+        }
+        _write_json(path, payload)
 
 
 # ---------------------------------------------------------------------------

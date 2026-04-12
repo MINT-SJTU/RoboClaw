@@ -60,7 +60,8 @@ def test_web_channel_image_upload_and_fetch(tmp_path) -> None:
     payload = upload.json()
     assert payload["name"] == "sample.png"
     assert payload["mime_type"] == "image/png"
-    assert payload["media_path"].endswith(".png")
+    assert "media_path" not in payload
+    assert payload["preview_url"].endswith(".png")
 
     uploaded_path = tmp_path / "chat_uploads" / "web" / "demo"
     assert uploaded_path.exists()

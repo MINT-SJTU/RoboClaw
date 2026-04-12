@@ -6,12 +6,13 @@ import asyncio
 import csv
 import io
 import json
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 from huggingface_hub import snapshot_download
 from loguru import logger
@@ -100,18 +101,43 @@ class DatasetPublishRequest(BaseModel):
 
 
 _IMPORT_JOBS: dict[str, dict[str, Any]] = {}
-_ACTIVE_WORKFLOW_TASKS: dict[tuple[str, str], asyncio.Task[Any]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Cancellation token for cooperative worker thread cancellation
+# ---------------------------------------------------------------------------
+
+
+class CancellationToken:
+    """Thread-safe cancellation signal for background worker threads."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+
+_ACTIVE_WORKFLOW_TASKS: dict[tuple[str, str], tuple[asyncio.Task[Any], CancellationToken]] = {}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-async def _run_in_background(coro: Any, dataset_path: Path, stage_key: str) -> None:
+async def _run_in_background(
+    coro: Any, dataset_path: Path, stage_key: str, cancel_token: CancellationToken
+) -> None:
     """Wrapper so background tasks log errors and update state on failure."""
     task_key = (str(dataset_path.resolve()), stage_key)
     try:
         await coro
     except asyncio.CancelledError:
+        cancel_token.cancel()
         state = load_workflow_state(dataset_path)
         state["stages"][stage_key]["status"] = "error"
         save_workflow_state(dataset_path, state)
@@ -125,13 +151,18 @@ async def _run_in_background(coro: Any, dataset_path: Path, stage_key: str) -> N
         _ACTIVE_WORKFLOW_TASKS.pop(task_key, None)
 
 
-def _register_workflow_task(dataset_path: Path, stage_key: str, coro: Any) -> None:
+def _register_workflow_task(
+    dataset_path: Path, stage_key: str, coro: Any, cancel_token: CancellationToken
+) -> None:
     task_key = (str(dataset_path.resolve()), stage_key)
     existing = _ACTIVE_WORKFLOW_TASKS.get(task_key)
-    if existing is not None and not existing.done():
-        existing.cancel()
-    task = asyncio.create_task(_run_in_background(coro, dataset_path, stage_key))
-    _ACTIVE_WORKFLOW_TASKS[task_key] = task
+    if existing is not None:
+        existing_task, existing_token = existing
+        if not existing_task.done():
+            existing_token.cancel()
+            existing_task.cancel()
+    task = asyncio.create_task(_run_in_background(coro, dataset_path, stage_key, cancel_token))
+    _ACTIVE_WORKFLOW_TASKS[task_key] = (task, cancel_token)
 
 
 def _reconcile_stale_running_state(dataset_path: Path, state: dict[str, Any]) -> dict[str, Any]:
@@ -140,8 +171,8 @@ def _reconcile_stale_running_state(dataset_path: Path, state: dict[str, Any]) ->
     for stage_key, stage in state.get("stages", {}).items():
         if stage.get("status") != "running":
             continue
-        active_task = _ACTIVE_WORKFLOW_TASKS.get((resolved_dataset, stage_key))
-        if active_task is not None and not active_task.done():
+        entry = _ACTIVE_WORKFLOW_TASKS.get((resolved_dataset, stage_key))
+        if entry is not None and not entry[0].done():
             continue
         stage["status"] = "error"
         summary = stage.get("summary")
@@ -534,10 +565,17 @@ async def workflow_state(dataset: str) -> dict[str, Any]:
 
 
 @router.get("/quality-results")
-async def workflow_quality_results(dataset: str) -> dict[str, Any]:
+async def workflow_quality_results(
+    dataset: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
+) -> dict[str, Any]:
     """Get the latest detailed quality-validation results for a dataset."""
     dataset_path = _ensure_dataset_workspace(dataset)
     payload = _serialize_quality_results(load_quality_results(dataset_path))
+    episodes = payload.get("episodes", [])
+    payload["total"] = len(episodes)
+    payload["episodes"] = episodes[offset : offset + limit]
     payload["working_parquet_path"] = str(workflow_quality_parquet_path(dataset_path))
     payload["published_parquet_path"] = str(dataset_quality_parquet_path(dataset_path))
     return payload
@@ -606,6 +644,7 @@ async def quality_run(body: QualityRunRequest) -> dict[str, str]:
     """Start batch quality validation as a background task."""
     dataset_path = _ensure_dataset_workspace(body.dataset)
     service = CurationService(dataset_path, body.dataset)
+    cancel_token = CancellationToken()
 
     async def _task() -> None:
         await asyncio.to_thread(
@@ -613,9 +652,12 @@ async def quality_run(body: QualityRunRequest) -> dict[str, str]:
             body.selected_validators,
             body.episode_indices,
             body.threshold_overrides,
+            None,
+            False,
+            cancel_token,
         )
 
-    _register_workflow_task(dataset_path, "quality_validation", _task())
+    _register_workflow_task(dataset_path, "quality_validation", _task(), cancel_token)
     logger.info("Quality run queued for dataset '{}'", body.dataset)
     return {"status": "started"}
 
@@ -660,6 +702,7 @@ async def quality_resume(body: QualityRunRequest) -> dict[str, str]:
     service = CurationService(dataset_path, body.dataset)
     selected_validators = existing.get("selected_validators") or body.selected_validators
     threshold_overrides = existing.get("threshold_overrides") or body.threshold_overrides
+    cancel_token = CancellationToken()
 
     async def _task() -> None:
         await asyncio.to_thread(
@@ -669,9 +712,10 @@ async def quality_resume(body: QualityRunRequest) -> dict[str, str]:
             threshold_overrides,
             None,
             True,
+            cancel_token,
         )
 
-    _register_workflow_task(dataset_path, "quality_validation", _task())
+    _register_workflow_task(dataset_path, "quality_validation", _task(), cancel_token)
     logger.info(
         "Quality resume queued for dataset '{}' with {} remaining episodes",
         body.dataset,
@@ -710,15 +754,18 @@ async def prototype_run(body: PrototypeRunRequest) -> dict[str, str]:
     """Start prototype discovery as a background task."""
     dataset_path = _ensure_dataset_workspace(body.dataset)
     service = CurationService(dataset_path, body.dataset)
+    cancel_token = CancellationToken()
 
     async def _task() -> None:
         await asyncio.to_thread(
             service.run_prototype_discovery,
             body.cluster_count,
             body.candidate_limit,
+            None,
+            cancel_token,
         )
 
-    _register_workflow_task(dataset_path, "prototype_discovery", _task())
+    _register_workflow_task(dataset_path, "prototype_discovery", _task(), cancel_token)
     logger.info("Prototype run queued for dataset '{}'", body.dataset)
     return {"status": "started"}
 
@@ -778,14 +825,17 @@ async def propagation_run(body: PropagationRunRequest) -> dict[str, str]:
     """Start semantic propagation as a background task."""
     dataset_path = _ensure_dataset_workspace(body.dataset)
     service = CurationService(dataset_path, body.dataset)
+    cancel_token = CancellationToken()
 
     async def _task() -> None:
         await asyncio.to_thread(
             service.run_semantic_propagation,
             body.source_episode_index,
+            None,
+            cancel_token,
         )
 
-    _register_workflow_task(dataset_path, "annotation", _task())
+    _register_workflow_task(dataset_path, "annotation", _task(), cancel_token)
     logger.info(
         "Propagation run queued for dataset '{}' from episode {}",
         body.dataset, body.source_episode_index,

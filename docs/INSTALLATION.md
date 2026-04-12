@@ -164,7 +164,7 @@ pip install -e ".[web]"
 Install the frontend dependencies:
 
 ```bash
-cd roboclaw-web/ui
+cd ui
 npm install
 ```
 
@@ -173,7 +173,7 @@ npm install
 Build the frontend and start the server:
 
 ```bash
-cd roboclaw-web/ui && npm run build && cd ../..
+cd ui && npm run build && cd ..
 roboclaw web start
 ```
 
@@ -186,7 +186,7 @@ Open **http://127.0.0.1:8765** in your browser.
 roboclaw web start
 
 # Terminal 2: start frontend dev server
-cd roboclaw-web/ui
+cd ui
 npm run dev
 ```
 

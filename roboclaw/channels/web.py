@@ -222,6 +222,9 @@ class WebChannel(BaseChannel):
         data_url: str,
         original_name: str | None,
     ) -> dict[str, Any]:
+        if len(data_url) > _CHAT_IMAGE_MAX_BYTES * 2:  # base64 ~1.37x overhead + header
+            raise HTTPException(status_code=413, detail="Image exceeds 8 MB limit.")
+
         match = _DATA_URL_RE.match(data_url.strip())
         if not match:
             raise HTTPException(status_code=400, detail="Expected a base64 image data URL.")
@@ -252,7 +255,6 @@ class WebChannel(BaseChannel):
         return {
             "id": uuid4().hex[:12],
             "name": original_path.name or f"{stem}{extension}",
-            "media_path": str(target_path),
             "preview_url": f"/api/chat/uploads/{chat_id}/{stored_name}",
             "mime_type": mime,
             "size": len(raw),
