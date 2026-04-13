@@ -29,9 +29,10 @@ node_modules/
 .claude/worktrees/
 
 # ROS workspace build artifacts
-robotics/ros_ws/build/
-robotics/ros_ws/install/
-robotics/ros_ws/log/
+robotics
+# robotics/ros_ws/build/
+# robotics/ros_ws/install/
+# robotics/ros_ws/log/
 
 # Local simulation planning docs
 docs/simulation-agent-workflow.md
