@@ -249,8 +249,8 @@ function EpisodeBrowser() {
               </div>
               {hoveredPreview.joint_trajectory.joint_trajectories.map((joint) => {
                 const timestamps = hoveredPreview.joint_trajectory.time_values
-                const actionValues = joint.action_values
-                const stateValues = joint.state_values
+                const actionValues = joint.action_values.filter((v): v is number => v != null)
+                const stateValues = joint.state_values.filter((v): v is number => v != null)
 
                 const allValues = [...actionValues, ...stateValues]
                 const min = Math.min(...allValues)
