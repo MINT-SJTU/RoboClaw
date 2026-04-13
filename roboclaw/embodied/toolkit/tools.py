@@ -16,6 +16,7 @@ _REPLAY_ACTIONS = ["replay"]
 _TRAIN_ACTIONS = ["train", "job_status", "list_datasets", "list_policies"]
 _INFER_ACTIONS = ["run_policy"]
 _HUB_ACTIONS = ["push_dataset", "pull_dataset", "push_policy", "pull_policy"]
+_PERCEPTION_ACTIONS = ["scene_understand", "object_detect", "what_changed"]
 _LANGUAGE_PROP = {"type": "string", "description": "User's language code (en, zh)."}
 
 _TOOL_GROUPS: dict[str, dict[str, Any]] = {
@@ -332,6 +333,39 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    "perception": {
+        "description": "Understand what the robot's cameras see using VLM \u2014 scene description, object detection, and change detection.",
+        "actions": _PERCEPTION_ACTIONS,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": _PERCEPTION_ACTIONS,
+                    "description": "The perception action to perform.",
+                },
+                "language": _LANGUAGE_PROP,
+                "camera_alias": {
+                    "type": "string",
+                    "description": "Camera alias (e.g. 'front', 'wrist').",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Free-text question for scene_understand.",
+                },
+                "object_name": {
+                    "type": "string",
+                    "description": "Target object name for object_detect.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Override VLM model (e.g. 'anthropic/claude-sonnet-4-5'). Optional.",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -378,6 +412,8 @@ class EmbodiedToolGroup(Tool):
             return await self._execute_infer(kwargs)
         if self._group_name == "hub":
             return await self._execute_hub(kwargs)
+        if self._group_name == "perception":
+            return await self._execute_perception(kwargs)
         return f"Unknown tool group: {self._group_name}"
 
     async def _execute_setup(self, kwargs: dict[str, Any]) -> str | list:
@@ -469,6 +505,65 @@ class EmbodiedToolGroup(Tool):
             svc,
             lambda manifest: _run_hub_action(svc.hub, action, manifest, kwargs, self._tty_handoff),
         )
+
+
+    async def _execute_perception(self, kwargs: dict[str, Any]) -> str | list:
+        action = kwargs.get("action", "")
+        from roboclaw.embodied.perception import VLM, grab_all_frames, grab_frame
+
+        try:
+            vlm = VLM()
+        except Exception as exc:
+            return f"Perception module initialization failed: {exc}"
+
+        if action == "scene_understand":
+            camera_alias = kwargs.get("camera_alias", "")
+            question = kwargs.get("question", "Describe what you see in this image.")
+            model = kwargs.get("model") or None
+            if camera_alias:
+                result = await vlm.describe(camera_alias, question=question, model=model)
+                return f"[{camera_alias}]: {result.text}"
+            # No alias -> describe all
+            results = await vlm.describe_all(question=question, model=model)
+            if not results:
+                return "No cameras configured."
+            lines = [f"[{alias}]: {desc.text}" for alias, desc in results.items()]
+            return "\n".join(lines)
+
+        if action == "object_detect":
+            camera_alias = kwargs.get("camera_alias", "")
+            object_name = kwargs.get("object_name", "")
+            model = kwargs.get("model") or None
+            if not camera_alias or not object_name:
+                return "camera_alias and object_name are required for object_detect."
+            result = await vlm.detect_objects(camera_alias, object_name, model=model)
+            return f"[{camera_alias}] {object_name}: {result.text}"
+
+        if action == "what_changed":
+            camera_alias = kwargs.get("camera_alias", "")
+            if not camera_alias:
+                return "camera_alias is required for what_changed."
+            import os, tempfile
+            import numpy as np
+            tmp_before = os.path.join(tempfile.gettempdir(), f"roboclaw_before_{camera_alias}.npy")
+            after_frame = grab_frame(camera_alias)
+            if after_frame is None:
+                return f"Camera '{camera_alias}' not found."
+            if os.path.exists(tmp_before):
+                before_frame = np.load(tmp_before)
+                np.save(tmp_before, after_frame)
+                result = await vlm.what_changed(
+                    camera_alias,
+                    before_frame,
+                    after_frame,
+                    model=kwargs.get("model"),
+                )
+                return f"Changes on [{camera_alias}]: {result.text}"
+            else:
+                np.save(tmp_before, after_frame)
+                return "No previous frame saved. Captured current frame as 'before'. Call again after the action to see what changed."
+
+        return f"Unknown perception action: {action}"
 
 
 def create_embodied_tools(tty_handoff: Any = None) -> list[EmbodiedToolGroup]:
