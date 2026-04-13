@@ -176,6 +176,38 @@ async def test_calibration_action(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_calibration_action_prints_recalibration_tip_for_existing_files(tmp_path: Path) -> None:
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "calibration")
+
+    data = copy.deepcopy(_MOCK_SETUP)
+    cal_root = tmp_path / "calibration"
+    for idx, arm in enumerate(data["arms"]):
+        cal_dir = cal_root / f"arm_{idx}"
+        cal_dir.mkdir(parents=True)
+        arm["calibration_dir"] = str(cal_dir)
+    existing_dir = Path(data["arms"][0]["calibration_dir"])
+    (existing_dir / f"{existing_dir.name}.json").write_text("{}", encoding="utf-8")
+
+    manifest = _manifest_from_data(tmp_path, data)
+    from roboclaw.embodied.service import EmbodiedService
+    tool.embodied_service = EmbodiedService(manifest=manifest)
+    arms_arg = ",".join(arm["port"] for arm in data["arms"])
+
+    mock_runner = AsyncMock()
+    mock_runner.run_interactive.return_value = (0, "")
+
+    with (
+        patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner),
+        patch("roboclaw.embodied.service.session.calibrate._sync_calibration_to_motors"),
+        patch("roboclaw.embodied.service.session.calibrate._print_existing_calibration_tip") as mock_print,
+    ):
+        await tool.execute(action="calibrate", arms=arms_arg)
+
+    # Only the first arm has existing calibration file
+    mock_print.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_teleop_action(tmp_path: Path) -> None:
     tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "teleop")
     manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)

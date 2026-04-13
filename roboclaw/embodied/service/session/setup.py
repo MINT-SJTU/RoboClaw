@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from roboclaw.embodied.embodiment.hardware.discovery import HardwareDiscovery
 from roboclaw.embodied.embodiment.hardware.scan import restore_stderr, suppress_stderr
 from roboclaw.embodied.embodiment.interface import Interface, SerialInterface, VideoInterface
+from loguru import logger
 from roboclaw.i18n import t
 
 if TYPE_CHECKING:
@@ -195,15 +196,29 @@ class SetupSession:
         saved = suppress_stderr()
         try:
             for iface in serial:
-                result = iface.motion_detector.poll()
-                results.append({
-                    "stable_id": iface.stable_id,
-                    "dev": iface.dev,
-                    "by_id": iface.by_id,
-                    "motor_ids": list(iface.motor_ids),
-                    "delta": result.delta,
-                    "moved": result.moved,
-                })
+                try:
+                    result = iface.motion_detector.poll()
+                    results.append({
+                        "stable_id": iface.stable_id,
+                        "dev": iface.dev,
+                        "by_id": iface.by_id,
+                        "motor_ids": list(iface.motor_ids),
+                        "delta": result.delta,
+                        "moved": result.moved,
+                    })
+                except Exception as exc:
+                    # Keep identify alive when one serial endpoint is briefly
+                    # disconnected or busy; continue polling remaining ports.
+                    logger.warning("Motion poll failed on {}: {}", iface.stable_id or iface.dev, exc)
+                    results.append({
+                        "stable_id": iface.stable_id,
+                        "dev": iface.dev,
+                        "by_id": iface.by_id,
+                        "motor_ids": list(iface.motor_ids),
+                        "delta": 0,
+                        "moved": False,
+                        "error": str(exc),
+                    })
         finally:
             restore_stderr(saved)
         return results
@@ -447,7 +462,7 @@ class SetupSession:
         self._messages.append(t("scanningModel", lang, model=model))
         try:
             result = self.run_full_scan(model)
-        except (ValueError, RuntimeError):
+        except Exception:
             self._messages.append(t("resultNotSupported", lang))
             self._set_result("not_supported")
             return
@@ -662,7 +677,6 @@ class SetupSession:
 
     def _conversational_identify(self, kwargs: dict[str, Any]) -> str:
         """Return session state as JSON for conversational agents (no TTY)."""
-        import asyncio
 
         if self._phase == SetupPhase.IDLE:
             model = kwargs.get("model", "")
@@ -672,7 +686,7 @@ class SetupSession:
                     "message": "What robot model do you have?",
                     "options": ["so101", "koch"],
                 }, ensure_ascii=False)
-            asyncio.get_event_loop().run_in_executor(None, self.run_full_scan, model)
+            self._do_scan(model)
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
 
     # -- Internal ------------------------------------------------------------
@@ -710,5 +724,3 @@ class SetupSession:
             manifest.set_camera(assignment.alias, assignment.interface)
         else:
             raise ValueError(f"Unknown spec type: {assignment.spec_name}")
-
-

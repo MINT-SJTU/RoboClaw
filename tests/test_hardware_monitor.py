@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +15,7 @@ from roboclaw.embodied.embodiment.hardware.monitor import (
     _fault_key,
 )
 from roboclaw.embodied.embodiment.manifest.binding import Binding
+from roboclaw.embodied.embodiment.interface.video import VideoInterface
 
 
 # ---------------------------------------------------------------------------
@@ -152,3 +154,20 @@ class TestCheckCameras:
         faults: list[HardwareFault] = []
         _check_cameras(cams, time.time(), faults, recording_active=False)
         assert faults == []
+
+    def test_numeric_camera_port_detected_by_scan(self):
+        cams = [self._camera_binding("0")]
+        faults: list[HardwareFault] = []
+        scanned = [VideoInterface(dev="0", width=1920, height=1080, fps=30)]
+        with patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=scanned):
+            _check_cameras(cams, time.time(), faults, recording_active=False)
+        assert faults == []
+
+    def test_numeric_camera_port_missing_from_scan(self):
+        cams = [self._camera_binding("2")]
+        faults: list[HardwareFault] = []
+        scanned = [VideoInterface(dev="0", width=1920, height=1080, fps=30)]
+        with patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=scanned):
+            _check_cameras(cams, time.time(), faults, recording_active=False)
+        assert len(faults) == 1
+        assert faults[0].fault_type == FaultType.CAMERA_DISCONNECTED

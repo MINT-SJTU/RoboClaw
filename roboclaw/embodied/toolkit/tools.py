@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
@@ -338,6 +339,7 @@ class EmbodiedToolGroup(Tool):
         self._spec = spec
         self._tty_handoff = tty_handoff
         self.embodied_service = None
+        self._last_identify_at: float = 0.0
 
     @property
     def name(self) -> str:
@@ -379,10 +381,19 @@ class EmbodiedToolGroup(Tool):
         svc = _get_service(self.embodied_service)
         action = kwargs["action"]
         if action == "identify":
-            return await _run_with_service(
+            # Guard against accidental immediate re-entry loops where the model
+            # calls identify repeatedly in the same turn after a successful run.
+            if self._last_identify_at and (time.monotonic() - self._last_identify_at) < 5.0:
+                return (
+                    "Identify just completed moments ago, so duplicate identify was skipped. "
+                    "Proceed to calibration or ask the user before re-identifying."
+                )
+            result = await _run_with_service(
                 svc,
                 lambda _: svc.setup.run_identify(kwargs, self._tty_handoff),
             )
+            self._last_identify_at = time.monotonic()
+            return result
         if action == "preview_cameras":
             return await _run_with_service(svc, lambda _: svc.setup.preview_cameras())
         # modify
