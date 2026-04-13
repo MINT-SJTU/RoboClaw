@@ -262,6 +262,28 @@ class AgentLoop:
 
         return final_content, tools_used, messages
 
+    @staticmethod
+    def _attach_user_metadata(
+        messages: list[dict[str, Any]],
+        metadata: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Attach channel metadata to the latest user message before session persistence."""
+        if not metadata:
+            return messages
+
+        updated = list(messages)
+        for index in range(len(updated) - 1, -1, -1):
+            if updated[index].get("role") != "user":
+                continue
+            entry = dict(updated[index])
+            existing = entry.get("metadata")
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(metadata)
+            entry["metadata"] = merged
+            updated[index] = entry
+            break
+        return updated
+
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
@@ -384,7 +406,11 @@ class AgentLoop:
                 current_message=msg.content, channel=channel, chat_id=chat_id,
             )
             final_content, _, all_msgs = await self._run_agent_loop(messages)
-            self._save_turn(session, all_msgs, 1 + len(history))
+            self._save_turn(
+                session,
+                self._attach_user_metadata(all_msgs, msg.metadata or {}),
+                1 + len(history),
+            )
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
             return OutboundMessage(channel=channel, chat_id=chat_id,
@@ -450,7 +476,11 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        self._save_turn(
+            session,
+            self._attach_user_metadata(all_msgs, msg.metadata or {}),
+            1 + len(history),
+        )
         self.sessions.save(session)
         self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 

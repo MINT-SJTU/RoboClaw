@@ -3,19 +3,41 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
+import mimetypes
+import re
 from collections import defaultdict
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from roboclaw.bus.events import OutboundMessage
 from roboclaw.bus.queue import MessageBus
 from roboclaw.channels.base import BaseChannel
-from roboclaw.utils.helpers import timestamp
+from roboclaw.utils.helpers import detect_image_mime, ensure_dir, safe_filename, timestamp
+
+_DATA_URL_RE = re.compile(r"^data:(?P<mime>image/[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$")
+_CHAT_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+_MIME_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+
+class ChatImageUploadRequest(BaseModel):
+    chat_id: str
+    data_url: str
+    filename: str | None = None
 
 
 class WebChannel(BaseChannel):
@@ -72,6 +94,26 @@ class WebChannel(BaseChannel):
                 raise HTTPException(status_code=404, detail="Session storage is unavailable.")
             return {"chat_id": chat_id, "messages": self._session_history(chat_id)}
 
+        @app.post("/api/chat/uploads/image")
+        async def upload_chat_image(payload: ChatImageUploadRequest) -> dict[str, Any]:
+            if self.sessions is None:
+                raise HTTPException(status_code=503, detail="Session storage is unavailable.")
+            return self._save_chat_image(
+                chat_id=payload.chat_id,
+                data_url=payload.data_url,
+                original_name=payload.filename,
+            )
+
+        @app.get("/api/chat/uploads/{chat_id}/{file_name}")
+        async def get_chat_upload(chat_id: str, file_name: str) -> FileResponse:
+            if self.sessions is None:
+                raise HTTPException(status_code=404, detail="Session storage is unavailable.")
+            file_path = self._resolve_chat_upload_path(chat_id, file_name)
+            if not file_path.is_file():
+                raise HTTPException(status_code=404, detail="Uploaded image not found.")
+            media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+            return FileResponse(str(file_path), media_type=media_type, filename=file_path.name)
+
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket) -> None:
             chat_id = websocket.query_params.get("chat_id") or uuid4().hex[:12]
@@ -125,14 +167,18 @@ class WebChannel(BaseChannel):
                 })
                 continue
             content = str(payload.get("content", "")).strip()
-            if not content:
+            media = [str(item) for item in (payload.get("media") or []) if str(item).strip()]
+            metadata = payload.get("metadata") or {}
+            if not content and not media:
                 continue
+            if not content:
+                content = "[image]"
             await self._handle_message(
                 sender_id=str(payload.get("sender_id") or user_id),
                 chat_id=chat_id,
                 content=content,
-                media=payload.get("media") or [],
-                metadata=payload.get("metadata") or {},
+                media=media,
+                metadata=metadata,
             )
 
     # ------------------------------------------------------------------
@@ -153,6 +199,66 @@ class WebChannel(BaseChannel):
             _history_entry(chat_id, index, message)
             for index, message in enumerate(session.messages)
         ]
+
+    def _chat_upload_root(self) -> Path:
+        if self.sessions is None:
+            raise RuntimeError("Session storage is unavailable.")
+        return ensure_dir(self.sessions.workspace / "chat_uploads" / self.name)
+
+    def _chat_upload_dir(self, chat_id: str) -> Path:
+        return ensure_dir(self._chat_upload_root() / safe_filename(chat_id))
+
+    def _resolve_chat_upload_path(self, chat_id: str, file_name: str) -> Path:
+        chat_dir = self._chat_upload_dir(chat_id).resolve()
+        file_path = (chat_dir / safe_filename(file_name)).resolve()
+        if not str(file_path).startswith(str(chat_dir)):
+            raise HTTPException(status_code=403, detail="Path traversal not allowed.")
+        return file_path
+
+    def _save_chat_image(
+        self,
+        *,
+        chat_id: str,
+        data_url: str,
+        original_name: str | None,
+    ) -> dict[str, Any]:
+        if len(data_url) > _CHAT_IMAGE_MAX_BYTES * 2:  # base64 ~1.37x overhead + header
+            raise HTTPException(status_code=413, detail="Image exceeds 8 MB limit.")
+
+        match = _DATA_URL_RE.match(data_url.strip())
+        if not match:
+            raise HTTPException(status_code=400, detail="Expected a base64 image data URL.")
+
+        try:
+            raw = base64.b64decode(match.group("data"), validate=True)
+        except (ValueError, binascii.Error):  # type: ignore[name-defined]
+            raise HTTPException(status_code=400, detail="Invalid base64 image payload.") from None
+
+        if not raw:
+            raise HTTPException(status_code=400, detail="Image payload is empty.")
+        if len(raw) > _CHAT_IMAGE_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Image exceeds 8 MB limit.")
+
+        detected_mime = detect_image_mime(raw)
+        declared_mime = match.group("mime")
+        mime = detected_mime or declared_mime
+        if mime not in _MIME_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Unsupported image format.")
+
+        original_path = Path(original_name or "image")
+        stem = safe_filename(original_path.stem) or "image"
+        extension = _MIME_EXTENSIONS[mime]
+        stored_name = f"{uuid4().hex[:12]}-{stem}{extension}"
+        target_path = self._chat_upload_dir(chat_id) / stored_name
+        target_path.write_bytes(raw)
+
+        return {
+            "id": uuid4().hex[:12],
+            "name": original_path.name or f"{stem}{extension}",
+            "preview_url": f"/api/chat/uploads/{chat_id}/{stored_name}",
+            "mime_type": mime,
+            "size": len(raw),
+        }
 
     # ------------------------------------------------------------------
     # Broadcast
@@ -247,11 +353,16 @@ def _session_summary(item: dict[str, Any]) -> dict[str, Any]:
 def _history_entry(chat_id: str, index: int, message: dict[str, Any]) -> dict[str, Any]:
     content = message.get("content", "")
     if isinstance(content, list):
-        content = json.dumps(content, ensure_ascii=False)
+        text_parts = [
+            str(block.get("text", "")).strip()
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        content = "\n".join(part for part in text_parts if part).strip() or "[image]"
     return {
         "id": message.get("id") or f"{chat_id}:{index}",
         "role": message.get("role", "assistant"),
         "content": content,
         "timestamp": message.get("timestamp"),
-        "metadata": {},
+        "metadata": message.get("metadata") or {},
     }
