@@ -32,14 +32,6 @@ export interface FileInventory {
 
 export interface ExplorerDashboard {
   dataset: string
-  summary: {
-    total_episodes: number
-    total_frames: number
-    fps: number
-    robot_type: string
-    codebase_version: string
-    chunks_size: number
-  }
   files: FileInventory
   feature_names: string[]
   feature_stats: FeatureStat[]
@@ -50,6 +42,26 @@ export interface ExplorerDashboard {
     vector_features: number
   }
   modality_summary: ModalityItem[]
+}
+
+export interface ExplorerSummary {
+  dataset: string
+  summary: {
+    total_episodes: number
+    total_frames: number
+    fps: number
+    robot_type: string
+    codebase_version: string
+    chunks_size: number
+  }
+}
+
+export interface ExplorerEpisodePage {
+  dataset: string
+  page: number
+  page_size: number
+  total_episodes: number
+  total_pages: number
   episodes: Array<{ episode_index: number; length: number }>
 }
 
@@ -71,15 +83,23 @@ export interface EpisodeDetail {
 // ---------------------------------------------------------------------------
 
 interface ExplorerStore {
+  summary: ExplorerSummary | null
+  summaryLoading: boolean
+  summaryError: string
   dashboard: ExplorerDashboard | null
   dashboardLoading: boolean
   dashboardError: string
+  episodePage: ExplorerEpisodePage | null
+  episodePageLoading: boolean
+  episodePageError: string
   selectedEpisodeIndex: number | null
   episodeDetail: EpisodeDetail | null
   episodeLoading: boolean
   episodeError: string
 
+  loadSummary: (dataset: string) => Promise<ExplorerSummary>
   loadDashboard: (dataset: string) => Promise<ExplorerDashboard>
+  loadEpisodePage: (dataset: string, page?: number, pageSize?: number) => Promise<void>
   selectEpisode: (dataset: string, index: number) => Promise<void>
   clearEpisode: () => void
 }
@@ -102,26 +122,51 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const useExplorer = create<ExplorerStore>((set) => ({
+  summary: null,
+  summaryLoading: false,
+  summaryError: '',
   dashboard: null,
   dashboardLoading: false,
   dashboardError: '',
+  episodePage: null,
+  episodePageLoading: false,
+  episodePageError: '',
   selectedEpisodeIndex: null,
   episodeDetail: null,
   episodeLoading: false,
   episodeError: '',
+
+  loadSummary: async (dataset: string) => {
+    set({
+      summary: null,
+      summaryLoading: true,
+      summaryError: '',
+    })
+    try {
+      const summary = await fetchJson<ExplorerSummary>(
+        `/api/explorer/summary?dataset=${encodeURIComponent(dataset)}`,
+      )
+      set({ summary })
+      return summary
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to load explorer summary'
+      set({ summaryError: message })
+      throw error instanceof Error ? error : new Error(message)
+    } finally {
+      set({ summaryLoading: false })
+    }
+  },
 
   loadDashboard: async (dataset: string) => {
     set({
       dashboard: null,
       dashboardLoading: true,
       dashboardError: '',
-      selectedEpisodeIndex: null,
-      episodeDetail: null,
-      episodeError: '',
     })
     try {
       const dashboard = await fetchJson<ExplorerDashboard>(
-        `/api/explorer/dashboard?dataset=${encodeURIComponent(dataset)}`,
+        `/api/explorer/details?dataset=${encodeURIComponent(dataset)}`,
       )
       set({ dashboard })
       return dashboard
@@ -134,6 +179,29 @@ export const useExplorer = create<ExplorerStore>((set) => ({
       throw error instanceof Error ? error : new Error(message)
     } finally {
       set({ dashboardLoading: false })
+    }
+  },
+
+  loadEpisodePage: async (dataset: string, page = 1, pageSize = 50) => {
+    if (!dataset) return
+    set({
+      episodePageLoading: true,
+      episodePageError: '',
+      selectedEpisodeIndex: null,
+      episodeDetail: null,
+      episodeError: '',
+    })
+    try {
+      const episodePage = await fetchJson<ExplorerEpisodePage>(
+        `/api/explorer/episodes?dataset=${encodeURIComponent(dataset)}&page=${page}&page_size=${pageSize}`,
+      )
+      set({ episodePage })
+    } catch (error) {
+      set({
+        episodePageError: error instanceof Error ? error.message : 'Failed to load episodes',
+      })
+    } finally {
+      set({ episodePageLoading: false })
     }
   },
 

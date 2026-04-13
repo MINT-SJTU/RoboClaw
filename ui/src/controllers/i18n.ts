@@ -29,6 +29,11 @@ const translations = {
     // Header / Navigation
     controlCenter: '控制中心',
     dataCenter: '数据中心',
+    datasetExplorer: '数据集浏览',
+    qualityWorkbench: '质量验证',
+    workflow: '工作流',
+    connected: '已连接',
+    disconnected: '未连接',
     settings: '设置',
     logs: '日志',
     assistantChat: '助手对话',
@@ -340,6 +345,11 @@ const translations = {
     // Header / Navigation
     controlCenter: 'Control Center',
     dataCenter: 'Data Center',
+    datasetExplorer: 'Explorer',
+    qualityWorkbench: 'Quality',
+    workflow: 'Workflow',
+    connected: 'Connected',
+    disconnected: 'Disconnected',
     settings: 'Settings',
     logs: 'Logs',
     assistantChat: 'AI Assistant',

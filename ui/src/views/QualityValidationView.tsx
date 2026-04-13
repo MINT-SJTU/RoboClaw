@@ -352,7 +352,7 @@ export default function QualityValidationView() {
   }
 
   return (
-    <div className="quality-view">
+    <div className="page-enter quality-view">
       <div className="quality-view__hero">
         <div>
           <h2 className="quality-view__title">{t('qualityPageTitle')}</h2>

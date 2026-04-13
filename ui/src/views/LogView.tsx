@@ -12,7 +12,7 @@ export default function LogView() {
   }, [logs])
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="page-enter flex flex-col h-full">
       <div className="flex items-center justify-between px-6 py-4 bg-sf border-b border-bd/50">
         <h2 className="text-xl font-bold tracking-tight">{t('logs')}</h2>
         <button

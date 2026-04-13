@@ -21,7 +21,12 @@ from huggingface_hub import HfApi
 from loguru import logger
 
 from roboclaw.http.dashboard_datasets import extract_action_names, extract_state_names
-from roboclaw.http.explorer import build_explorer_payload_from_artifacts
+from roboclaw.http.explorer import (
+    build_explorer_episode_page_from_artifacts,
+    build_explorer_overview_from_artifacts,
+    build_explorer_payload_from_artifacts,
+    build_explorer_summary_from_info,
+)
 from roboclaw.embodied.curation.features import build_joint_trajectory_payload, resolve_timestamp
 
 _HF_API = HfApi()
@@ -81,25 +86,47 @@ def _fetch_optional_bytes(url: str) -> bytes | None:
 
 
 @lru_cache(maxsize=32)
-def get_remote_dataset_artifacts(dataset: str) -> dict[str, Any]:
+def _get_remote_dataset_repo_index(dataset: str) -> dict[str, Any]:
     info = _HF_API.dataset_info(dataset)
-    siblings = [
+    return {
+        "dataset": str(info.id or dataset),
+        "siblings": [
         {"rfilename": item.rfilename}
         for item in (info.siblings or [])
         if getattr(item, "rfilename", None)
-    ]
+        ],
+    }
 
+
+@lru_cache(maxsize=32)
+def _get_remote_info_json(dataset: str) -> dict[str, Any]:
     info_bytes = _fetch_optional_bytes(_repo_file_url(dataset, "meta/info.json"))
-    stats_bytes = _fetch_optional_bytes(_repo_file_url(dataset, "meta/stats.json"))
-    episodes_jsonl_bytes = _fetch_optional_bytes(_repo_file_url(dataset, "meta/episodes.jsonl"))
+    return _load_json_bytes(info_bytes) if info_bytes else {}
 
-    info_json = _load_json_bytes(info_bytes) if info_bytes else {}
-    stats_json = _load_json_bytes(stats_bytes) if stats_bytes else {}
-    episodes_meta = _load_jsonl_bytes(episodes_jsonl_bytes) if episodes_jsonl_bytes else []
+
+@lru_cache(maxsize=32)
+def _get_remote_stats_json(dataset: str) -> dict[str, Any]:
+    stats_bytes = _fetch_optional_bytes(_repo_file_url(dataset, "meta/stats.json"))
+    return _load_json_bytes(stats_bytes) if stats_bytes else {}
+
+
+@lru_cache(maxsize=32)
+def _get_remote_episodes_meta(dataset: str) -> list[dict[str, Any]]:
+    episodes_jsonl_bytes = _fetch_optional_bytes(_repo_file_url(dataset, "meta/episodes.jsonl"))
+    return _load_jsonl_bytes(episodes_jsonl_bytes) if episodes_jsonl_bytes else []
+
+
+@lru_cache(maxsize=32)
+def get_remote_dataset_artifacts(dataset: str) -> dict[str, Any]:
+    repo_index = _get_remote_dataset_repo_index(dataset)
+
+    info_json = _get_remote_info_json(dataset)
+    stats_json = _get_remote_stats_json(dataset)
+    episodes_meta = _get_remote_episodes_meta(dataset)
 
     return {
-        "dataset": str(info.id or dataset),
-        "siblings": siblings,
+        "dataset": repo_index["dataset"],
+        "siblings": repo_index["siblings"],
         "info": info_json,
         "stats": stats_json,
         "episodes_meta": episodes_meta,
@@ -114,6 +141,37 @@ def build_remote_explorer_payload(dataset: str) -> dict[str, Any]:
         stats=artifacts["stats"],
         siblings=artifacts["siblings"],
         episodes_meta=artifacts["episodes_meta"],
+    )
+
+
+def build_remote_explorer_summary(dataset: str) -> dict[str, Any]:
+    repo_index = _get_remote_dataset_repo_index(dataset)
+    info = _get_remote_info_json(dataset)
+    return build_explorer_summary_from_info(repo_index["dataset"], info)
+
+
+def build_remote_explorer_details(dataset: str) -> dict[str, Any]:
+    repo_index = _get_remote_dataset_repo_index(dataset)
+    info = _get_remote_info_json(dataset)
+    stats = _get_remote_stats_json(dataset)
+    return build_explorer_overview_from_artifacts(
+        dataset_name=repo_index["dataset"],
+        info=info,
+        stats=stats,
+        siblings=repo_index["siblings"],
+    )
+
+
+def build_remote_episode_page(dataset: str, page: int, page_size: int) -> dict[str, Any]:
+    repo_index = _get_remote_dataset_repo_index(dataset)
+    info = _get_remote_info_json(dataset)
+    episodes_meta = _get_remote_episodes_meta(dataset)
+    return build_explorer_episode_page_from_artifacts(
+        dataset_name=repo_index["dataset"],
+        info=info,
+        episodes_meta=episodes_meta,
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -225,16 +283,19 @@ def _resolve_episode_videos(
     chunks_size: int,
 ) -> list[dict[str, Any]]:
     chunk = f"{episode_index // chunks_size:03d}"
-    video_prefix = f"videos/chunk-{chunk}/episode_{episode_index:06d}/"
-    return [
+    chunk_prefix = f"videos/chunk-{chunk}/"
+    episode_filename = f"episode_{episode_index:06d}.mp4"
+    videos = [
         {
             "path": sibling["rfilename"],
             "url": _repo_file_url(dataset, sibling["rfilename"]),
-            "stream": Path(sibling["rfilename"]).stem,
+            "stream": Path(sibling["rfilename"]).parent.name,
         }
         for sibling in artifacts["siblings"]
-        if sibling["rfilename"].startswith(video_prefix) and sibling["rfilename"].endswith(".mp4")
+        if sibling["rfilename"].startswith(chunk_prefix)
+        and sibling["rfilename"].endswith(episode_filename)
     ]
+    return sorted(videos, key=lambda item: item["stream"])
 
 
 def load_remote_episode_detail(dataset: str, episode_index: int) -> dict[str, Any]:
@@ -266,9 +327,9 @@ def load_remote_episode_detail(dataset: str, episode_index: int) -> dict[str, An
 
 
 def build_remote_dataset_info(dataset: str) -> dict[str, Any]:
-    artifacts = get_remote_dataset_artifacts(dataset)
-    info = artifacts["info"]
-    episodes_meta = artifacts["episodes_meta"]
+    repo_index = _get_remote_dataset_repo_index(dataset)
+    info = _get_remote_info_json(dataset)
+    episodes_meta = _get_remote_episodes_meta(dataset)
     episode_lengths: list[int] = []
     if episodes_meta:
         for entry in episodes_meta:
@@ -281,14 +342,14 @@ def build_remote_dataset_info(dataset: str) -> dict[str, Any]:
         episode_lengths = [0] * total
 
     return {
-        "name": artifacts["dataset"],
+        "name": repo_index["dataset"],
         "total_episodes": int(info.get("total_episodes", 0) or 0),
         "total_frames": int(info.get("total_frames", 0) or 0),
         "fps": int(info.get("fps", 0) or 0),
         "episode_lengths": episode_lengths,
         "features": list((info.get("features") or {}).keys()),
         "robot_type": str(info.get("robot_type", "")),
-        "source_dataset": artifacts["dataset"],
+        "source_dataset": repo_index["dataset"],
     }
 
 

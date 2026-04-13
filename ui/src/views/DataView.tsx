@@ -28,7 +28,7 @@ export default function DataView() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
+    <div className="page-enter flex flex-col h-full overflow-y-auto">
       <div className="border-b border-bd/50 px-6 py-4 bg-sf">
         <h2 className="text-xl font-bold tracking-tight">{t('dataCenter')}</h2>
       </div>

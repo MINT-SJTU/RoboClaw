@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -252,6 +253,44 @@ def build_explorer_payload_from_artifacts(
     episodes_meta: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Build the explorer payload from already-loaded artifacts."""
+    overview = build_explorer_overview_from_artifacts(
+        dataset_name=dataset_name,
+        info=info,
+        stats=stats,
+        siblings=siblings,
+    )
+    overview["episodes"] = build_explorer_episode_page_from_artifacts(
+        dataset_name=dataset_name,
+        info=info,
+        episodes_meta=episodes_meta,
+        page=1,
+        page_size=max(int(info.get("total_episodes", 0) or 0), 1),
+    )["episodes"]
+    return overview
+
+
+def build_explorer_summary_from_info(dataset_name: str, info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dataset": dataset_name,
+        "summary": {
+            "total_episodes": int(info.get("total_episodes", 0) or 0),
+            "total_frames": int(info.get("total_frames", 0) or 0),
+            "fps": int(info.get("fps", 0) or 0),
+            "robot_type": str(info.get("robot_type", "")),
+            "codebase_version": str(info.get("codebase_version", "")),
+            "chunks_size": int(info.get("chunks_size", 1000) or 1000),
+        },
+    }
+
+
+def build_explorer_overview_from_artifacts(
+    *,
+    dataset_name: str,
+    info: dict[str, Any],
+    stats: dict[str, Any],
+    siblings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build explorer metadata without embedding the full episode list."""
     features = info.get("features", {})
     feature_names, feature_type_distribution = build_feature_summary(features)
     feature_stats = build_feature_stats(features, stats)
@@ -259,42 +298,54 @@ def build_explorer_payload_from_artifacts(
     files = summarize_files(siblings)
     modality_summary = summarize_modalities(siblings, features)
 
-    episodes = [
-        {
-            "episode_index": ep.get("episode_index", i),
-            "length": ep.get("length", 0),
-        }
-        for i, ep in enumerate(episodes_meta)
-    ]
-
-    if not episodes and int(info.get("total_episodes", 0) or 0) > 0:
-        total_episodes = int(info.get("total_episodes", 0) or 0)
-        episode_lengths = info.get("episode_lengths", [])
-        episodes = [
-            {
-                "episode_index": index,
-                "length": episode_lengths[index] if index < len(episode_lengths) else 0,
-            }
-            for index in range(total_episodes)
-        ]
-
     return {
-        "dataset": dataset_name,
-        "summary": {
-            "total_episodes": info.get("total_episodes", 0),
-            "total_frames": info.get("total_frames", 0),
-            "fps": info.get("fps", 0),
-            "robot_type": info.get("robot_type", ""),
-            "codebase_version": info.get("codebase_version", ""),
-            "chunks_size": info.get("chunks_size", 1000),
-        },
+        **build_explorer_summary_from_info(dataset_name, info),
         "files": files,
         "feature_names": feature_names,
         "feature_stats": feature_stats,
         "feature_type_distribution": feature_type_distribution,
         "dataset_stats": dataset_stats,
         "modality_summary": modality_summary,
-        "episodes": episodes,
+    }
+
+
+def build_explorer_episode_page_from_artifacts(
+    *,
+    dataset_name: str,
+    info: dict[str, Any],
+    episodes_meta: list[dict[str, Any]],
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    total_episodes = int(info.get("total_episodes", 0) or 0)
+    safe_page_size = max(1, int(page_size or 50))
+    total_pages = max(1, ceil(total_episodes / safe_page_size)) if total_episodes > 0 else 1
+    safe_page = min(max(int(page or 1), 1), total_pages)
+    start = (safe_page - 1) * safe_page_size
+    stop = min(start + safe_page_size, total_episodes)
+    episode_lengths = info.get("episode_lengths", [])
+
+    page_items: list[dict[str, Any]] = []
+    for index in range(start, stop):
+        if index < len(episodes_meta):
+            entry = episodes_meta[index]
+            page_items.append({
+                "episode_index": int(entry.get("episode_index", index) or index),
+                "length": int(entry.get("length", 0) or 0),
+            })
+        else:
+            page_items.append({
+                "episode_index": index,
+                "length": int(episode_lengths[index]) if index < len(episode_lengths) else 0,
+            })
+
+    return {
+        "dataset": dataset_name,
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "total_episodes": total_episodes,
+        "total_pages": total_pages,
+        "episodes": page_items,
     }
 
 

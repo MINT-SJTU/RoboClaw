@@ -1,8 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useWebSocket } from '../controllers/connection'
 import { useDashboard } from '../controllers/dashboard'
 import { useI18n } from '../controllers/i18n'
+import { StatusPill } from './ux'
 
 export default function Header() {
   const location = useLocation()
@@ -14,53 +15,48 @@ export default function Header() {
     fetchNetworkInfo()
   }, [fetchNetworkInfo])
 
-  const navItems = [
-    { path: '/control', label: t('controlCenter') },
-    { path: '/data', label: t('dataCenter') },
-    { path: '/settings', label: t('settings') },
-    { path: '/logs', label: t('logs') },
-    { path: '/chat', label: t('assistantChat') },
-  ]
+  const pageTitle = useMemo(() => {
+    if (location.pathname.startsWith('/control')) return t('controlCenter')
+    if (location.pathname.startsWith('/data')) return t('dataCenter')
+    if (location.pathname.startsWith('/explorer')) return t('datasetExplorer')
+    if (location.pathname.startsWith('/quality')) return t('qualityWorkbench')
+    if (location.pathname.startsWith('/text-alignment')) return t('textAlignment')
+    if (location.pathname.startsWith('/workflow')) return t('workflow')
+    if (location.pathname.startsWith('/logs')) return t('logs')
+    if (location.pathname.startsWith('/settings')) return t('settings')
+    if (location.pathname.startsWith('/chat')) return t('assistantChat')
+    return 'RoboClaw'
+  }, [location.pathname, t])
 
   return (
-    <header className="flex items-center gap-3 px-4 py-2 bg-sf border-b border-bd/50 flex-wrap">
-      <h1 className="text-base font-bold tracking-tight text-ac whitespace-nowrap">RoboClaw</h1>
-
-      <span className={`flex items-center gap-1.5 text-2xs font-mono ${connected ? 'text-gn' : 'text-rd'}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-gn' : 'bg-rd'}`} />
-        {connected ? t('connected') : t('disconnected')}
-      </span>
-
-      <nav className="flex items-center gap-0.5 ml-3">
-        {navItems.map((item) => (
-          <Link
-            key={item.path}
-            to={item.path}
-            className={`px-2.5 py-1 text-sm rounded-md transition-all ${
-              location.pathname === item.path
-                ? 'text-ac font-semibold bg-ac/10'
-                : 'text-tx2 hover:text-tx hover:bg-bd/30'
-            }`}
-          >
-            {item.label}
+    <header className="app-topbar">
+      <div className="app-topbar__title">
+        <div className="space-y-2">
+          <Link to="/control" className="display-title text-[1.95rem] text-tx">
+            RoboClaw
           </Link>
-        ))}
-      </nav>
+          <div className="eyebrow">{pageTitle}</div>
+        </div>
+      </div>
 
-      <div className="flex-1" />
+      <div className="app-topbar__actions">
+        {networkInfo && (
+          <div className="rounded-full bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-tx2">
+            {networkInfo.lan_ip}:{networkInfo.port}
+          </div>
+        )}
 
-      {networkInfo && (
-        <span className="text-2xs text-tx3 font-mono whitespace-nowrap mr-2">
-          {networkInfo.lan_ip}:{networkInfo.port}
-        </span>
-      )}
+        <StatusPill active={connected}>
+          {connected ? t('connected') : t('disconnected')}
+        </StatusPill>
 
-      <button
-        onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}
-        className="text-tx3 hover:text-tx2 text-xs transition-colors"
-      >
-        {locale === 'zh' ? 'EN' : '中文'}
-      </button>
+        <button
+          onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}
+          className="app-topbar__locale"
+        >
+          {locale === 'zh' ? 'EN' : '中文'}
+        </button>
+      </div>
     </header>
   )
 }

@@ -142,7 +142,7 @@ export default function ControlView() {
   const pct = targetEpisodes > 0 ? Math.round((savedEpisodes / targetEpisodes) * 100) : 0
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
+    <div className="page-enter flex flex-col h-full overflow-y-auto">
       {/* Error & hardware warning bars */}
       {session.error && (
         <div className="px-4 py-2 bg-rd/10 border-b border-rd/30 border-l-4 border-l-rd text-rd text-sm font-mono whitespace-pre-wrap flex items-start gap-2">
