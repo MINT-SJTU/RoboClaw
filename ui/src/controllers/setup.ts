@@ -61,6 +61,7 @@ export interface ConfiguredArm {
 
 export interface ConfiguredCamera {
   alias: string
+  side: 'left' | 'right' | ''
   port: string
 }
 
@@ -107,7 +108,7 @@ interface SetupStore {
 
   // Session assign/commit
   assignments: Assignment[]
-  sessionAssign: (stableId: string, alias: string, specName: string) => Promise<void>
+  sessionAssign: (stableId: string, alias: string, specName: string, side?: 'left' | 'right' | '') => Promise<void>
   sessionUnassign: (alias: string) => Promise<void>
   sessionCommit: () => Promise<void>
   refreshSession: () => Promise<void>
@@ -291,13 +292,14 @@ export const useSetup = create<SetupStore>((set, get) => ({
 
   // -- Session assign/commit --------------------------------------------------
 
-  sessionAssign: async (stableId, alias, specName) => {
+  sessionAssign: async (stableId, alias, specName, side) => {
     set({ error: null })
     try {
       await postJson(`${SETUP}/session/assign`, {
         interface_stable_id: stableId,
         alias,
         spec_name: specName,
+        side: side ?? '',
       })
       await get().refreshSession()
     } catch (e: unknown) {
@@ -348,6 +350,7 @@ export const useSetup = create<SetupStore>((set, get) => ({
           })),
           cameras: (data.cameras || []).map((c: any) => ({
             alias: c.alias || c.name || '',
+            side: c.side || '',
             port: c.port || c.interface?.by_id || c.interface?.dev || '',
           })),
           hands: (data.hands || []).map((h: any) => ({

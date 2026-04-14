@@ -27,6 +27,7 @@ class Binding:
     calibration_dir: str = ""     # arm-specific
     calibrated: bool = False      # arm-specific
     slave_id: int = 0             # hand-specific
+    side: str = ""                # camera-specific: "left" or "right"
     _kind: str = field(default="", repr=False)
     _type_name: str = field(default="", repr=False)
 
@@ -93,6 +94,7 @@ class Binding:
         assert isinstance(self.interface, VideoInterface)
         d: dict[str, Any] = {
             "alias": self.alias,
+            "side": self.side,
             "port": self.interface.address,
             "width": self.interface.width,
             "height": self.interface.height,
@@ -169,6 +171,12 @@ class Binding:
     def _camera_from_dict(
         cls, data: dict[str, Any], guards: dict[str, InterfaceGuard],
     ) -> Binding:
+        side = data.get("side", "")
+        if side and side not in ("left", "right"):
+            raise ValueError(
+                f"Camera binding {data.get('alias')!r} has invalid side {side!r}; "
+                "expected 'left', 'right', or empty (single arm)."
+            )
         interface = VideoInterface(
             dev=data.get("port", ""),
             width=data.get("width", 640),
@@ -181,6 +189,7 @@ class Binding:
             alias=data["alias"],
             interface=interface,
             guard=guard,
+            side=side,
             _kind="camera",
             _type_name="opencv",
         )

@@ -156,16 +156,55 @@ function PortAssignForm({ stableId, roles, model }: {
   )
 }
 
+type CameraMount = 'left' | 'right' | 'single' | ''
+
 function CameraAssignForm({ stableId }: { stableId: string }) {
   const { sessionAssign } = useSetup()
-  const [alias, setAlias] = useState('')
+  const [mount, setMount] = useState<CameraMount>('')
+  const [suffix, setSuffix] = useState('')
+
+  const prefix = mount === 'left' || mount === 'right' ? `${mount}_` : ''
+  // Strip any leading left_/right_ the user re-typed so we never double-prefix.
+  const cleanSuffix = suffix.trim().replace(/^(left_|right_)/, '')
+  const finalAlias = mount ? `${prefix}${cleanSuffix}` : ''
+  const canSubmit = mount !== '' && cleanSuffix.length > 0
+
+  function submit() {
+    if (!canSubmit) return
+    const side = mount === 'left' || mount === 'right' ? mount : ''
+    sessionAssign(stableId, finalAlias, 'opencv', side)
+  }
+
+  const options: { key: CameraMount; label: string }[] = [
+    { key: 'left', label: '左臂' },
+    { key: 'right', label: '右臂' },
+    { key: 'single', label: '单臂' },
+  ]
 
   return (
     <div className={formBox}>
-      <input value={alias} onChange={(e) => setAlias(e.target.value)}
-        placeholder="摄像头名称" className={inputCls} />
-      <button onClick={() => { if (alias.trim()) sessionAssign(stableId, alias.trim(), 'opencv') }}
-        disabled={!alias.trim()}
+      <div className="flex gap-1.5">
+        {options.map((opt) => (
+          <button key={opt.key} onClick={() => setMount(opt.key)}
+            className={`px-2.5 py-1 text-2xs rounded-md border transition-colors ${
+              mount === opt.key ? 'border-ac bg-ac/5 text-ac font-medium ring-1 ring-ac/20' : 'border-bd/50 text-tx2 hover:border-ac/50'
+            }`}>
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-1">
+        {prefix && (
+          <span className="text-xs text-tx2 select-none whitespace-nowrap">{prefix}</span>
+        )}
+        <input value={suffix} onChange={(e) => setSuffix(e.target.value)}
+          placeholder={mount === 'single' ? '摄像头名称' : 'wrist / front / ...'}
+          className={inputCls} disabled={!mount} />
+      </div>
+      {finalAlias && (
+        <p className="text-2xs text-tx2">预览: {finalAlias}</p>
+      )}
+      <button onClick={submit} disabled={!canSubmit}
         className="px-3 py-1 text-xs bg-ac text-white rounded-lg font-medium disabled:opacity-40 hover:bg-ac2 transition-colors">
         确认分配
       </button>

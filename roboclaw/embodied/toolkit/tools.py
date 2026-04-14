@@ -65,6 +65,11 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Camera device path for bind_camera (e.g., '/dev/video4').",
                 },
+                "side": {
+                    "type": "string",
+                    "enum": ["left", "right", ""],
+                    "description": "Which arm the camera is mounted on (left/right for bimanual; omit for single-arm).",
+                },
             },
             "required": ["action"],
         },
@@ -503,12 +508,15 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
 
     if operation == "bind" and target == "camera":
         dev = kwargs.get("dev", "")
+        side = kwargs.get("side", "")
         if not dev:
             return "bind camera requires dev (e.g., '/dev/video4')."
+        if side and side not in ("left", "right"):
+            return "bind camera side must be 'left', 'right', or omitted (single arm)."
         matched, avail = _find_camera(dev)
         if matched is None:
             return f"Camera '{dev}' not found. Available: {avail}"
-        result = svc.bind_camera(alias, matched)
+        result = svc.bind_camera(alias, matched, side)
         data = result.to_dict() if hasattr(result, "to_dict") else str(result)
         return f"Camera '{alias}' bound to {dev}.\n{json.dumps(data, indent=2) if isinstance(data, dict) else data}"
 

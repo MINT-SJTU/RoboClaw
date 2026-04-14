@@ -343,9 +343,19 @@ class Manifest:
         self._emit("arm_calibrated", alias)
         return result
 
-    def set_camera(self, name: str, interface: VideoInterface) -> Binding:
+    def set_camera(
+        self, name: str, interface: VideoInterface, side: str = "",
+    ) -> Binding:
         if not name:
             raise ValueError("Camera alias is required.")
+        if side and side not in ("left", "right"):
+            raise ValueError(
+                f"Camera side must be 'left', 'right', or empty (single arm), got {side!r}."
+            )
+        if side and not name.startswith(f"{side}_"):
+            raise ValueError(
+                f"Camera alias '{name}' must start with '{side}_' to match its side."
+            )
         port = interface.address
         if not port:
             raise ValueError("Camera interface has no usable address.")
@@ -355,6 +365,7 @@ class Manifest:
                 alias=name,
                 interface=interface,
                 guard=self._guard_for_binding(interface),
+                side=side,
                 _kind="camera",
                 _type_name="opencv",
             )
@@ -386,6 +397,10 @@ class Manifest:
             existing = self._bindings.get(new_name)
             if old_name != new_name and existing is not None:
                 raise ValueError(f"Alias '{new_name}' already exists.")
+            if camera.side and not new_name.startswith(f"{camera.side}_"):
+                raise ValueError(
+                    f"Camera alias '{new_name}' must start with '{camera.side}_' to match its side."
+                )
             renamed = Binding(
                 alias=new_name,
                 spec=camera.spec,
@@ -394,6 +409,7 @@ class Manifest:
                 calibration_dir=camera.calibration_dir,
                 calibrated=camera.calibrated,
                 slave_id=camera.slave_id,
+                side=camera.side,
                 _kind=camera.kind,
                 _type_name=camera.type_name,
             )
