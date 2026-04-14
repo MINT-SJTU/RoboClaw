@@ -21,6 +21,7 @@ class AssignRequest(BaseModel):
     interface_stable_id: str
     alias: str
     spec_name: str
+    side: str = ""
 
 
 def _map_service_errors(app: FastAPI) -> None:
@@ -112,6 +113,7 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
         try:
             assignment = service.setup.assign(
                 body.interface_stable_id, body.alias, body.spec_name,
+                side=body.side,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc

@@ -87,9 +87,13 @@
     "zh": "\n--- 摄像头命名 ---",
     "en": "\n--- Camera Naming ---"
   },
+  "cameraSidePrompt": {
+    "zh": "  摄像头 {index} 装在哪个手臂? (left/right):",
+    "en": "  Which arm is camera {index} mounted on? (left/right):"
+  },
   "cameraNamePrompt": {
-    "zh": "  摄像头 {index} 的名称 (回车跳过):",
-    "en": "  Name for camera {index} (or Enter to skip):"
+    "zh": "  摄像头 {index} 的名称 (前缀 {prefix}, 回车跳过):",
+    "en": "  Name for camera {index} (prefix {prefix}, or Enter to skip):"
   },
   "commitPrompt": {
     "zh": "提交这些分配? (y/n):",

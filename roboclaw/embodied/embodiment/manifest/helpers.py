@@ -18,7 +18,7 @@ _ARM_TYPES = all_arm_types()
 _ARM_FIELDS = {"alias", "type", "port", "calibration_dir", "calibrated"}
 _HAND_TYPES = all_hand_types()
 _HAND_FIELDS = {"alias", "type", "port", "slave_id"}
-_CAMERA_FIELDS = {"alias", "port", "width", "height", "fps", "fourcc"}
+_CAMERA_FIELDS = {"alias", "side", "port", "width", "height", "fps", "fourcc"}
 _VALID_TOP_KEYS = {"version", "arms", "hands", "cameras", "datasets", "policies"}
 
 
@@ -165,6 +165,11 @@ def _validate_cameras(cameras: Any) -> None:
             raise ValueError("Camera entry missing required 'alias' field.")
         if not cam.get("port"):
             raise ValueError(f"Camera '{alias}' missing required 'port' field.")
+        side = cam.get("side")
+        if side not in ("left", "right"):
+            raise ValueError(
+                f"Camera '{alias}' has invalid 'side' {side!r}; expected 'left' or 'right'."
+            )
         bad = set(cam.keys()) - _CAMERA_FIELDS
         if bad:
             raise ValueError(f"Camera '{alias}' has unknown fields: {bad}")
@@ -343,7 +348,9 @@ def mark_arm_calibrated(alias: str, path: Path | None = None) -> dict[str, Any]:
     return _lazy_manifest(path).mark_arm_calibrated(alias)
 
 
-def set_camera(name: str, camera_index: int, path: Path | None = None) -> dict[str, Any]:
+def set_camera(
+    name: str, camera_index: int, side: str, path: Path | None = None,
+) -> dict[str, Any]:
     from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
 
     scanned = scan_cameras()
@@ -356,7 +363,7 @@ def set_camera(name: str, camera_index: int, path: Path | None = None) -> dict[s
     if not interface.address:
         raise ValueError(f"Scanned camera at index {camera_index} has no usable path.")
     m = _lazy_manifest(path)
-    m.set_camera(name, interface)
+    m.set_camera(name, interface, side)
     return m.snapshot
 
 
