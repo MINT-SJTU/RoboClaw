@@ -107,22 +107,6 @@ def list_serial_device_paths() -> list[str]:
     )
 
 
-def port_candidates(port_path: str) -> list[str]:
-    """Return candidate device paths to try for a scanned port.
-
-    On macOS, /dev/cu.* is the correct communication endpoint. If the given
-    path is tty.*, try the cu.* sibling first; if cu.*, try tty.* as fallback.
-    """
-    candidates = [port_path]
-    if sys.platform == "darwin":
-        name = os.path.basename(port_path)
-        if name.startswith("tty."):
-            # cu.* is the correct endpoint — try it first
-            candidates.insert(0, port_path.replace("/dev/tty.", "/dev/cu.", 1))
-        elif name.startswith("cu."):
-            candidates.append(port_path.replace("/dev/cu.", "/dev/tty.", 1))
-    return list(dict.fromkeys(candidates))
-
 
 def suppress_stderr() -> int:
     """Redirect stderr to /dev/null. Returns saved fd for restore_stderr."""

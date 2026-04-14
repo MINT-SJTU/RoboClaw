@@ -119,14 +119,12 @@ def test_scan_serial_ports_macos_only_returns_cu_devices() -> None:
     assert ports[0].dev == "/dev/cu.usbmodem123"
 
 
-def test_discovery_probes_cu_fallback_for_macos_without_duplicate_device() -> None:
+def test_discovery_probes_directly_on_scanned_port() -> None:
     class _FakeProber:
         def probe(self, port_path: str, baudrate: int = 1_000_000, motor_ids: list[int] | None = None) -> list[int]:
             return [1, 2, 3] if port_path == "/dev/cu.usbmodem123" else []
 
-    ports = [SerialInterface(dev="/dev/tty.usbmodem123")]
-
-    with patch("roboclaw.embodied.embodiment.hardware.scan.sys.platform", "darwin"):
-        result = HardwareDiscovery._do_probe(ports, _FakeProber(), "feetech")
+    ports = [SerialInterface(dev="/dev/cu.usbmodem123")]
+    result = HardwareDiscovery._do_probe(ports, _FakeProber(), "feetech")
 
     assert result == [SerialInterface(dev="/dev/cu.usbmodem123", bus_type="feetech", motor_ids=(1, 2, 3))]

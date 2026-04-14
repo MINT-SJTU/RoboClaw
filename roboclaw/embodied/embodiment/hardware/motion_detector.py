@@ -52,13 +52,8 @@ class MotionDetector:
     def _read_positions(self) -> dict[int, int]:
         """Read servo positions via the appropriate prober."""
         from roboclaw.embodied.embodiment.hardware.probers import get_prober
-        from roboclaw.embodied.embodiment.hardware.scan import port_candidates
 
         path = self._interface.dev or self._interface.by_id or self._interface.by_path
         bus_type = self._interface.bus_type or "feetech"
         prober = get_prober(bus_type)
-        for candidate in port_candidates(path):
-            positions = prober.read_positions(candidate, list(self._interface.motor_ids))
-            if positions:
-                return positions
-        return {}
+        return prober.read_positions(path, list(self._interface.motor_ids))
