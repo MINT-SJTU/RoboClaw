@@ -137,6 +137,12 @@ class EmbodiedService:
             status["embodiment_owner"] = self._embodiment_owner or self._file_lock.owner()
         return status
 
+    def get_logs(self) -> list[str]:
+        return self.board.all_logs()
+
+    def clear_logs(self) -> None:
+        self.board.clear_logs()
+
     def _on_session_exit(self) -> None:
         """Called when a subprocess exits unexpectedly (not via stop())."""
         self.release_embodiment()

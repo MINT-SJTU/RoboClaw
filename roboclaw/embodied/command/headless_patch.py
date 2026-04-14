@@ -95,16 +95,22 @@ def apply_headless_patch() -> None:
     import lerobot.utils.control_utils as control_utils
     import lerobot.utils.utils as lerobot_utils
 
-    # Patch log_say to also print to stdout so the parent process can parse it.
-    # The default logging.info() produces no output without a configured handler.
+    # Patch log_say to print to stdout (so the parent process can parse it)
+    # and force blocking=False. LeRobot's finally-block calls
+    # log_say("Stop recording", blocking=True) which runs `spd-say --wait`
+    # and hangs forever if speech-dispatcher is not installed. Using
+    # blocking=False lets spd-say fire-and-forget or fail silently.
     _original_say = lerobot_utils.say
 
     def _log_say(text: str, play_sounds: bool = True, blocking: bool = False) -> None:
         print(f"[lerobot] {text}", flush=True)
         if play_sounds:
-            _original_say(text, blocking)
+            _original_say(text, blocking=False)
 
     lerobot_utils.log_say = _log_say
+    # Also patch say() directly so any caller that bypasses log_say
+    # won't hang on blocking=True either.
+    lerobot_utils.say = lambda text, blocking=False: _original_say(text, blocking=False)
 
     def init_keyboard_listener():
         events = {

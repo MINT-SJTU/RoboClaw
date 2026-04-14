@@ -32,17 +32,19 @@ IDLE_STATE: dict[str, Any] = {
     "rerun_web_port": 0,
     "error": "",
     "embodiment_owner": "",
+    "prepare_stage": "",
 }
 
 Subscriber = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 
 class Board:
-    def __init__(self, max_log_lines: int = 200) -> None:
+    def __init__(self, max_log_lines: int | None = None) -> None:
         self._lock = threading.Lock()
         self._state: dict[str, Any] = dict(IDLE_STATE)
         self._commands: deque[str] = deque()
-        self._log: deque[str] = deque(maxlen=max_log_lines)
+        self._max_log_lines = max_log_lines
+        self._log: list[str] = []
         self._start_time: float = 0.0
         self._input_consumer_notify: Any = None
         self._subscribers: dict[str | None, list[Subscriber]] = {}
@@ -165,7 +167,19 @@ class Board:
     def log(self, line: str) -> None:
         with self._lock:
             self._log.append(line)
+            if self._max_log_lines is not None and len(self._log) > self._max_log_lines:
+                overflow = len(self._log) - self._max_log_lines
+                if overflow > 0:
+                    del self._log[:overflow]
 
     def recent_logs(self, n: int = 20) -> list[str]:
         with self._lock:
-            return list(self._log)[-n:]
+            return self._log[-n:]
+
+    def all_logs(self) -> list[str]:
+        with self._lock:
+            return list(self._log)
+
+    def clear_logs(self) -> None:
+        with self._lock:
+            self._log.clear()

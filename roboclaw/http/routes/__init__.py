@@ -22,6 +22,7 @@ def register_all_routes(
     from roboclaw.http.routes.devices import register_device_routes
     from roboclaw.http.routes.calibrate import register_calibrate_routes
     from roboclaw.http.routes.datasets import register_dataset_routes
+    from roboclaw.http.routes.policies import register_policy_routes
     from roboclaw.http.routes.troubleshoot import register_troubleshoot_routes
     from roboclaw.http.routes.network import register_network_routes
     from roboclaw.http.routes.replay import register_replay_routes
@@ -35,6 +36,7 @@ def register_all_routes(
     register_device_routes(app, service)
     register_calibrate_routes(app, service)
     register_dataset_routes(app, service)
+    register_policy_routes(app, service)
     register_troubleshoot_routes(app, service)
     register_network_routes(app, get_config)
     register_replay_routes(app, service)

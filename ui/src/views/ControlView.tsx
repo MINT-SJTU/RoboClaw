@@ -52,8 +52,8 @@ function ActionBtn({
 
 export default function ControlView() {
   const store = useDashboard()
-  const { session, datasets, loading, hardwareStatus: hwStatus } = store
-  const { state, episode_phase: episodePhase, saved_episodes: savedEpisodes, target_episodes: targetEpisodes, embodiment_owner: owner } = session
+  const { session, datasets, policies, loading, hardwareStatus: hwStatus } = store
+  const { state, episode_phase: episodePhase, saved_episodes: savedEpisodes, target_episodes: targetEpisodes, embodiment_owner: owner, prepare_stage: prepareStage } = session
   const hwReady = hwStatus?.ready ?? false
   const ok = canDo(state, hwReady)
   const { t } = useI18n()
@@ -75,6 +75,7 @@ export default function ControlView() {
 
   useEffect(() => {
     store.loadDatasets()
+    store.loadPolicies()
     store.fetchHardwareStatus()
     store.fetchSessionStatus()
     const pollInterval = setInterval(() => {
@@ -82,6 +83,7 @@ export default function ControlView() {
         store.fetchHardwareStatus()
         store.fetchSessionStatus()
         store.loadDatasets()
+        store.loadPolicies()
       }
     }, 5000)
     return () => clearInterval(pollInterval)
@@ -423,9 +425,15 @@ export default function ControlView() {
             <div className="flex gap-2 mb-2">
               <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1">
                 {t('selectCheckpoint')}
-                <input value={inferCheckpoint} onChange={(e) => setInferCheckpoint(e.target.value)}
-                  placeholder="/path/to/checkpoint"
-                  className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm focus:outline-none focus:border-ac placeholder:text-tx3" />
+                <select value={inferCheckpoint} onChange={(e) => setInferCheckpoint(e.target.value)}
+                  className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm focus:outline-none focus:border-ac">
+                  <option value="">--</option>
+                  {policies.map(p => (
+                    <option key={p.name} value={p.checkpoint}>
+                      {p.name}{p.steps ? ` (${p.steps} steps)` : ''}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1">
                 {t('sourceDataset')}
@@ -444,7 +452,7 @@ export default function ControlView() {
               </label>
             </div>
             <div className="flex gap-2">
-              <ActionBtn color="ac" disabled={!ok.inferStart || !!loading}
+              <ActionBtn color="ac" disabled={!ok.inferStart || !!loading || !inferCheckpoint}
                 onClick={() => store.doInferStart({ checkpoint_path: inferCheckpoint, source_dataset: inferSourceDs, num_episodes: inferEpisodes })}
                 title={busy ? busyReason : undefined}>
                 {loading === 'infer' ? t('startingInference') : t('startInference')}
@@ -453,6 +461,12 @@ export default function ControlView() {
                 {t('stopInference')}
               </ActionBtn>
             </div>
+            {state === 'preparing' && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
+                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
+                {prepareStage || t('statePreparing')}
+              </div>
+            )}
             {state === 'inferring' && (
               <div className="mt-2 flex items-center gap-2 text-xs text-ac font-medium">
                 <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />

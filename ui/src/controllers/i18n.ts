@@ -124,6 +124,7 @@ const translations = {
     selectCheckpoint: '选择模型',
     sourceDataset: '源数据集',
     stateInferring: '推理中',
+    statePreparing: '准备中...',
     startingInference: '启动推理中...',
 
     // States
@@ -356,6 +357,7 @@ const translations = {
     selectCheckpoint: 'Select Model',
     sourceDataset: 'Source Dataset',
     stateInferring: 'Inferring',
+    statePreparing: 'Preparing...',
     startingInference: 'Starting inference...',
 
     // States
