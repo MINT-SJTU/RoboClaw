@@ -96,18 +96,19 @@ a {
   display: flex;
   width: 220px;
   flex-direction: column;
-  gap: 20px;
-  border-right: 1px solid rgba(47, 111, 228, 0.12);
+  gap: 16px;
+  border-right: 1px solid rgba(47, 111, 228, 0.10);
   background: rgba(255, 255, 255, 0.68);
-  padding: 20px 14px;
-  transition: width 0.2s ease, padding 0.2s ease;
+  padding: 16px 12px;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), padding 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   backdrop-filter: blur(12px);
+  overflow: hidden;
 }
 
 .app-sidebar--collapsed {
-  width: 72px;
-  padding-left: 10px;
-  padding-right: 10px;
+  width: 56px;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .app-sidebar__header {
@@ -115,59 +116,83 @@ a {
   justify-content: flex-end;
 }
 
+.app-sidebar--collapsed .app-sidebar__header {
+  justify-content: center;
+}
+
 .app-sidebar__toggle {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(47, 111, 228, 0.14);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.8);
-  color: var(--tx);
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tx2);
   cursor: pointer;
-  transition: background-color 0.2s ease, border-color 0.2s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .app-sidebar__toggle:hover {
-  background: #fff;
+  background: rgba(47, 111, 228, 0.08);
+  color: var(--tx);
 }
 
 .app-sidebar__nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
 .app-sidebar__link {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  border-radius: 12px;
-  padding: 0 14px;
+  gap: 10px;
+  height: 40px;
+  border-radius: 10px;
+  padding: 0 10px;
   color: var(--tx2);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.app-sidebar--collapsed .app-sidebar__link {
+  justify-content: center;
+  padding: 0;
 }
 
 .app-sidebar__link:hover {
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(47, 111, 228, 0.06);
   color: var(--tx);
 }
 
 .app-sidebar__link--active {
   background: linear-gradient(180deg, #3e7bf0, #2f6fe4);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(47, 111, 228, 0.28);
 }
 
-.app-sidebar__link-indicator {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 10px;
-  border-radius: 999px;
-  background: currentColor;
+.app-sidebar__link--active:hover {
+  background: linear-gradient(180deg, #4a85f2, #3a78e8);
+  color: #fff;
+}
+
+.app-sidebar__link-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.app-sidebar__link-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .glass-panel {
