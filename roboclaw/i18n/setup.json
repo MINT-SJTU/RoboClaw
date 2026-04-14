@@ -134,5 +134,9 @@
   "noConfiguredDevices": {
     "zh": "暂无配置设备",
     "en": "No configured devices"
+  },
+  "serialPermissionDenied": {
+    "zh": "当前用户 {user} 不在 dialout 组，无法访问串口。请执行: sudo usermod -aG dialout {user}，然后重新登录或重启服务。",
+    "en": "User '{user}' is not in the 'dialout' group. Fix: sudo usermod -aG dialout {user} && re-login or restart the service."
   }
 }

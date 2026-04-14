@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api, postJson, patchJson, deleteApi } from './api'
+import { useI18n } from './i18n'
 
 const SETUP = '/api/setup'
 const DEVICES = '/api/devices'
@@ -219,7 +220,15 @@ export const useSetup = create<SetupStore>((set, get) => ({
       set({ scannedPorts: ports, scannedCameras: cameras })
       if (cameras.length > 0) get().doCapturePreview()
     } catch (e: unknown) {
-      set({ error: (e as Error).message })
+      const err = e as any
+      const meta = err.meta
+      if (meta?.code) {
+        const raw = useI18n.getState().t(meta.code)
+        const msg = raw.replace(/\{(\w+)\}/g, (_: string, k: string) => meta[k] ?? k)
+        set({ error: msg })
+      } else {
+        set({ error: (e as Error).message })
+      }
     } finally {
       set({ scanning: false })
     }

@@ -174,37 +174,22 @@ class HardwareDiscovery:
         The motor SDKs (scservo_sdk / dynamixel_sdk) silently return empty
         results when openPort() fails, so we must check before probing.
         """
-        denied = [
-            p.dev or p.by_id or p.by_path
+        has_denied = any(
+            not os.access(p.dev or p.by_id or p.by_path, os.R_OK | os.W_OK)
             for p in ports
-            if (p.dev or p.by_id or p.by_path)
-            and not os.access(p.dev or p.by_id or p.by_path, os.R_OK | os.W_OK)
-        ]
-        if not denied:
+            if p.dev or p.by_id or p.by_path
+        )
+        if not has_denied:
             return
         if fix_fn():
-            # Re-check after udev fix
-            still_denied = [d for d in denied if not os.access(d, os.R_OK | os.W_OK)]
-            if not still_denied:
+            has_denied = any(
+                not os.access(p.dev or p.by_id or p.by_path, os.R_OK | os.W_OK)
+                for p in ports
+                if p.dev or p.by_id or p.by_path
+            )
+            if not has_denied:
                 return
-            denied = still_denied
-        import grp
-        hint = (
-            f"Cannot access serial ports: {', '.join(denied)}. "
-            f"Current user '{os.environ.get('USER', '?')}' is not in the 'dialout' group. "
-            f"Fix: sudo usermod -aG dialout $USER && (re-login or restart the service)"
-        )
-        try:
-            dialout_gid = grp.getgrnam("dialout").gr_gid
-            user_groups = os.getgroups()
-            if dialout_gid in user_groups:
-                hint = (
-                    f"Cannot access serial ports: {', '.join(denied)}. "
-                    f"Fix: sudo chmod 666 {' '.join(denied)}"
-                )
-        except KeyError:
-            pass
-        raise PermissionError(hint)
+        raise PermissionError("serial_permission_denied")
 
     @staticmethod
     def _do_probe(

@@ -11,7 +11,13 @@ export async function api(url: string, opts?: RequestInit) {
     throw new Error(`HTTP ${r.status}: ${r.statusText}`)
   }
   if (!r.ok || j.error) {
-    throw new Error(j.detail || j.error || j.message || `HTTP ${r.status}`)
+    const detail = j.detail
+    if (detail && typeof detail === 'object' && detail.code) {
+      const err = new Error(detail.code)
+      ;(err as any).meta = detail
+      throw err
+    }
+    throw new Error(detail || j.error || j.message || `HTTP ${r.status}`)
   }
   return j
 }
