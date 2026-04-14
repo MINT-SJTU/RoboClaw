@@ -83,7 +83,6 @@ export default function ControlView() {
         store.fetchHardwareStatus()
         store.fetchSessionStatus()
         store.loadDatasets()
-        store.loadPolicies()
       }
     }, 5000)
     return () => clearInterval(pollInterval)

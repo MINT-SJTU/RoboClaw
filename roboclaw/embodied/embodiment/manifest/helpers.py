@@ -165,12 +165,8 @@ def _validate_cameras(cameras: Any) -> None:
             raise ValueError("Camera entry missing required 'alias' field.")
         if not cam.get("port"):
             raise ValueError(f"Camera '{alias}' missing required 'port' field.")
-        side = cam.get("side", "")
-        if side and side not in ("left", "right"):
-            raise ValueError(
-                f"Camera '{alias}' has invalid 'side' {side!r}; "
-                "expected 'left', 'right', or empty (single arm)."
-            )
+        from roboclaw.embodied.embodiment.manifest.binding import validate_camera_side
+        validate_camera_side(cam.get("side", ""), alias)
         bad = set(cam.keys()) - _CAMERA_FIELDS
         if bad:
             raise ValueError(f"Camera '{alias}' has unknown fields: {bad}")

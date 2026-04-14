@@ -511,8 +511,11 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
         side = kwargs.get("side", "")
         if not dev:
             return "bind camera requires dev (e.g., '/dev/video4')."
-        if side and side not in ("left", "right"):
-            return "bind camera side must be 'left', 'right', or omitted (single arm)."
+        from roboclaw.embodied.embodiment.manifest.binding import validate_camera_side
+        try:
+            validate_camera_side(side)
+        except ValueError as exc:
+            return str(exc)
         matched, avail = _find_camera(dev)
         if matched is None:
             return f"Camera '{dev}' not found. Available: {avail}"

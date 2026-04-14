@@ -235,10 +235,8 @@ class SetupSession:
         if any(a.alias == alias for a in self._assignments):
             raise ValueError(f"Alias '{alias}' already assigned.")
         if isinstance(interface, VideoInterface):
-            if side and side not in ("left", "right"):
-                raise ValueError(
-                    "Camera side must be 'left', 'right', or empty (single arm)."
-                )
+            from roboclaw.embodied.embodiment.manifest.binding import validate_camera_side
+            validate_camera_side(side, alias)
             if side and not alias.startswith(f"{side}_"):
                 raise ValueError(
                     f"Camera alias '{alias}' must start with '{side}_'."

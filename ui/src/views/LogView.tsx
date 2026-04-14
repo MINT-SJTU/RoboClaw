@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { api, postJson } from '../controllers/api'
 import { useI18n } from '../controllers/i18n'
 
 export default function LogView() {
@@ -12,11 +13,7 @@ export default function LogView() {
 
     const fetchLogs = async () => {
       try {
-        const res = await fetch('/api/session/logs')
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`)
-        }
-        const data = await res.json()
+        const data = await api('/api/session/logs')
         if (!active) return
         setLogs(Array.isArray(data.lines) ? data.lines : [])
       } catch {
@@ -40,11 +37,9 @@ export default function LogView() {
 
   const clearLogs = async () => {
     try {
-      await fetch('/api/session/logs/clear', { method: 'POST' })
+      await postJson('/api/session/logs/clear')
       setLogs([])
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
 
   return (

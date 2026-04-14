@@ -12,6 +12,19 @@ from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
 
 
+_VALID_SIDES = ("left", "right")
+
+
+def validate_camera_side(side: str, alias: str = "") -> None:
+    """Raise ValueError if *side* is not '', 'left', or 'right'."""
+    if side and side not in _VALID_SIDES:
+        label = f" for camera {alias!r}" if alias else ""
+        raise ValueError(
+            f"Invalid camera side {side!r}{label}; "
+            "expected 'left', 'right', or empty (single arm)."
+        )
+
+
 @dataclass
 class Binding:
     """A named link between a device type and a physical Interface.
@@ -172,11 +185,7 @@ class Binding:
         cls, data: dict[str, Any], guards: dict[str, InterfaceGuard],
     ) -> Binding:
         side = data.get("side", "")
-        if side and side not in ("left", "right"):
-            raise ValueError(
-                f"Camera binding {data.get('alias')!r} has invalid side {side!r}; "
-                "expected 'left', 'right', or empty (single arm)."
-            )
+        validate_camera_side(side, data.get("alias", ""))
         interface = VideoInterface(
             dev=data.get("port", ""),
             width=data.get("width", 640),

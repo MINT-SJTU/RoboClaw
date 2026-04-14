@@ -37,29 +37,19 @@ class InferOutputConsumer(OutputConsumer):
 
     async def parse_line(self, line: str) -> None:
         state = self.board.get("state")
-        if state not in (SessionState.PREPARING, SessionState.INFERRING):
+        if state != SessionState.PREPARING:
             return
 
         lowered = line.lower()
 
         if any(kw in lowered for kw in _INFERRING_TRIGGERS):
-            if state != SessionState.INFERRING:
-                await self.board.update(
-                    state=SessionState.INFERRING,
-                    prepare_stage="",
-                )
-            return
-
-        # Only update prepare_stage while still preparing — once we are running
-        # the policy, the field should stay cleared so the UI reverts to the
-        # standard "inferring" indicator.
-        if state != SessionState.PREPARING:
+            await self.board.update(state=SessionState.INFERRING, prepare_stage="")
             return
 
         stage = ""
         for needle, label in _PREPARE_STAGES:
             if needle in lowered:
-                stage = label  # later matches override earlier ones
+                stage = label
         if stage and stage != self.board.get("prepare_stage"):
             await self.board.update(prepare_stage=stage)
 

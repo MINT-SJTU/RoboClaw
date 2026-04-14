@@ -348,10 +348,8 @@ class Manifest:
     ) -> Binding:
         if not name:
             raise ValueError("Camera alias is required.")
-        if side and side not in ("left", "right"):
-            raise ValueError(
-                f"Camera side must be 'left', 'right', or empty (single arm), got {side!r}."
-            )
+        from roboclaw.embodied.embodiment.manifest.binding import validate_camera_side
+        validate_camera_side(side, name)
         if side and not name.startswith(f"{side}_"):
             raise ValueError(
                 f"Camera alias '{name}' must start with '{side}_' to match its side."

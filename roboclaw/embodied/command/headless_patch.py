@@ -108,8 +108,6 @@ def apply_headless_patch() -> None:
             _original_say(text, blocking=False)
 
     lerobot_utils.log_say = _log_say
-    # Also patch say() directly so any caller that bypasses log_say
-    # won't hang on blocking=True either.
     lerobot_utils.say = lambda text, blocking=False: _original_say(text, blocking=False)
 
     def init_keyboard_listener():
