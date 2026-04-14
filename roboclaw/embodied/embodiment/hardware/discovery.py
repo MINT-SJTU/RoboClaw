@@ -150,25 +150,61 @@ class HardwareDiscovery:
         self, ports: list[SerialInterface], prober, protocol: str = "",
         motor_ids: list[int] | None = None, baudrate: int = 1_000_000,
     ) -> list[SerialInterface]:
-        """Probe ports with a single prober, handling permission errors."""
+        """Probe ports with a single prober, handling permission errors.
+
+        Pre-checks os.access() because the motor SDKs silently return
+        empty results when openPort() fails due to permissions.
+        """
         from roboclaw.embodied.embodiment.hardware.scan import fix_serial_permissions
+
+        self._ensure_serial_access(ports, fix_serial_permissions)
 
         saved = suppress_stderr()
         tty_saved = _save_tty()
         try:
-            try:
-                return self._do_probe(ports, prober, protocol, motor_ids=motor_ids, baudrate=baudrate)
-            except Exception as exc:
-                if "Permission denied" not in str(exc) and "Errno 13" not in str(exc):
-                    raise
-                if fix_serial_permissions():
-                    return self._do_probe(ports, prober, protocol, motor_ids=motor_ids, baudrate=baudrate)
-                raise PermissionError(
-                    "Serial port permission denied. Run: bash scripts/setup-udev.sh"
-                ) from exc
+            return self._do_probe(ports, prober, protocol, motor_ids=motor_ids, baudrate=baudrate)
         finally:
             _restore_tty(tty_saved)
             restore_stderr(saved)
+
+    @staticmethod
+    def _ensure_serial_access(ports: list[SerialInterface], fix_fn) -> None:
+        """Raise PermissionError early if serial ports are not accessible.
+
+        The motor SDKs (scservo_sdk / dynamixel_sdk) silently return empty
+        results when openPort() fails, so we must check before probing.
+        """
+        denied = [
+            p.dev or p.by_id or p.by_path
+            for p in ports
+            if (p.dev or p.by_id or p.by_path)
+            and not os.access(p.dev or p.by_id or p.by_path, os.R_OK | os.W_OK)
+        ]
+        if not denied:
+            return
+        if fix_fn():
+            # Re-check after udev fix
+            still_denied = [d for d in denied if not os.access(d, os.R_OK | os.W_OK)]
+            if not still_denied:
+                return
+            denied = still_denied
+        import grp
+        hint = (
+            f"Cannot access serial ports: {', '.join(denied)}. "
+            f"Current user '{os.environ.get('USER', '?')}' is not in the 'dialout' group. "
+            f"Fix: sudo usermod -aG dialout $USER && (re-login or restart the service)"
+        )
+        try:
+            dialout_gid = grp.getgrnam("dialout").gr_gid
+            user_groups = os.getgroups()
+            if dialout_gid in user_groups:
+                hint = (
+                    f"Cannot access serial ports: {', '.join(denied)}. "
+                    f"Fix: sudo chmod 666 {' '.join(denied)}"
+                )
+        except KeyError:
+            pass
+        raise PermissionError(hint)
 
     @staticmethod
     def _do_probe(
