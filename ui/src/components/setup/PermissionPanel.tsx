@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useSetup } from '../../controllers/setup'
-import type { PermissionStatus } from '../../controllers/setup'
 import { useI18n } from '../../controllers/i18n'
 
 /* ── iOS-style toggle switch ────────────────────────────────────────── */
@@ -49,7 +48,7 @@ function PermissionRow({ icon, label, ok, count, onToggle, busy }: {
         <p className="text-2xs text-tx3">
           {noDevice
             ? t('permNoDevice')
-            : t('permDeviceCount').replace('{count}', String(count))}
+            : t('permDeviceCount', { count })}
         </p>
       </div>
       {noDevice ? (
@@ -61,19 +60,21 @@ function PermissionRow({ icon, label, ok, count, onToggle, busy }: {
   )
 }
 
-/* ── Panel (standalone settings card) ───────────────────────────────── */
+/* ── Panel ──────────────────────────────────────────────────────────── */
 
-export default function PermissionPanel({ perms, onFixed }: {
-  perms: PermissionStatus
+export default function PermissionPanel({ bare, onFixed }: {
+  bare?: boolean
   onFixed: () => void
 }) {
   const { t } = useI18n()
-  const { fixPermissions, permFixing, permissions } = useSetup()
+  const permissions = useSetup((s) => s.permissions)
+  const permFixing = useSetup((s) => s.permFixing)
+  const fixPermissions = useSetup((s) => s.fixPermissions)
   const [fixAttempted, setFixAttempted] = useState(false)
 
-  const current = permissions ?? perms
-  const allOk = current.serial.ok && current.camera.ok
-  const showHint = fixAttempted && !allOk && current.hint
+  if (!permissions || permissions.platform !== 'linux') return null
+
+  const showHint = fixAttempted && !(permissions.serial.ok && permissions.camera.ok) && permissions.hint
 
   async function handleToggle() {
     setFixAttempted(true)
@@ -84,39 +85,41 @@ export default function PermissionPanel({ perms, onFixed }: {
     }
   }
 
-  if (current.platform !== 'linux') return null
-
-  return (
-    <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-ac">
-      <h3 className="text-sm font-bold text-tx uppercase tracking-wide mb-3">{t('permTitle')}</h3>
-
-      <div className="px-1">
-        <PermissionRow
-          icon="🔌"
-          label={t('permSerial')}
-          ok={current.serial.ok}
-          count={current.serial.count}
-          onToggle={handleToggle}
-          busy={permFixing}
-        />
-        <PermissionRow
-          icon="📷"
-          label={t('permCamera')}
-          ok={current.camera.ok}
-          count={current.camera.count}
-          onToggle={handleToggle}
-          busy={permFixing}
-        />
-      </div>
-
+  const content = (
+    <>
+      {!bare && <h3 className="text-sm font-bold text-tx uppercase tracking-wide mb-3">{t('permTitle')}</h3>}
+      <PermissionRow
+        icon="🔌"
+        label={t('permSerial')}
+        ok={permissions.serial.ok}
+        count={permissions.serial.count}
+        onToggle={handleToggle}
+        busy={permFixing}
+      />
+      <PermissionRow
+        icon="📷"
+        label={t('permCamera')}
+        ok={permissions.camera.ok}
+        count={permissions.camera.count}
+        onToggle={handleToggle}
+        busy={permFixing}
+      />
       {showHint && (
         <div className="mt-3 p-3 rounded-lg bg-yl/5 border border-yl/20 space-y-1.5">
           <p className="text-2xs text-tx2">{t('permFixFailed')}</p>
           <code className="block px-2.5 py-1.5 bg-sf2 rounded text-xs text-tx font-mono select-all">
-            {current.hint}
+            {permissions.hint}
           </code>
         </div>
       )}
+    </>
+  )
+
+  if (bare) return <div className="space-y-0">{content}</div>
+
+  return (
+    <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-ac">
+      {content}
     </section>
   )
 }

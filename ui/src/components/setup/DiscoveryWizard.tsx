@@ -91,7 +91,7 @@ function ModelSelect() {
 // -- Step 2: Scan ------------------------------------------------------------
 
 function ScanStep() {
-  const { scannedPorts, scannedCameras, scanning, doScan, goToStep, checkPermissions, permissions } = useSetup()
+  const { scannedPorts, scannedCameras, scanning, doScan, goToStep, checkPermissions } = useSetup()
   const [permChecked, setPermChecked] = useState(false)
 
   useEffect(() => {
@@ -104,9 +104,7 @@ function ScanStep() {
   const hasDevices = scannedPorts.length > 0 || scannedCameras.length > 0
   return (
     <div className="space-y-4">
-      {permChecked && permissions && (
-        <PermissionPanel perms={permissions} onFixed={doScan} />
-      )}
+      {permChecked && <PermissionPanel bare onFixed={doScan} />}
       <ScanArea ports={scannedPorts} cameras={scannedCameras} scanning={scanning} />
       <div className="flex justify-between pt-2">
         <button onClick={() => goToStep('select')} className={btnBack}>返回</button>

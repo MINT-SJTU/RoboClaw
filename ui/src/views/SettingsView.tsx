@@ -41,7 +41,7 @@ export default function SettingsView() {
   const navigate = useNavigate()
   const { t } = useI18n()
 
-  const { wizardActive, startWizard, loadDevices, loadCatalog, checkPermissions, permissions } = useSetup()
+  const { wizardActive, startWizard, loadDevices, loadCatalog, checkPermissions } = useSetup()
   const { fetchHardwareStatus } = useDashboard()
 
   const sessionState = useDashboard((s) => s.session.state)
@@ -202,7 +202,7 @@ export default function SettingsView() {
 
       <div className="flex-1 p-6 grid grid-cols-2 gap-6 items-start max-[900px]:grid-cols-1">
         {/* Permissions card */}
-        {permissions && <PermissionPanel perms={permissions} onFixed={() => checkPermissions()} />}
+        <PermissionPanel onFixed={() => checkPermissions()} />
 
         {/* Hardware section */}
         <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-ac">
