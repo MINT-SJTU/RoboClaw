@@ -67,8 +67,8 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 },
                 "side": {
                     "type": "string",
-                    "enum": ["left", "right"],
-                    "description": "Which arm the camera is mounted on (required for bind_camera).",
+                    "enum": ["left", "right", ""],
+                    "description": "Which arm the camera is mounted on (left/right for bimanual; omit for single-arm).",
                 },
             },
             "required": ["action"],
@@ -511,8 +511,8 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
         side = kwargs.get("side", "")
         if not dev:
             return "bind camera requires dev (e.g., '/dev/video4')."
-        if side not in ("left", "right"):
-            return "bind camera requires side='left' or side='right'."
+        if side and side not in ("left", "right"):
+            return "bind camera side must be 'left', 'right', or omitted (single arm)."
         matched, avail = _find_camera(dev)
         if matched is None:
             return f"Camera '{dev}' not found. Available: {avail}"

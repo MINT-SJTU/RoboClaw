@@ -171,11 +171,11 @@ class Binding:
     def _camera_from_dict(
         cls, data: dict[str, Any], guards: dict[str, InterfaceGuard],
     ) -> Binding:
-        side = data["side"]
-        if side not in ("left", "right"):
+        side = data.get("side", "")
+        if side and side not in ("left", "right"):
             raise ValueError(
                 f"Camera binding {data.get('alias')!r} has invalid side {side!r}; "
-                "expected 'left' or 'right'."
+                "expected 'left', 'right', or empty (single arm)."
             )
         interface = VideoInterface(
             dev=data.get("port", ""),

@@ -61,7 +61,7 @@ export interface ConfiguredArm {
 
 export interface ConfiguredCamera {
   alias: string
-  side: 'left' | 'right'
+  side: 'left' | 'right' | ''
   port: string
 }
 
@@ -108,7 +108,7 @@ interface SetupStore {
 
   // Session assign/commit
   assignments: Assignment[]
-  sessionAssign: (stableId: string, alias: string, specName: string, side?: 'left' | 'right') => Promise<void>
+  sessionAssign: (stableId: string, alias: string, specName: string, side?: 'left' | 'right' | '') => Promise<void>
   sessionUnassign: (alias: string) => Promise<void>
   sessionCommit: () => Promise<void>
   refreshSession: () => Promise<void>

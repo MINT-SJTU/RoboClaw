@@ -77,6 +77,14 @@ def _bimanual_args(
         f"--{prefix}.right_arm_config.port={right.port}",
     ]
     if cameras:
+        unsided = [c.alias for c in cameras if c.side not in ("left", "right")]
+        if unsided:
+            from roboclaw.embodied.command.helpers import ActionError
+            raise ActionError(
+                "Bimanual setup requires every camera to be assigned to the left or "
+                f"right arm; the following are unassigned: {unsided}. "
+                "Re-run setup and pick a side for each camera."
+            )
         left_cams = _arm_camera_dict(cameras, "left")
         right_cams = _arm_camera_dict(cameras, "right")
         if left_cams:

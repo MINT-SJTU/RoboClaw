@@ -218,8 +218,8 @@ class SetupSession:
     ) -> Assignment:
         """Assign a discovered interface to an alias and spec.
 
-        For cameras, ``side`` ("left" or "right") is required and the alias
-        must start with ``{side}_``.
+        For cameras, ``side`` is "left"/"right" for a bimanual robot or "" for
+        single-arm. When non-empty the alias must start with ``{side}_``.
         """
         if self._phase not in (SetupPhase.ASSIGNING, SetupPhase.IDENTIFYING):
             raise RuntimeError(f"Cannot assign in {self._phase} phase.")
@@ -235,9 +235,11 @@ class SetupSession:
         if any(a.alias == alias for a in self._assignments):
             raise ValueError(f"Alias '{alias}' already assigned.")
         if isinstance(interface, VideoInterface):
-            if side not in ("left", "right"):
-                raise ValueError("Camera side must be 'left' or 'right'.")
-            if not alias.startswith(f"{side}_"):
+            if side and side not in ("left", "right"):
+                raise ValueError(
+                    "Camera side must be 'left', 'right', or empty (single arm)."
+                )
+            if side and not alias.startswith(f"{side}_"):
                 raise ValueError(
                     f"Camera alias '{alias}' must start with '{side}_'."
                 )
@@ -616,11 +618,12 @@ class SetupSession:
                 f"camera_{self._camera_index}_side",
                 t("cameraSidePrompt", lang, index=self._camera_index),
             )
+        prefix = "" if self._camera_pending_side == "single" else f"{self._camera_pending_side}_"
         return PromptStep(
             f"camera_{self._camera_index}_name",
             t(
                 "cameraNamePrompt", lang,
-                index=self._camera_index, prefix=f"{self._camera_pending_side}_",
+                index=self._camera_index, prefix=prefix or "(none)",
             ),
         )
 
@@ -641,15 +644,20 @@ class SetupSession:
                 self._camera_pending_side = "left"
             elif side in ("r", "right"):
                 self._camera_pending_side = "right"
+            elif side in ("s", "single", ""):
+                self._camera_pending_side = "single"  # sentinel; cleared before assign
             else:
-                self._messages.append(f"  Error: side must be left or right, got {answer!r}.")
+                self._messages.append(
+                    f"  Error: side must be left, right, or single, got {answer!r}."
+                )
             return
         cam = all_video[idx]
         alias = answer.strip()
-        if not alias.startswith(f"{self._camera_pending_side}_"):
-            alias = f"{self._camera_pending_side}_{alias}"
+        side = "" if self._camera_pending_side == "single" else self._camera_pending_side
+        if side and not alias.startswith(f"{side}_"):
+            alias = f"{side}_{alias}"
         try:
-            self.assign(cam.stable_id, alias, "opencv", side=self._camera_pending_side)
+            self.assign(cam.stable_id, alias, "opencv", side=side)
             self._messages.append(t("assigned", self._language, alias=alias, spec="opencv"))
         except ValueError as exc:
             self._messages.append(f"  Error: {exc}")

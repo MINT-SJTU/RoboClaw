@@ -289,7 +289,7 @@ class EmbodiedService:
             self._require_not_busy()
             return self.manifest.rename_arm(alias, new_alias)
 
-    def bind_camera(self, alias: str, interface: Any, side: str) -> Binding:
+    def bind_camera(self, alias: str, interface: Any, side: str = "") -> Binding:
         with self._lock:
             self._require_not_busy()
             return self.manifest.set_camera(alias, interface, side)
