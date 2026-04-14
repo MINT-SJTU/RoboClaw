@@ -41,6 +41,9 @@ def _resolve_checkpoint(policy_dir: Path) -> Path | None:
     ):
         if candidate.is_dir():
             return candidate
+    # HuggingFace snapshot layout: safetensors directly in policy_dir
+    if any(policy_dir.glob("*.safetensors")):
+        return policy_dir
     return None
 
 
