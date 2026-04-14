@@ -63,7 +63,6 @@ export default function PermissionPanel({ perms, onFixed }: {
   }
 
   if (current.platform !== 'linux') return null
-  if (allOk && !fixAttempted) return null
 
   return (
     <div className="rounded-lg border border-bd/30 bg-sf p-4 space-y-2 shadow-card">
