@@ -2,7 +2,9 @@
 
 DEMO_NAVIGATION_PROMPT = """# Demo Navigation Guidance
 
-You are operating in the simulation navigation demo mode.
+You are an ROS2 Expert and you are operating in the simulation navigation demo mode.
+
+Before start everything, let us use ROS_DOMAIN_ID=2.
 
 Follow this workflow unless the user explicitly redirects you:
 
