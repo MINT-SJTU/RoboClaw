@@ -12,6 +12,19 @@ from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
 
 
+_VALID_SIDES = ("left", "right")
+
+
+def validate_camera_side(side: str, alias: str = "") -> None:
+    """Raise ValueError if *side* is not '', 'left', or 'right'."""
+    if side and side not in _VALID_SIDES:
+        label = f" for camera {alias!r}" if alias else ""
+        raise ValueError(
+            f"Invalid camera side {side!r}{label}; "
+            "expected 'left', 'right', or empty (single arm)."
+        )
+
+
 @dataclass
 class Binding:
     """A named link between a device type and a physical Interface.
@@ -27,6 +40,7 @@ class Binding:
     calibration_dir: str = ""     # arm-specific
     calibrated: bool = False      # arm-specific
     slave_id: int = 0             # hand-specific
+    side: str = ""                # camera-specific: "left" or "right"
     _kind: str = field(default="", repr=False)
     _type_name: str = field(default="", repr=False)
 
@@ -93,6 +107,7 @@ class Binding:
         assert isinstance(self.interface, VideoInterface)
         d: dict[str, Any] = {
             "alias": self.alias,
+            "side": self.side,
             "port": self.interface.address,
             "width": self.interface.width,
             "height": self.interface.height,
@@ -169,6 +184,8 @@ class Binding:
     def _camera_from_dict(
         cls, data: dict[str, Any], guards: dict[str, InterfaceGuard],
     ) -> Binding:
+        side = data.get("side", "")
+        validate_camera_side(side, data.get("alias", ""))
         interface = VideoInterface(
             dev=data.get("port", ""),
             width=data.get("width", 640),
@@ -181,6 +198,7 @@ class Binding:
             alias=data["alias"],
             interface=interface,
             guard=guard,
+            side=side,
             _kind="camera",
             _type_name="opencv",
         )

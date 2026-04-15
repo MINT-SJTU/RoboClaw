@@ -14,14 +14,41 @@ if TYPE_CHECKING:
     from roboclaw.embodied.service import EmbodiedService
 
 
+_PREPARE_STAGES: tuple[tuple[str, str], ...] = (
+    ("loading checkpoint", "Loading checkpoint"),
+    ("safetensors", "Loading checkpoint"),
+    ("make_policy", "Initializing policy"),
+    ("connecting", "Connecting hardware"),
+    ("connected", "Hardware connected"),
+)
+
+_REPLAYING_TRIGGERS: tuple[str, ...] = (
+    "replaying episode",
+    "[lerobot] replaying",
+    "running policy",
+)
+
+
 class ReplayOutputConsumer(OutputConsumer):
-    """Minimal parsing — detect replay start."""
+    """Parses replay output and surfaces preparation milestones."""
 
     async def parse_line(self, line: str) -> None:
-        if self.board.get("state") != SessionState.PREPARING:
+        state = self.board.get("state")
+        if state != SessionState.PREPARING:
             return
-        if "Replaying episode" in line:
-            await self.board.update(state=SessionState.REPLAYING)
+
+        lowered = line.lower()
+
+        if any(kw in lowered for kw in _REPLAYING_TRIGGERS):
+            await self.board.update(state=SessionState.REPLAYING, prepare_stage="")
+            return
+
+        stage = ""
+        for needle, label in _PREPARE_STAGES:
+            if needle in lowered:
+                stage = label
+        if stage and stage != self.board.get("prepare_stage"):
+            await self.board.update(prepare_stage=stage)
 
 
 class ReplaySession(Session):
@@ -49,7 +76,7 @@ class ReplaySession(Session):
         self._parent.acquire_embodiment("replaying")
         try:
             argv = CommandBuilder.replay(manifest, **self._replay_kwargs(kwargs))
-            await self.start(argv, initial_state=SessionState.REPLAYING)
+            await self.start(argv)
             if tty_handoff:
                 from roboclaw.embodied.toolkit.tty import TtySession
 
@@ -81,7 +108,8 @@ class ReplaySession(Session):
         s = self.board.state
         state = s.get("state", "idle")
         if state == SessionState.PREPARING:
-            return "  preparing..."
+            stage = s.get("prepare_stage", "")
+            return f"  preparing... {stage}" if stage else "  preparing..."
         elapsed = s.get("elapsed_seconds", 0)
         return f"  replaying  | {elapsed:.0f}s"
 

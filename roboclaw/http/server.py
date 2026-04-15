@@ -369,14 +369,27 @@ def _ensure_ui_build() -> None:
     if not ui_src.is_dir():
         return
 
-    # Find newest mtime in src/ vs dist/
-    def _newest_mtime(directory: Path) -> float:
-        return max((f.stat().st_mtime for f in directory.rglob("*") if f.is_file()), default=0)
+    needs_build = False
 
-    src_mtime = _newest_mtime(ui_src)
-    dist_mtime = _newest_mtime(ui_dist) if ui_dist.is_dir() else 0
+    # Check 1: git commit hash — survives git reset --hard which resets mtimes
+    build_hash_file = ui_dist / ".build_commit"
+    current_hash = _git_head_hash(ui_root.parent)
+    if current_hash:
+        saved_hash = build_hash_file.read_text().strip() if build_hash_file.is_file() else ""
+        if saved_hash != current_hash:
+            needs_build = True
 
-    if dist_mtime >= src_mtime:
+    # Check 2: mtime fallback for non-git or dirty working tree
+    if not needs_build:
+        def _newest_mtime(directory: Path) -> float:
+            return max((f.stat().st_mtime for f in directory.rglob("*") if f.is_file()), default=0)
+
+        src_mtime = _newest_mtime(ui_src)
+        dist_mtime = _newest_mtime(ui_dist) if ui_dist.is_dir() else 0
+        if src_mtime > dist_mtime:
+            needs_build = True
+
+    if not needs_build:
         return
 
     npm = shutil.which("npm")
@@ -394,6 +407,21 @@ def _ensure_ui_build() -> None:
         logger.warning("Frontend build failed (exit {}), serving stale dist", result.returncode)
     else:
         logger.info("Frontend rebuild complete")
+        if current_hash:
+            build_hash_file.write_text(current_hash)
+
+
+def _git_head_hash(repo_root: Path) -> str:
+    """Return short HEAD hash, or empty string if not a git repo."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
 
 
 def main(

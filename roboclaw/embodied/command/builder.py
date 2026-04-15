@@ -56,9 +56,15 @@ def _bimanual_args(
     left: Binding,
     right: Binding,
     type_name: str,
-    cameras: dict[str, dict[str, Any]] | None = None,
+    cameras: list[Binding] | None = None,
 ) -> list[str]:
-    """Bimanual CLI args for one role (robot or teleop)."""
+    """Bimanual CLI args for one role (robot or teleop).
+
+    Cameras are split by ``binding.side`` into left/right arm configs.
+    The ``left_``/``right_`` prefix is stripped from each alias before the
+    dict is passed to lerobot, because ``bi_*_follower`` re-applies the
+    prefix when assembling its observation feature names.
+    """
     from roboclaw.embodied.embodiment.manifest.helpers import ensure_bimanual_cal_dir
 
     role = _PREFIX_TO_ROLE[prefix]
@@ -71,8 +77,33 @@ def _bimanual_args(
         f"--{prefix}.right_arm_config.port={right.port}",
     ]
     if cameras:
-        args.append(f"--{prefix}.left_arm_config.cameras={json.dumps(cameras)}")
+        unsided = [c.alias for c in cameras if c.side not in ("left", "right")]
+        if unsided:
+            from roboclaw.embodied.command.helpers import ActionError
+            raise ActionError(
+                "Bimanual setup requires every camera to be assigned to the left or "
+                f"right arm; the following are unassigned: {unsided}. "
+                "Re-run setup and pick a side for each camera."
+            )
+        left_cams = _arm_camera_dict(cameras, "left")
+        right_cams = _arm_camera_dict(cameras, "right")
+        if left_cams:
+            args.append(f"--{prefix}.left_arm_config.cameras={json.dumps(left_cams)}")
+        if right_cams:
+            args.append(f"--{prefix}.right_arm_config.cameras={json.dumps(right_cams)}")
     return args
+
+
+def _arm_camera_dict(cameras: list[Binding], side: str) -> dict[str, dict[str, Any]]:
+    """Build the lerobot camera dict for one arm of a bimanual robot.
+
+    Filters ``cameras`` by ``side`` and strips the ``{side}_`` prefix from
+    each alias so that ``bi_*_follower``'s automatic prefixing produces the
+    original alias rather than doubling it.
+    """
+    side_cams = [c for c in cameras if c.side == side]
+    resolved = resolve_cameras(side_cams)
+    return {alias.removeprefix(f"{side}_"): cfg for alias, cfg in resolved.items()}
 
 
 def _camera_args(cameras_dict: dict[str, dict[str, Any]]) -> list[str]:
@@ -144,7 +175,7 @@ def _bimanual_family(type_name: str) -> str:
 def _robot_argv(
     followers: list[Binding],
     leaders: list[Binding] | None = None,
-    cameras: dict[str, dict[str, Any]] | None = None,
+    cameras: list[Binding] | None = None,
 ) -> list[str]:
     """Build arm argv for robot (and optionally teleop) role.
 
@@ -156,7 +187,7 @@ def _robot_argv(
         if leaders:
             args.extend(_arm_args("teleop", leaders[0]))
         if cameras:
-            args.extend(_camera_args(cameras))
+            args.extend(_camera_args(resolve_cameras(cameras)))
     else:
         family = _bimanual_family(followers[0].type_name)
         bi_follower, bi_leader = _BIMANUAL[family]
@@ -202,7 +233,7 @@ class CommandBuilder:
 
         followers = grouped["followers"]
         leaders = grouped["leaders"]
-        cameras = resolve_cameras(manifest.cameras) if use_cameras else {}
+        cameras = list(manifest.cameras) if use_cameras else []
 
         # Resolve dataset name
         if not dataset_name:
@@ -240,7 +271,7 @@ class CommandBuilder:
         if not followers:
             raise ActionError("No follower arms configured for replay.")
 
-        ds_path = dataset_path(manifest, dataset_name, _DEFAULT_REPLAY_ROOT)
+        ds_path = dataset_path(manifest, dataset_name)
         repo_id = f"local/{dataset_name}"
 
         argv = _wrapper_args("replay")
@@ -298,6 +329,7 @@ class CommandBuilder:
         dataset_name: str = "",
         task: str = "eval",
         num_episodes: int = 1,
+        episode_time_s: int = 60,
         arms: str = "",
         use_cameras: bool = True,
     ) -> list[str]:
@@ -324,7 +356,7 @@ class CommandBuilder:
         if not followers:
             raise ActionError("No follower arms configured for inference.")
 
-        cameras = resolve_cameras(manifest.cameras) if use_cameras else {}
+        cameras = list(manifest.cameras) if use_cameras else []
 
         # Resolve output dataset name
         if not dataset_name:
@@ -344,6 +376,7 @@ class CommandBuilder:
             f"--dataset.single_task={task}",
             "--dataset.push_to_hub=false",
             f"--dataset.num_episodes={num_episodes}",
+            f"--dataset.episode_time_s={episode_time_s}",
         ]
         if resume:
             ds_args.append("--resume=true")

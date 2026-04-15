@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from roboclaw.http.dashboard_datasets import (
+from roboclaw.data.datasets import (
     delete_dataset,
     get_dataset_info,
     list_datasets,

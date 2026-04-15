@@ -137,6 +137,12 @@ class EmbodiedService:
             status["embodiment_owner"] = self._embodiment_owner or self._file_lock.owner()
         return status
 
+    def get_logs(self) -> list[str]:
+        return self.board.all_logs()
+
+    def clear_logs(self) -> None:
+        self.board.clear_logs()
+
     def _on_session_exit(self) -> None:
         """Called when a subprocess exits unexpectedly (not via stop())."""
         self.release_embodiment()
@@ -193,28 +199,28 @@ class EmbodiedService:
         )
         self.acquire_embodiment("replaying")
         self._active_session = self.replay
-        await self.replay.start(argv, initial_state=SessionState.REPLAYING)
+        await self.replay.start(argv)
 
     async def start_inference(
         self,
         *,
         checkpoint_path: str = "",
-        source_dataset: str = "",
         dataset_name: str = "",
         task: str = "eval",
         num_episodes: int = 1,
+        episode_time_s: int = 60,
     ) -> None:
         argv = CommandBuilder.infer(
             self.manifest,
             checkpoint_path=checkpoint_path,
-            source_dataset=source_dataset,
             dataset_name=dataset_name,
             task=task,
             num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
         )
         self.acquire_embodiment("inferring")
         self._active_session = self.infer
-        await self.infer.start(argv, initial_state=SessionState.INFERRING)
+        await self.infer.start(argv)
 
     async def dismiss_error(self) -> None:
         """Clear error state and release embodiment lock so user can retry."""
@@ -289,10 +295,10 @@ class EmbodiedService:
             self._require_not_busy()
             return self.manifest.rename_arm(alias, new_alias)
 
-    def bind_camera(self, alias: str, interface: Any) -> Binding:
+    def bind_camera(self, alias: str, interface: Any, side: str = "") -> Binding:
         with self._lock:
             self._require_not_busy()
-            return self.manifest.set_camera(alias, interface)
+            return self.manifest.set_camera(alias, interface, side)
 
     def unbind_camera(self, alias: str) -> None:
         with self._lock:

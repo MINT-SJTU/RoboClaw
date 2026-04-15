@@ -125,14 +125,18 @@ class WebChannel(BaseChannel):
                 })
                 continue
             content = str(payload.get("content", "")).strip()
-            if not content:
+            media = [str(item) for item in (payload.get("media") or []) if str(item).strip()]
+            metadata = payload.get("metadata") or {}
+            if not content and not media:
                 continue
+            if not content:
+                content = "[image]"
             await self._handle_message(
                 sender_id=str(payload.get("sender_id") or user_id),
                 chat_id=chat_id,
                 content=content,
-                media=payload.get("media") or [],
-                metadata=payload.get("metadata") or {},
+                media=media,
+                metadata=metadata,
             )
 
     # ------------------------------------------------------------------
@@ -247,7 +251,12 @@ def _session_summary(item: dict[str, Any]) -> dict[str, Any]:
 def _history_entry(chat_id: str, index: int, message: dict[str, Any]) -> dict[str, Any]:
     content = message.get("content", "")
     if isinstance(content, list):
-        content = json.dumps(content, ensure_ascii=False)
+        text_parts = [
+            str(block.get("text", "")).strip()
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        content = "\n".join(part for part in text_parts if part).strip() or "[image]"
     return {
         "id": message.get("id") or f"{chat_id}:{index}",
         "role": message.get("role", "assistant"),

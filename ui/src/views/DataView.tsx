@@ -17,7 +17,7 @@ export default function DataView() {
 
   useEffect(() => {
     store.loadDatasets()
-    store.fetchTrainPolicies()
+    store.loadPolicies()
   }, [])
 
   const promptPush = (type: 'dataset' | 'policy', name: string) => {
@@ -28,7 +28,7 @@ export default function DataView() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
+    <div className="page-enter flex flex-col h-full overflow-y-auto">
       <div className="border-b border-bd/50 px-6 py-4 bg-sf">
         <h2 className="text-xl font-bold tracking-tight">{t('dataCenter')}</h2>
       </div>
@@ -175,7 +175,7 @@ export default function DataView() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-tx uppercase tracking-wide">{t('policies') || 'Policies'}</h3>
               <button
-                onClick={store.fetchTrainPolicies}
+                onClick={store.loadPolicies}
                 className="px-2.5 py-0.5 bg-ac/10 text-ac rounded text-xs font-medium hover:bg-ac/20 transition-colors"
               >
                 {t('refresh')}

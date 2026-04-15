@@ -28,6 +28,19 @@ def _read_symlink_map(directory: str) -> dict[str, str]:
     return result
 
 
+def serial_patterns_for_platform() -> tuple[str, ...]:
+    """Return the correct serial device glob patterns for the current OS.
+
+    On macOS, /dev/cu.* (user-space callout) and /dev/tty.* (BSD modem-control)
+    point to the same physical USB serial adapter. Only cu.* is the correct
+    endpoint for serial communication — tty.* blocks on DCD and causes duplicate
+    detection during setup-identify. We scan cu.* exclusively.
+    """
+    if sys.platform == "darwin":
+        return ("cu.usb*",)
+    return ("ttyACM*", "ttyUSB*")
+
+
 def _list_serial_ports(device_patterns: dict[str, tuple[str, ...]] | None = None) -> list[str]:
     """Return hardware serial ports, optionally filtered by patterns from a spec.
 
@@ -53,11 +66,7 @@ def _list_serial_ports(device_patterns: dict[str, tuple[str, ...]] | None = None
         platform_key = "darwin" if sys.platform == "darwin" else "linux"
         patterns = device_patterns.get(platform_key, ())
     else:
-        patterns = (
-            ("tty.usb*", "tty.usbserial*", "cu.usb*", "cu.usbserial*")
-            if sys.platform == "darwin"
-            else ("ttyACM*", "ttyUSB*")
-        )
+        patterns = serial_patterns_for_platform()
 
     return sorted({str(p) for pat in patterns for p in Path("/dev").glob(pat)})
 
@@ -85,31 +94,49 @@ def scan_serial_ports(device_patterns: dict[str, tuple[str, ...]] | None = None)
 
 
 def list_serial_device_paths() -> list[str]:
-    """Return USB serial device paths (ttyACM*, ttyUSB*, cu.usb* etc).
+    """Return USB serial device paths using platform-appropriate patterns.
 
     Scoped to actual hardware serial ports only — NOT virtual consoles,
     pseudo-terminals, or other /dev/tty* entries. Used by permission
     checks and udev rule installation.
     """
-    if sys.platform == "darwin":
-        return sorted(glob.glob("/dev/tty.usb*") + glob.glob("/dev/cu.usb*"))
-    return sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+    return sorted(
+        path
+        for pat in serial_patterns_for_platform()
+        for path in glob.glob(f"/dev/{pat}")
+    )
 
 
-def port_candidates(port_path: str) -> list[str]:
-    """Return candidate device paths to try for a scanned port.
+def list_video_device_paths() -> list[str]:
+    """Return /dev/videoN paths present on the system."""
+    return sorted(glob.glob("/dev/video*"))
 
-    On macOS, the callable endpoint for serial traffic is often `/dev/cu.*`
-    while scan discovers `/dev/tty.*`. Try both.
+
+def check_device_permissions() -> dict[str, dict[str, object]]:
+    """Check R/W access for serial and camera devices.
+
+    Returns ``{serial: {ok, count}, camera: {ok, count}, platform}``.
+    On non-Linux platforms serial/camera are always reported as ok.
     """
-    candidates = [port_path]
-    if sys.platform == "darwin":
-        name = os.path.basename(port_path)
-        if name.startswith("tty."):
-            candidates.append(port_path.replace("/dev/tty.", "/dev/cu.", 1))
-        elif name.startswith("cu."):
-            candidates.append(port_path.replace("/dev/cu.", "/dev/tty.", 1))
-    return candidates
+    if sys.platform != "linux":
+        return {
+            "serial": {"ok": True, "count": 0},
+            "camera": {"ok": True, "count": 0},
+            "platform": sys.platform,
+        }
+
+    serial_devs = list_serial_device_paths()
+    video_devs = list_video_device_paths()
+
+    serial_ok = all(os.access(d, os.R_OK | os.W_OK) for d in serial_devs) if serial_devs else True
+    camera_ok = all(os.access(d, os.R_OK | os.W_OK) for d in video_devs) if video_devs else True
+
+    return {
+        "serial": {"ok": serial_ok, "count": len(serial_devs)},
+        "camera": {"ok": camera_ok, "count": len(video_devs)},
+        "platform": "linux",
+    }
+
 
 
 def suppress_stderr() -> int:
@@ -183,9 +210,11 @@ def _usb_device_key(by_path_str: str) -> str:
     """Extract physical USB device from by-path.
 
     e.g. "pci-0000:00:14.0-usb-0:3:1.0-video-index0" → "usb-0:3"
-    Different interfaces (1.0, 1.3) on the same port are the same device.
+    e.g. "pci-0000:00:14.0-usb-0:8.2:1.0-video-index0" → "usb-0:8.2"
+    Different interfaces (1.0, 1.3) on the same port are the same device,
+    but different hub sub-ports (8.1, 8.2, 8.3) are different devices.
     """
-    m = re.search(r"(usb-\d+:\d+)", by_path_str)
+    m = re.search(r"(usb-\d+:\d+(?:\.\d+)*)", by_path_str)
     return m.group(1) if m else ""
 
 

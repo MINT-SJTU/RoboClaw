@@ -2,6 +2,18 @@
  * Shared API helpers for all frontend controllers.
  */
 
+import { useI18n } from './i18n'
+
+export class ApiError extends Error {
+  meta: Record<string, string>
+  constructor(code: string, meta: Record<string, string>) {
+    const raw = useI18n.getState().t(code as any, meta)
+    super(raw === code ? code : raw)
+    this.name = 'ApiError'
+    this.meta = meta
+  }
+}
+
 export async function api(url: string, opts?: RequestInit) {
   const r = await fetch(url, opts)
   let j: any
@@ -11,7 +23,11 @@ export async function api(url: string, opts?: RequestInit) {
     throw new Error(`HTTP ${r.status}: ${r.statusText}`)
   }
   if (!r.ok || j.error) {
-    throw new Error(j.detail || j.error || j.message || `HTTP ${r.status}`)
+    const detail = j.detail
+    if (detail && typeof detail === 'object' && detail.code) {
+      throw new ApiError(detail.code, detail)
+    }
+    throw new Error(detail || j.error || j.message || `HTTP ${r.status}`)
   }
   return j
 }

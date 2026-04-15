@@ -21,6 +21,7 @@ class AssignRequest(BaseModel):
     interface_stable_id: str
     alias: str
     spec_name: str
+    side: str = ""
 
 
 def _map_service_errors(app: FastAPI) -> None:
@@ -39,6 +40,29 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
     """Register /api/setup/* routes on the given app."""
     _map_service_errors(app)
 
+    # -- Permissions ------------------------------------------------------------
+
+    @app.get("/api/setup/permissions")
+    async def setup_permissions() -> dict[str, Any]:
+        from roboclaw.embodied.embodiment.hardware.scan import check_device_permissions
+        return await asyncio.to_thread(check_device_permissions)
+
+    @app.post("/api/setup/permissions/fix")
+    async def setup_permissions_fix() -> dict[str, Any]:
+        import os
+        from roboclaw.embodied.embodiment.hardware.scan import (
+            check_device_permissions, fix_serial_permissions,
+        )
+        fixed = await asyncio.to_thread(fix_serial_permissions)
+        status = await asyncio.to_thread(check_device_permissions)
+        status["fixed"] = fixed
+        if not fixed:
+            user = os.environ.get("USER", "$USER")
+            status["hint"] = f"sudo usermod -aG dialout,video {user}"
+        return status
+
+    # -- Scan -------------------------------------------------------------------
+
     @app.post("/api/setup/scan")
     async def setup_scan(body: ScanRequest | None = None) -> dict[str, Any]:
         model = body.model if body else ""
@@ -48,8 +72,12 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
                 "ports": [{"stable_id": p.stable_id, **p.to_dict()} for p in result["ports"]],
                 "cameras": [{"stable_id": c.stable_id, **c.to_dict()} for c in result["cameras"]],
             }
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
+        except PermissionError:
+            import os
+            raise HTTPException(403, {
+                "code": "serialPermissionDenied",
+                "user": os.environ.get("USER", "?"),
+            })
 
     @app.post("/api/setup/previews")
     async def setup_camera_previews() -> list[dict]:
@@ -112,6 +140,7 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
         try:
             assignment = service.setup.assign(
                 body.interface_stable_id, body.alias, body.spec_name,
+                side=body.side,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc

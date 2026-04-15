@@ -45,6 +45,7 @@ class Assignment:
     spec_name: str  # e.g. "so101_follower", "inspire_rh56", "opencv"
     interface: Interface
     slave_id: int = 0  # hand-specific, set during assign if needed
+    side: str = ""    # camera-specific: "left" or "right"
 
 
 class SetupSession:
@@ -67,6 +68,7 @@ class SetupSession:
         self._pending_kwargs: dict[str, Any] = {}
         self._result: str = ""
         self._camera_index: int = 0
+        self._camera_pending_side: str = ""
         self._embodiment_category: str = ""
         self._language: str = "en"
         self._messages: list[str] = []
@@ -212,8 +214,13 @@ class SetupSession:
 
     def assign(
         self, interface_stable_id: str, alias: str, spec_name: str,
+        *, side: str = "",
     ) -> Assignment:
-        """Assign a discovered interface to an alias and spec."""
+        """Assign a discovered interface to an alias and spec.
+
+        For cameras, ``side`` is "left"/"right" for a bimanual robot or "" for
+        single-arm. When non-empty the alias must start with ``{side}_``.
+        """
         if self._phase not in (SetupPhase.ASSIGNING, SetupPhase.IDENTIFYING):
             raise RuntimeError(f"Cannot assign in {self._phase} phase.")
         interface = None
@@ -227,7 +234,16 @@ class SetupSession:
             )
         if any(a.alias == alias for a in self._assignments):
             raise ValueError(f"Alias '{alias}' already assigned.")
-        assignment = Assignment(alias=alias, spec_name=spec_name, interface=interface)
+        if isinstance(interface, VideoInterface):
+            from roboclaw.embodied.embodiment.manifest.binding import validate_camera_side
+            validate_camera_side(side, alias)
+            if side and not alias.startswith(f"{side}_"):
+                raise ValueError(
+                    f"Camera alias '{alias}' must start with '{side}_'."
+                )
+        assignment = Assignment(
+            alias=alias, spec_name=spec_name, interface=interface, side=side,
+        )
         self._assignments.append(assignment)
         return assignment
 
@@ -590,26 +606,61 @@ class SetupSession:
         assigned_ids = {a.interface.stable_id for a in self._assignments}
         if cam.stable_id in assigned_ids:
             self._camera_index += 1
+            self._camera_pending_side = ""
             return self._next_camera_step()
         label = cam.label
         res = f"{cam.width}x{cam.height}" if cam.width else "?"
-        self._messages.append(f"  [{self._camera_index}] {label} ({res} @ {cam.fps}fps)")
+        if not self._camera_pending_side:
+            self._messages.append(f"  [{self._camera_index}] {label} ({res} @ {cam.fps}fps)")
+            return PromptStep(
+                f"camera_{self._camera_index}_side",
+                t("cameraSidePrompt", lang, index=self._camera_index),
+            )
+        prefix = "" if self._camera_pending_side == "single" else f"{self._camera_pending_side}_"
         return PromptStep(
-            f"camera_{self._camera_index}",
-            t("cameraNamePrompt", lang, index=self._camera_index),
+            f"camera_{self._camera_index}_name",
+            t(
+                "cameraNamePrompt", lang,
+                index=self._camera_index, prefix=prefix or "(none)",
+            ),
         )
 
     def _handle_camera_answer(self, prompt_id: str, answer: str) -> None:
         all_video = self._video_candidates
-        idx = int(prompt_id.split("_", 1)[1])
-        if idx < len(all_video) and answer:
-            cam = all_video[idx]
-            try:
-                self.assign(cam.stable_id, answer, "opencv")
-                self._messages.append(t("assigned", self._language, alias=answer, spec="opencv"))
-            except ValueError as exc:
-                self._messages.append(f"  Error: {exc}")
+        # prompt_id is "camera_{idx}_side" or "camera_{idx}_name"
+        parts = prompt_id.split("_")
+        idx = int(parts[1])
+        kind = parts[2]
+        if idx >= len(all_video) or not answer:
+            if kind == "name":
+                self._camera_index = idx + 1
+                self._camera_pending_side = ""
+            return
+        if kind == "side":
+            side = answer.strip().lower()
+            if side in ("l", "left"):
+                self._camera_pending_side = "left"
+            elif side in ("r", "right"):
+                self._camera_pending_side = "right"
+            elif side in ("s", "single", ""):
+                self._camera_pending_side = "single"  # sentinel; cleared before assign
+            else:
+                self._messages.append(
+                    f"  Error: side must be left, right, or single, got {answer!r}."
+                )
+            return
+        cam = all_video[idx]
+        alias = answer.strip()
+        side = "" if self._camera_pending_side == "single" else self._camera_pending_side
+        if side and not alias.startswith(f"{side}_"):
+            alias = f"{side}_{alias}"
+        try:
+            self.assign(cam.stable_id, alias, "opencv", side=side)
+            self._messages.append(t("assigned", self._language, alias=alias, spec="opencv"))
+        except ValueError as exc:
+            self._messages.append(f"  Error: {exc}")
         self._camera_index = idx + 1
+        self._camera_pending_side = ""
 
     def _show_assignments(self) -> None:
         lang = self._language
@@ -690,6 +741,7 @@ class SetupSession:
         self._pending_kwargs = {}
         self._result = ""
         self._camera_index = 0
+        self._camera_pending_side = ""
         self._embodiment_category = ""
         self._messages.clear()
         # Note: do NOT reset self._language here — it persists through reset
@@ -707,7 +759,9 @@ class SetupSession:
                 assignment.interface, assignment.slave_id,
             )
         elif isinstance(assignment.interface, VideoInterface):
-            manifest.set_camera(assignment.alias, assignment.interface)
+            manifest.set_camera(
+                assignment.alias, assignment.interface, side=assignment.side,
+            )
         else:
             raise ValueError(f"Unknown spec type: {assignment.spec_name}")
 

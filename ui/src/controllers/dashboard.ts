@@ -48,6 +48,8 @@ export interface SessionStatus {
   calibration_positions: Record<string, { min: number; pos: number; max: number }> | null
   // Cross-process embodiment owner (e.g. "teleop", "recording")
   embodiment_owner: string
+  // Human-readable preparation milestone (used by inference panel)
+  prepare_stage: string
 }
 
 export interface Fault {
@@ -67,6 +69,13 @@ export interface Dataset {
   total_episodes?: number
   total_frames?: number
   fps?: number
+}
+
+export interface Policy {
+  name: string
+  checkpoint: string
+  dataset?: string
+  steps?: number
 }
 
 export interface NetworkInfo {
@@ -131,6 +140,7 @@ interface DashboardStore {
   // Hardware & datasets
   fetchHardwareStatus: () => Promise<void>
   loadDatasets: () => Promise<void>
+  loadPolicies: () => Promise<void>
   deleteDataset: (name: string) => Promise<void>
 
   // Troubleshooting
@@ -148,12 +158,11 @@ interface DashboardStore {
   doTrainStart: (params: { dataset_name: string; steps?: number; device?: string }) => Promise<void>
   fetchTrainStatus: (jobId: string) => Promise<void>
   fetchTrainDatasets: () => Promise<void>
-  fetchTrainPolicies: () => Promise<void>
   trainJobMessage: string
-  policies: any[]
+  policies: Policy[]
 
   // Inference
-  doInferStart: (params: { checkpoint_path?: string; source_dataset?: string; num_episodes?: number }) => Promise<void>
+  doInferStart: (params: { checkpoint_path?: string; num_episodes?: number; episode_time_s?: number }) => Promise<void>
   doInferStop: () => Promise<void>
 
   // Hub
@@ -175,6 +184,7 @@ const TELEOP = '/api/teleop'
 const RECORD = '/api/record'
 const HARDWARE = '/api/hardware'
 const DATASETS = '/api/datasets'
+const POLICIES = '/api/policies'
 const TROUBLESHOOT = '/api/troubleshoot'
 const SYSTEM = '/api/system'
 const REPLAY = '/api/replay'
@@ -201,6 +211,7 @@ const defaultSession: SessionStatus = {
   calibration_arm: '',
   calibration_positions: null,
   embodiment_owner: '',
+  prepare_stage: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +356,15 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
     }
   },
 
+  loadPolicies: async () => {
+    try {
+      const r = await api(`${POLICIES}`)
+      set({ policies: Array.isArray(r) ? r : r.policies || [] })
+    } catch (e: unknown) {
+      get().addLog(`Load policies failed: ${(e as Error).message}`, 'err')
+    }
+  },
+
   deleteDataset: async (name) => {
     try {
       await api(`${DATASETS}/${encodeURIComponent(name)}`, { method: 'DELETE' })
@@ -427,6 +447,7 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
           calibration_arm: event.calibration_arm || '',
           calibration_positions: event.calibration_positions || null,
           embodiment_owner: event.embodiment_owner || '',
+          prepare_stage: event.prepare_stage || '',
         },
       })
       return
@@ -530,19 +551,6 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
     } catch { /* ignore */ }
   },
 
-  fetchTrainPolicies: async () => {
-    try {
-      const data = await api(`${TRAIN}/policies`)
-      const msg = data.message || '[]'
-      try {
-        const parsed = JSON.parse(msg)
-        set({ policies: Array.isArray(parsed) ? parsed : [] })
-      } catch {
-        set({ policies: [] })
-      }
-    } catch { /* ignore */ }
-  },
-
   // -- Hub ----------------------------------------------------------------
 
   pushDataset: async (name, repoId) => {
@@ -591,7 +599,7 @@ export const useDashboard = create<DashboardStore>((set, get) => ({
     try {
       const data = await postJson(`${HUB}/policies/pull`, { repo_id: repoId, name: name || '' })
       get().addLog(data.message || 'Policy downloaded', 'ok')
-      get().fetchTrainPolicies()
+      get().loadPolicies()
     } catch (e: unknown) {
       get().addLog(`Pull policy failed: ${(e as Error).message}`, 'err')
     } finally {

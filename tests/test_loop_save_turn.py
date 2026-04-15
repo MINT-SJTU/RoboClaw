@@ -41,6 +41,7 @@ def test_save_turn_keeps_image_placeholder_after_runtime_strip() -> None:
     assert session.messages[0]["content"] == [{"type": "text", "text": "[image]"}]
 
 
+
 def test_save_turn_strips_images_from_multimodal_tool_result() -> None:
     loop = _mk_loop()
     session = Session(key="test:multimodal-tool")

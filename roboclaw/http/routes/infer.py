@@ -12,10 +12,10 @@ from roboclaw.embodied.service import EmbodiedService
 
 class InferStartRequest(BaseModel):
     checkpoint_path: str = ""
-    source_dataset: str = ""
     dataset_name: str = ""
     task: str = "eval"
     num_episodes: int = 1
+    episode_time_s: int = 60
 
 
 def register_infer_routes(app: FastAPI, service: EmbodiedService) -> None:
@@ -24,10 +24,10 @@ def register_infer_routes(app: FastAPI, service: EmbodiedService) -> None:
     async def infer_start(body: InferStartRequest) -> dict[str, Any]:
         await service.start_inference(
             checkpoint_path=body.checkpoint_path,
-            source_dataset=body.source_dataset,
             dataset_name=body.dataset_name,
             task=body.task,
             num_episodes=body.num_episodes,
+            episode_time_s=body.episode_time_s,
         )
         return {"status": "inferring"}
 

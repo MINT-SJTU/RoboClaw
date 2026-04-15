@@ -6,7 +6,7 @@ import sys
 
 from roboclaw.embodied.command.headless_patch import apply_headless_patch
 
-_HEADLESS_PATCH_ACTIONS = frozenset({"record"})
+_HEADLESS_PATCH_ACTIONS = frozenset({"record", "replay"})
 
 
 def record(argv: list[str] | None = None) -> None:

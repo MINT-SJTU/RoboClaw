@@ -6,6 +6,7 @@ import { useDashboard } from '../controllers/dashboard'
 import { useI18n } from '../controllers/i18n'
 import DeviceList from '../components/setup/DeviceList'
 import DiscoveryWizard from '../components/setup/DiscoveryWizard'
+import PermissionPanel from '../components/setup/PermissionPanel'
 import { TemperatureHeatMap } from '../components/TemperatureHeatMap'
 import { CalibrationPanel } from '../components/CalibrationPanel'
 import { api, postJson } from '../controllers/api'
@@ -40,7 +41,7 @@ export default function SettingsView() {
   const navigate = useNavigate()
   const { t } = useI18n()
 
-  const { wizardActive, startWizard, loadDevices, loadCatalog } = useSetup()
+  const { wizardActive, startWizard, loadDevices, loadCatalog, checkPermissions } = useSetup()
   const { fetchHardwareStatus } = useDashboard()
 
   const sessionState = useDashboard((s) => s.session.state)
@@ -80,6 +81,7 @@ export default function SettingsView() {
     loadDevices()
     loadCatalog()
     fetchHardwareStatus()
+    checkPermissions()
 
     const hwInterval = setInterval(() => {
       if (document.visibilityState === 'visible') fetchHardwareStatus()
@@ -192,13 +194,16 @@ export default function SettingsView() {
   const selected = providers.find(p => p.name === selectedProvider) || null
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
+    <div className="page-enter flex flex-col h-full overflow-y-auto">
       <div className="border-b border-bd/50 px-6 py-4 bg-sf">
         <h2 className="text-xl font-bold tracking-tight">{t('settingsTitle')}</h2>
         <p className="mt-1 text-sm text-tx3">{t('settingsDesc')}</p>
       </div>
 
       <div className="flex-1 p-6 grid grid-cols-2 gap-6 items-start max-[900px]:grid-cols-1">
+        {/* Permissions card */}
+        <PermissionPanel onFixed={() => checkPermissions()} />
+
         {/* Hardware section */}
         <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-ac">
           <div className="flex items-center justify-between mb-4">

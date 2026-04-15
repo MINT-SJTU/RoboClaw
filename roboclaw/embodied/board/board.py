@@ -32,13 +32,14 @@ IDLE_STATE: dict[str, Any] = {
     "rerun_web_port": 0,
     "error": "",
     "embodiment_owner": "",
+    "prepare_stage": "",
 }
 
 Subscriber = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 
 class Board:
-    def __init__(self, max_log_lines: int = 200) -> None:
+    def __init__(self, max_log_lines: int | None = 10000) -> None:
         self._lock = threading.Lock()
         self._state: dict[str, Any] = dict(IDLE_STATE)
         self._commands: deque[str] = deque()
@@ -169,3 +170,11 @@ class Board:
     def recent_logs(self, n: int = 20) -> list[str]:
         with self._lock:
             return list(self._log)[-n:]
+
+    def all_logs(self) -> list[str]:
+        with self._lock:
+            return list(self._log)
+
+    def clear_logs(self) -> None:
+        with self._lock:
+            self._log.clear()

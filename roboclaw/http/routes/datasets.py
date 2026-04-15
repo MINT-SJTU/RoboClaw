@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
 from roboclaw.embodied.service import EmbodiedService
-from roboclaw.http.dashboard_datasets import delete_dataset, get_dataset_info, list_datasets
+from roboclaw.data.datasets import delete_dataset, get_dataset_info, list_datasets
 
 
 def _datasets_root(service: EmbodiedService) -> Path:
