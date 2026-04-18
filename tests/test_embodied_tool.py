@@ -101,13 +101,13 @@ def calibration_root(tmp_path: Path) -> Path:
         yield root
 
 
-def test_create_embodied_tools_returns_eight_groups() -> None:
+def test_create_embodied_tools_returns_nine_groups() -> None:
     tools = create_embodied_tools()
-    assert len(tools) == 8
+    assert len(tools) == 9
     names = {t.name for t in tools}
     assert names == {
         "setup", "doctor", "calibration", "teleop",
-        "record", "replay", "train", "infer",
+        "record", "replay", "train", "infer", "hub",
     }
 
 
