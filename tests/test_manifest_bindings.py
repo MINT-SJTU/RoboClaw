@@ -105,7 +105,8 @@ def test_manifest_returns_typed_bindings_and_stable_snapshot(tmp_path: Path) -> 
         manifest_path,
     )
 
-    manifest = Manifest(path=manifest_path)
+    with patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=[]):
+        manifest = Manifest(path=manifest_path)
 
     arm = manifest.arms[0]
     camera = manifest.cameras[0]
@@ -139,6 +140,29 @@ def test_manifest_setters_return_typed_bindings(tmp_path: Path) -> None:
     assert isinstance(camera, CameraBinding)
     assert manifest.snapshot["arms"][0]["type"] == "so101_leader"
     assert manifest.snapshot["cameras"][0]["width"] == 1280
+
+
+def test_manifest_camera_persists_stable_id_and_reload_recovers_runtime_source(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest = Manifest(path=manifest_path)
+    camera_interface = VideoInterface(
+        by_id="usb-camera",
+        by_path="USB相机",
+        dev="2",
+        width=1280,
+        height=720,
+        fps=60,
+    )
+
+    manifest.set_camera("front", camera_interface)
+
+    assert manifest.snapshot["cameras"][0]["port"] == "usb-camera"
+
+    with patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=[camera_interface]):
+        reloaded = Manifest(path=manifest_path)
+
+    assert reloaded.cameras[0].interface.address == "usb-camera"
+    assert reloaded.cameras[0].interface.runtime_address == "2"
 
 
 def test_group_arms_and_monitor_status_use_explicit_arm_role() -> None:

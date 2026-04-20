@@ -45,11 +45,11 @@ export default function SettingsSummaryCard({
       className={`group block rounded-2xl border bg-white p-5 transition-all hover:-translate-y-0.5 hover:border-ac/35 ${ACCENT_STYLES[accent]}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${STATUS_STYLES[accent]}`}>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${STATUS_STYLES[accent]}`}>
             {icon}
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="text-lg font-semibold text-tx">{title}</h3>
             <p className="mt-1 text-sm text-tx3">{description}</p>
           </div>
@@ -59,11 +59,11 @@ export default function SettingsSummaryCard({
         </span>
       </div>
 
-      <div className="mt-5 grid grid-cols-3 gap-3">
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {metrics.map((metric) => (
-          <div key={metric.label} className="rounded-xl border border-bd/30 bg-sf px-3 py-3">
+          <div key={metric.label} className="min-w-0 rounded-xl border border-bd/30 bg-sf px-3 py-3">
             <div className="text-2xs uppercase tracking-[0.16em] text-tx3">{metric.label}</div>
-            <div className="mt-2 text-lg font-semibold text-tx">{metric.value}</div>
+            <div className="mt-2 break-words text-base font-semibold text-tx">{metric.value}</div>
           </div>
         ))}
       </div>

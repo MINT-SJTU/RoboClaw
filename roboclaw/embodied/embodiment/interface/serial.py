@@ -36,7 +36,10 @@ class SerialInterface(Interface):
         if self.by_id:
             tail = self.by_id.rsplit("/", 1)[-1]
             return tail or self.dev or "?"
-        return self.dev or "?"
+        if self.dev:
+            tail = self.dev.rsplit("/", 1)[-1]
+            return tail or self.dev
+        return "?"
 
     @property
     def address(self) -> str:

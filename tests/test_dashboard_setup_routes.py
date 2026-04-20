@@ -33,6 +33,21 @@ _RAW_PORTS = [
     ),
 ]
 
+_RAW_PORTS_PAIR = [
+    SerialInterface(
+        by_path="/dev/serial/by-path/pci-0:2.1",
+        by_id="/dev/serial/by-id/usb-ABC-if00",
+        dev="/dev/ttyACM0",
+        motor_ids=(1, 2, 3, 4, 5, 6),
+    ),
+    SerialInterface(
+        by_path="/dev/serial/by-path/pci-0:2.2",
+        by_id="/dev/serial/by-id/usb-XYZ-if00",
+        dev="/dev/ttyACM1",
+        motor_ids=(1, 2, 3, 4, 5, 6),
+    ),
+]
+
 _MOCK_CAMERAS = [
     VideoInterface(
         by_path="/dev/v4l/by-path/cam0",
@@ -54,12 +69,13 @@ def isolated_roboclaw_home(tmp_path: Path):
 
 
 @contextlib.contextmanager
-def _patched_scan(cameras: list | None = None):
+def _patched_scan(ports: list | None = None, cameras: list | None = None):
+    port_list = ports if ports is not None else _RAW_PORTS
     cam_list = cameras if cameras is not None else []
     with (
         patch(
             "roboclaw.embodied.embodiment.hardware.discovery.scan_serial_ports",
-            return_value=_RAW_PORTS,
+            return_value=port_list,
         ),
         patch(
             "roboclaw.embodied.embodiment.hardware.discovery.scan_cameras",
@@ -108,6 +124,22 @@ def test_scan_returns_ports_and_cameras(tmp_path: Path) -> None:
     assert data["ports"][0]["motor_ids"] == [1, 2, 3, 4, 5, 6]
     assert len(data["cameras"]) == 1
     assert data["cameras"][0]["stable_id"] == "/dev/v4l/by-path/cam0"
+
+
+def test_devices_catalog_returns_arm_models(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    client = TestClient(app)
+
+    resp = client.get("/api/devices/catalog")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["categories"][0]["id"] == "arm"
+    assert payload["categories"][0]["supported"] is True
+    assert payload["models"]["arm"] == [
+        {"name": "so101", "roles": ["follower", "leader"]},
+        {"name": "koch", "roles": ["follower", "leader"]},
+    ]
 
 
 def test_setup_previews_return_keyed_urls(tmp_path: Path) -> None:
@@ -200,6 +232,108 @@ def test_motion_poll_returns_deltas(tmp_path: Path) -> None:
     ]
 
 
+def test_motion_poll_latches_last_active_port_until_another_port_moves(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    client = TestClient(app)
+    with _patched_scan(ports=_RAW_PORTS_PAIR):
+        client.post("/api/setup/scan")
+    with patch(
+        "roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions",
+        side_effect=[
+            {1: 100, 2: 200},
+            {1: 100, 2: 200},
+        ],
+    ):
+        client.post("/api/setup/motion/start")
+
+    with patch(
+        "roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions",
+        side_effect=[
+            {1: 200, 2: 300},
+            {1: 100, 2: 200},
+        ],
+    ):
+        first = client.get("/api/setup/motion/poll")
+
+    assert first.status_code == 200
+    assert first.json()["ports"] == [
+        {
+            "stable_id": "/dev/serial/by-id/usb-ABC-if00",
+            "dev": "/dev/ttyACM0",
+            "by_id": "/dev/serial/by-id/usb-ABC-if00",
+            "motor_ids": [1, 2, 3, 4, 5, 6],
+            "delta": 200,
+            "moved": True,
+        },
+        {
+            "stable_id": "/dev/serial/by-id/usb-XYZ-if00",
+            "dev": "/dev/ttyACM1",
+            "by_id": "/dev/serial/by-id/usb-XYZ-if00",
+            "motor_ids": [1, 2, 3, 4, 5, 6],
+            "delta": 0,
+            "moved": False,
+        },
+    ]
+
+    with patch(
+        "roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions",
+        side_effect=[
+            {1: 200, 2: 300},
+            {1: 100, 2: 200},
+        ],
+    ):
+        second = client.get("/api/setup/motion/poll")
+
+    assert second.status_code == 200
+    assert second.json()["ports"] == [
+        {
+            "stable_id": "/dev/serial/by-id/usb-ABC-if00",
+            "dev": "/dev/ttyACM0",
+            "by_id": "/dev/serial/by-id/usb-ABC-if00",
+            "motor_ids": [1, 2, 3, 4, 5, 6],
+            "delta": 0,
+            "moved": True,
+        },
+        {
+            "stable_id": "/dev/serial/by-id/usb-XYZ-if00",
+            "dev": "/dev/ttyACM1",
+            "by_id": "/dev/serial/by-id/usb-XYZ-if00",
+            "motor_ids": [1, 2, 3, 4, 5, 6],
+            "delta": 0,
+            "moved": False,
+        },
+    ]
+
+    with patch(
+        "roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions",
+        side_effect=[
+            {1: 200, 2: 300},
+            {1: 220, 2: 320},
+        ],
+    ):
+        third = client.get("/api/setup/motion/poll")
+
+    assert third.status_code == 200
+    assert third.json()["ports"] == [
+        {
+            "stable_id": "/dev/serial/by-id/usb-ABC-if00",
+            "dev": "/dev/ttyACM0",
+            "by_id": "/dev/serial/by-id/usb-ABC-if00",
+            "motor_ids": [1, 2, 3, 4, 5, 6],
+            "delta": 0,
+            "moved": False,
+        },
+        {
+            "stable_id": "/dev/serial/by-id/usb-XYZ-if00",
+            "dev": "/dev/ttyACM1",
+            "by_id": "/dev/serial/by-id/usb-XYZ-if00",
+            "motor_ids": [1, 2, 3, 4, 5, 6],
+            "delta": 240,
+            "moved": True,
+        },
+    ]
+
+
 def test_motion_poll_without_start_returns_400(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     client = TestClient(app, raise_server_exceptions=False)
@@ -253,6 +387,42 @@ def test_assign_commit_and_devices_list(tmp_path: Path) -> None:
     assert [camera["alias"] for camera in payload["cameras"]] == ["top"]
 
 
+def test_dismiss_pending_camera_allows_commit_of_existing_assignments(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    client = TestClient(app)
+    with _patched_scan(cameras=_MOCK_CAMERAS):
+        scan = client.post("/api/setup/scan")
+    port_id = scan.json()["ports"][0]["stable_id"]
+    cam_id = scan.json()["cameras"][0]["stable_id"]
+
+    arm_resp = client.post(
+        "/api/setup/session/assign",
+        json={
+            "interface_stable_id": port_id,
+            "alias": "follower",
+            "spec_name": "so101_follower",
+            "side": "",
+        },
+    )
+    dismiss = client.post(
+        "/api/setup/session/dismiss",
+        json={"interface_stable_id": cam_id},
+    )
+    session = client.get("/api/setup/session")
+    commit = client.post("/api/setup/session/commit")
+    devices = client.get("/api/devices")
+
+    assert arm_resp.status_code == 200
+    assert dismiss.status_code == 200
+    assert dismiss.json() == {"status": "dismissed", "interface_stable_id": cam_id}
+    assert all(candidate["stable_id"] != cam_id for candidate in session.json()["candidates"])
+    assert session.json()["unassigned"] == []
+    assert commit.status_code == 200
+    assert commit.json() == {"status": "committed", "bindings_created": 1}
+    assert [arm["alias"] for arm in devices.json()["arms"]] == ["follower"]
+    assert devices.json()["cameras"] == []
+
+
 def test_unassign_removes_pending_assignment(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
     client = TestClient(app)
@@ -274,6 +444,32 @@ def test_unassign_removes_pending_assignment(tmp_path: Path) -> None:
     assert resp.status_code == 200
     assert resp.json() == {"status": "unassigned", "alias": "follower"}
     assert session.json()["assignments"] == []
+
+
+def test_dismiss_last_pending_serial_stops_motion_detection(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    client = TestClient(app)
+    with _patched_scan():
+        scan = client.post("/api/setup/scan")
+    port_id = scan.json()["ports"][0]["stable_id"]
+
+    with patch(
+        "roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions",
+        return_value={1: 100, 2: 200},
+    ):
+        motion = client.post("/api/setup/motion/start")
+
+    dismiss = client.post(
+        "/api/setup/session/dismiss",
+        json={"interface_stable_id": port_id},
+    )
+    session = client.get("/api/setup/session")
+
+    assert motion.status_code == 200
+    assert dismiss.status_code == 200
+    assert session.status_code == 200
+    assert session.json()["phase"] == "assigning"
+    assert session.json()["unassigned"] == []
 
 
 def test_device_rename_and_remove_routes(tmp_path: Path) -> None:

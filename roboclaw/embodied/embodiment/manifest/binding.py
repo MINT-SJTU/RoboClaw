@@ -147,10 +147,12 @@ def load_binding(
     data: dict[str, Any],
     kind: str,
     guards: dict[str, InterfaceGuard],
+    *,
+    scanned_cameras: list[VideoInterface] | None = None,
 ) -> Binding:
     """Reconstruct a typed binding from a manifest dict entry."""
     if kind == "camera":
-        return _camera_from_dict(data, guards)
+        return _camera_from_dict(data, guards, scanned_cameras=scanned_cameras)
     if kind == "hand":
         return _hand_from_dict(data, guards)
     if kind == "arm":
@@ -199,16 +201,30 @@ def _hand_from_dict(
 def _camera_from_dict(
     data: dict[str, Any],
     guards: dict[str, InterfaceGuard],
+    *,
+    scanned_cameras: list[VideoInterface] | None = None,
 ) -> CameraBinding:
     side = data.get("side", "")
     validate_camera_side(side, data.get("alias", ""))
-    interface = VideoInterface(
-        dev=data.get("port", ""),
-        width=data.get("width", 640),
-        height=data.get("height", 480),
-        fps=data.get("fps", 30),
-        fourcc=data.get("fourcc", ""),
-    )
+    if scanned_cameras is None:
+        interface = VideoInterface.from_stable_address(
+            data.get("port", ""),
+            width=data.get("width", 640),
+            height=data.get("height", 480),
+            fps=data.get("fps", 30),
+            fourcc=data.get("fourcc", ""),
+        )
+    else:
+        from roboclaw.embodied.embodiment.hardware.scan import resolve_camera_interface
+
+        resolved = resolve_camera_interface(data.get("port", ""), scanned_cameras)
+        interface = replace(
+            resolved,
+            width=data.get("width", resolved.width),
+            height=data.get("height", resolved.height),
+            fps=data.get("fps", resolved.fps),
+            fourcc=data.get("fourcc", resolved.fourcc),
+        )
     return CameraBinding(
         alias=data["alias"],
         interface=interface,

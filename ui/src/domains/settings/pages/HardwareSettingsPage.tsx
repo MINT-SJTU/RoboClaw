@@ -56,8 +56,11 @@ export default function HardwareSettingsPage() {
   const [calibratingArm, setCalibratingArm] = useState<string | null>(null)
 
   useEffect(() => {
-    loadDevices()
-    loadCatalog()
+    const bootstrap = async () => {
+      await loadCatalog()
+      await loadDevices()
+    }
+    void bootstrap()
     fetchHardwareStatus()
     checkPermissions()
 
@@ -137,8 +140,8 @@ export default function HardwareSettingsPage() {
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
           <div className="space-y-6">
             <section className="rounded-2xl border border-bd/30 bg-sf p-5 shadow-card">
-              <div className="flex items-center justify-between gap-4">
-                <div>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0">
                   <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">
                     {t('configuredDevices')}
                   </h3>
@@ -148,7 +151,7 @@ export default function HardwareSettingsPage() {
                   <button
                     type="button"
                     onClick={startWizard}
-                    className="rounded-full border border-ac/25 bg-white px-4 py-2 text-sm font-semibold text-ac transition-all hover:border-ac/40 hover:bg-ac/5"
+                    className="shrink-0 rounded-full border border-ac/25 bg-white px-4 py-2 text-sm font-semibold text-ac transition-all hover:border-ac/40 hover:bg-ac/5"
                   >
                     {t('addDevice')}
                   </button>
@@ -165,8 +168,8 @@ export default function HardwareSettingsPage() {
 
             {wizardActive && (
               <section className="rounded-2xl border border-ac/20 bg-sf p-5 shadow-card">
-                <div className="mb-5 flex items-center justify-between gap-4">
-                  <div>
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0">
                     <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">
                       {t('setupWizard')}
                     </h3>

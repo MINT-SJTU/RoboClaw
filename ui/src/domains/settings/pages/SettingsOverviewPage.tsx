@@ -84,7 +84,7 @@ export default function SettingsOverviewPage() {
       title={t('settingsTitle')}
       description={t('settingsOverviewDesc')}
     >
-      <div className="grid gap-6 xl:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         <SettingsSummaryCard
           to="/settings/hardware"
           title={t('settingsHardware')}

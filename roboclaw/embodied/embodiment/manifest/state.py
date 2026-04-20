@@ -105,9 +105,19 @@ class Manifest:
         self._datasets = dict(data.get("datasets", {}))
         self._policies = dict(data.get("policies", {}))
         self._bindings = {}
+        scanned_cameras: list[VideoInterface] | None = None
+        if data.get("cameras"):
+            from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
+
+            scanned_cameras = scan_cameras()
         for kind in ("arms", "cameras", "hands"):
             for item in data.get(kind, []):
-                binding = load_binding(item, kind[:-1], self._guards)
+                binding = load_binding(
+                    item,
+                    kind[:-1],
+                    self._guards,
+                    scanned_cameras=scanned_cameras if kind == "cameras" else None,
+                )
                 self._bindings[binding.alias] = binding
         self._file_mtime = self._file_mtime_on_disk()
 

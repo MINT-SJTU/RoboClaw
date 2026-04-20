@@ -151,7 +151,7 @@ export default function ProviderSettingsPage() {
                 <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">{group.title}</h3>
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {group.items.map((provider) => {
                   const isSelected = provider.name === selectedProvider
                   const isActive = provider.name === activeProvider
@@ -167,9 +167,9 @@ export default function ProviderSettingsPage() {
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold">{provider.label}</div>
-                          <div className="mt-2 flex items-center gap-2 text-2xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="break-words text-sm font-semibold">{provider.label}</div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-2xs">
                             {provider.configured && (
                               <span className="rounded-full bg-gn/10 px-2 py-0.5 font-medium text-gn">
                                 {t('saved')}

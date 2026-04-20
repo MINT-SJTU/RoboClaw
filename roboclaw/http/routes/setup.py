@@ -28,6 +28,10 @@ class AssignRequest(BaseModel):
     side: str = ""
 
 
+class DismissRequest(BaseModel):
+    interface_stable_id: str
+
+
 def _map_service_errors(app: FastAPI) -> None:
     """Map EmbodimentBusyError to 409 Conflict."""
     from fastapi.requests import Request
@@ -163,6 +167,14 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"status": "unassigned", "alias": alias}
+
+    @app.post("/api/setup/session/dismiss")
+    async def setup_dismiss(body: DismissRequest) -> dict[str, str]:
+        try:
+            service.setup.dismiss(body.interface_stable_id)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"status": "dismissed", "interface_stable_id": body.interface_stable_id}
 
     @app.post("/api/setup/session/commit")
     async def setup_commit() -> dict[str, Any]:

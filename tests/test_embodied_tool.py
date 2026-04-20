@@ -566,7 +566,7 @@ def test_set_camera(manifest_file: Path) -> None:
     cam = find_camera(result["cameras"], "front")
     assert cam is not None
     assert cam["alias"] == "front"
-    assert cam["port"] == "/dev/v4l/by-path/cam0"
+    assert cam["port"] == "usb-cam0"
     assert cam["width"] == 640
     assert cam["height"] == 480
     assert cam["fps"] == 30
@@ -824,6 +824,29 @@ def test_resolve_cameras_defaults_and_passthrough(tmp_path: Path) -> None:
     assert cameras["side"]["fps"] == 15
     assert cameras["dv20"]["fourcc"] == "MJPG"
     assert cameras["dv20"]["fps"] == 30
+
+
+def test_resolve_cameras_maps_stable_camera_port_to_runtime_index(tmp_path: Path) -> None:
+    setup = {
+        "cameras": [
+            {"alias": "front", "port": "usb-camera", "width": 640, "height": 480, "fps": 30},
+        ],
+    }
+    scanned = [
+        VideoInterface(
+            by_id="usb-camera",
+            by_path="USB相机",
+            dev="2",
+            width=1920,
+            height=1080,
+            fps=30,
+        ),
+    ]
+
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=scanned):
+        cameras = _resolve_cameras(_manifest_from_data(tmp_path, {**_MOCK_SETUP, **setup}).cameras)
+
+    assert cameras["front"]["index_or_path"] == 2
 
 
 def test_dataset_path_appends_local_and_dataset_name(tmp_path: Path) -> None:

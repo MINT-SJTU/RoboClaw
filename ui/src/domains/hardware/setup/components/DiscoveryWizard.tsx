@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
-import { useSetup, deviceLabel } from '@/domains/hardware/setup/store/useSetupStore'
+import { useEffect, useRef, useState } from 'react'
+import { useSetup } from '@/domains/hardware/setup/store/useSetupStore'
 import { useI18n } from '@/i18n'
 import type {
   Assignment,
@@ -11,12 +11,24 @@ import type {
 import ScanArea from './ScanArea'
 import PermissionPanel from './PermissionPanel'
 import { cn } from '@/shared/lib/cn'
+import {
+  presentCameraLabel,
+  presentCameraStream,
+  presentPortLabel,
+} from '@/domains/hardware/setup/lib/devicePresentation'
 
 const STEPS = ['select', 'scan', 'identify', 'review'] as const
 const btnBack = 'rounded-full px-4 py-2 text-sm font-medium text-tx2 transition-colors hover:text-tx'
 const btnPrimary = 'rounded-full bg-ac px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-ac2 disabled:cursor-not-allowed disabled:opacity-40'
 const btnOutline = 'rounded-full border border-ac/40 px-4 py-2 text-sm font-medium text-ac transition-all hover:border-ac hover:bg-ac/5'
 const inputCls = 'w-full rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac'
+
+function buildArmAlias(role: string, side: 'left' | 'right' | ''): string {
+  if (!role) {
+    return ''
+  }
+  return side ? `${side}_${role}` : role
+}
 
 function StepIndicator({ current }: { current: string }) {
   const idx = STEPS.indexOf(current as (typeof STEPS)[number])
@@ -150,18 +162,18 @@ function SetupDeviceButton({
           <img
             src={previewUrl}
             alt={label}
-            className="h-11 w-14 rounded-xl object-cover shrink-0"
+            className="h-11 w-14 shrink-0 rounded-xl border border-bd/30 object-cover"
             draggable={false}
           />
         ) : (
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-bd/30 bg-sf2 text-sm text-tx2">
+          <span className="flex h-11 w-14 shrink-0 items-center justify-center rounded-xl border border-bd/30 bg-sf2 text-sm text-tx2">
             {icon}
           </span>
         )}
 
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-tx">{label}</div>
-          <div className="mt-1 truncate text-2xs text-tx2">{sublabel}</div>
+          {sublabel && <div className="mt-1 truncate text-2xs text-tx2">{sublabel}</div>}
         </div>
 
         {kind === 'port' && (
@@ -222,24 +234,19 @@ function PortAssignForm({
 }) {
   const { t } = useI18n()
   const { sessionAssign } = useSetup()
-  const [alias, setAlias] = useState('')
   const [role, setRole] = useState('')
   const [side, setSide] = useState<'left' | 'right' | ''>('')
+  const alias = buildArmAlias(role, side)
 
   function submit() {
-    if (!alias.trim() || !role) return
-    const trimmedAlias = alias.trim()
-    const combined = `${trimmedAlias}_${role}`
-    sessionAssign(port.stable_id, combined, `${model}_${role}`, side)
+    if (!alias || !role) return
+    sessionAssign(port.stable_id, alias, `${model}_${role}`, side)
   }
 
   const roleOptions = roles.map((value) => ({
     value,
     label: value === 'leader' ? t('leader') : value === 'follower' ? t('follower') : value,
   }))
-
-  const preview = alias.trim() && role ? `${alias.trim()}_${role}` : alias.trim()
-
   return (
     <div className="space-y-4">
       <SetupFieldGroup
@@ -282,23 +289,15 @@ function PortAssignForm({
         title={t('setupNameTitle')}
         description={t('setupNameDesc')}
       >
-        <div className="space-y-3">
-          <input
-            value={alias}
-            onChange={(event) => setAlias(event.target.value)}
-            placeholder={t('assignAlias')}
-            className={inputCls}
-          />
-          <div className="text-sm text-tx3">
-            {t('setupAliasPreview')}: <span className="font-mono text-tx">{preview || '—'}</span>
-          </div>
+        <div className="rounded-xl border border-bd/30 bg-sf px-3 py-3 text-sm text-tx2">
+          {t('setupAliasPreview')}: <span className="font-mono font-semibold text-tx">{alias || '—'}</span>
         </div>
       </SetupFieldGroup>
 
       <button
         type="button"
         onClick={submit}
-        disabled={!alias.trim() || !role}
+        disabled={!alias || !role}
         className="w-full rounded-full bg-ac px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-ac2 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {t('setupConfirmAssignment')}
@@ -544,12 +543,12 @@ function ScanStep() {
         <div className="space-y-4">
           <ScanSummarySection
             title={t('scanArmsTitle')}
-            items={scannedPorts.map((port) => deviceLabel(port))}
+            items={scannedPorts.map((port) => presentPortLabel(port))}
             empty={t('setupNoPortsDetected')}
           />
           <ScanSummarySection
             title={t('scanCamerasTitle')}
-            items={scannedCameras.map((camera) => deviceLabel(camera))}
+            items={scannedCameras.map((camera) => presentCameraLabel(camera, scannedCameras, t))}
             empty={t('setupNoCamerasDetected')}
           />
         </div>
@@ -588,22 +587,28 @@ function IdentifyStep() {
     startMotion,
     stopMotion,
     goToStep,
+    sessionDismiss,
     sessionUnassign,
   } = useSetup()
   const [activeId, setActiveId] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (scannedPorts.length > 0) {
-      void startMotion()
-    }
-    return () => { void stopMotion() }
-  }, [scannedPorts.length, startMotion, stopMotion])
-
-  const roles = catalog?.models[selectedCategory]?.find((model) => model.name === selectedModel)?.roles ?? []
+  const selectedCatalogModel = catalog?.models[selectedCategory]?.find((model) => model.name === selectedModel) ?? null
+  const roles = selectedCatalogModel?.roles ?? []
   const assignedIds = new Set(assignments.map((assignment) => assignment.interface_stable_id))
   const freePorts = scannedPorts.filter((port) => !assignedIds.has(port.stable_id))
   const freeCameras = scannedCameras.filter((camera) => !assignedIds.has(camera.stable_id))
   const pendingIds = [...freePorts.map((port) => port.stable_id), ...freeCameras.map((camera) => camera.stable_id)]
+  const detectedPortId = freePorts.find((port) => port.moved)?.stable_id ?? null
+  const lastDetectedPortIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (freePorts.length > 0) {
+      void startMotion()
+      return () => { void stopMotion() }
+    }
+    void stopMotion()
+    return undefined
+  }, [freePorts.length, startMotion, stopMotion])
 
   useEffect(() => {
     if (pendingIds.length === 0) {
@@ -617,11 +622,32 @@ function IdentifyStep() {
 
   const activePort = freePorts.find((port) => port.stable_id === activeId) || null
   const activeCamera = freeCameras.find((camera) => camera.stable_id === activeId) || null
+
+  useEffect(() => {
+    if (!detectedPortId) {
+      lastDetectedPortIdRef.current = null
+      return
+    }
+    const detectionChanged = lastDetectedPortIdRef.current !== detectedPortId
+    const selectedNonDetectedPort = Boolean(
+      activePort && activePort.stable_id !== detectedPortId && !activePort.moved,
+    )
+    if (activeCamera && !detectionChanged) {
+      return
+    }
+    if (!detectionChanged && !selectedNonDetectedPort) {
+      return
+    }
+    lastDetectedPortIdRef.current = detectedPortId
+    setActiveId(detectedPortId)
+  }, [activeCamera, activePort, detectedPortId])
+
   const selectedLabel = activePort
-    ? deviceLabel(activePort)
+    ? presentPortLabel(activePort)
     : activeCamera
-      ? deviceLabel(activeCamera)
+      ? presentCameraLabel(activeCamera, freeCameras, t)
       : ''
+  const activeStableId = activePort?.stable_id || activeCamera?.stable_id || ''
 
   return (
     <div className="space-y-5">
@@ -637,7 +663,7 @@ function IdentifyStep() {
               {freePorts.map((port) => (
                 <SetupDeviceButton
                   key={port.stable_id}
-                  label={deviceLabel(port)}
+                  label={presentPortLabel(port)}
                   sublabel={`${port.motor_ids.length} ${t('motorsFound')}`}
                   kind="port"
                   moved={port.moved}
@@ -648,8 +674,8 @@ function IdentifyStep() {
               {freeCameras.map((camera) => (
                 <SetupDeviceButton
                   key={camera.stable_id}
-                  label={deviceLabel(camera)}
-                  sublabel={`${camera.width}×${camera.height}`}
+                  label={presentCameraLabel(camera, freeCameras, t)}
+                  sublabel={presentCameraStream(camera, t)}
                   kind="camera"
                   active={activeId === camera.stable_id}
                   onClick={() => setActiveId(camera.stable_id)}
@@ -714,6 +740,17 @@ function IdentifyStep() {
             {!activePort && !activeCamera && (
               <div className="rounded-2xl border border-dashed border-bd/40 bg-white px-4 py-6 text-sm text-tx3">
                 {assignments.length > 0 ? t('setupReadyToCommit') : t('setupSelectDevicePrompt')}
+              </div>
+            )}
+            {(activePort || activeCamera) && (
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => { void sessionDismiss(activeStableId) }}
+                  className={btnOutline}
+                >
+                  {t('setupSkipDevice')}
+                </button>
               </div>
             )}
           </div>

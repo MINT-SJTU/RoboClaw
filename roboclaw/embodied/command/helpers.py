@@ -89,13 +89,24 @@ def logs_dir() -> Path:
 
 def resolve_cameras(cameras: list[CameraBinding]) -> dict[str, dict[str, Any]]:
     """Build camera config dict for lerobot CLI from manifest camera bindings."""
+    from roboclaw.embodied.embodiment.hardware.scan import (
+        resolve_camera_interface,
+        scan_cameras,
+    )
+
+    scanned_cameras = scan_cameras() if cameras else []
     result: dict[str, dict[str, Any]] = {}
     for cam in cameras:
         if not cam.alias or not cam.port:
             continue
+        resolved = resolve_camera_interface(cam.port, scanned_cameras)
+        runtime_address = resolved.runtime_address
+        if not runtime_address:
+            raise ActionError(f"Camera '{cam.alias}' is disconnected.")
+        index_or_path: str | int = int(runtime_address) if runtime_address.isdigit() else runtime_address
         config: dict[str, Any] = {
             "type": "opencv",
-            "index_or_path": cam.port,
+            "index_or_path": index_or_path,
             "width": cam.interface.width,
             "height": cam.interface.height,
             "fps": cam.interface.fps or 30,

@@ -39,17 +39,19 @@ export default function DeviceNode({ id, kind, label, sublabel, moved, previewUr
         <img
           src={previewUrl}
           alt={label}
-          className="w-12 h-9 object-cover rounded shrink-0"
+          className="h-10 w-12 shrink-0 rounded-md border border-bd/30 object-cover"
           draggable={false}
         />
       ) : (
-        <span className="w-8 h-8 flex items-center justify-center rounded-md bg-sf2 border border-bd/30 text-tx2 text-sm shrink-0">
+        <span className="flex h-10 w-12 shrink-0 items-center justify-center rounded-md border border-bd/30 bg-sf2 text-sm text-tx2">
           {icon}
         </span>
       )}
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium text-tx truncate">{label}</div>
-        <div className="text-2xs text-tx2 truncate">{sublabel}</div>
+        <div className="truncate text-sm font-medium text-tx">{label}</div>
+        {sublabel && (
+          <div className="truncate text-2xs text-tx2">{sublabel}</div>
+        )}
       </div>
       {moved && (
         <span className="shrink-0 w-2 h-2 rounded-full bg-gn animate-pulse" />

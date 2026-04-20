@@ -107,19 +107,19 @@ export default function HubSettingsPage() {
       <div className="grid gap-6 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
         <section className="rounded-2xl border border-bd/30 bg-white p-5 shadow-card">
           <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">{t('settingsHubSummary')}</h3>
-          <div className="mt-5 space-y-3">
+          <div className="mt-5 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
             {summaryItems.map((item) => (
-              <div key={item.label} className="rounded-xl border border-bd/30 bg-sf px-4 py-3">
+              <div key={item.label} className="min-w-0 rounded-xl border border-bd/30 bg-sf px-4 py-3">
                 <div className="text-2xs uppercase tracking-[0.16em] text-tx3">{item.label}</div>
-                <div className="mt-2 text-sm font-semibold text-tx">{item.value}</div>
+                <div className="mt-2 break-words text-sm font-semibold text-tx">{item.value}</div>
               </div>
             ))}
           </div>
         </section>
 
         <section className="rounded-2xl border border-bd/30 bg-sf p-5 shadow-card">
-          <div className="grid gap-6 md:grid-cols-3">
-            <div className="space-y-3">
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="min-w-0 space-y-3">
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">{t('hfEndpoint')}</h3>
                 <p className="mt-2 text-sm text-tx3">{t('settingsHubEndpointDesc')}</p>
@@ -152,7 +152,7 @@ export default function HubSettingsPage() {
               )}
             </div>
 
-            <div className="space-y-3">
+            <div className="min-w-0 space-y-3">
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">{t('hfToken')}</h3>
                 <p className="mt-2 text-sm text-tx3">{t('settingsHubTokenDesc')}</p>
@@ -171,7 +171,7 @@ export default function HubSettingsPage() {
               />
             </div>
 
-            <div className="space-y-3">
+            <div className="min-w-0 space-y-3">
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">{t('hfProxy')}</h3>
                 <p className="mt-2 text-sm text-tx3">{t('settingsHubProxyDesc')}</p>

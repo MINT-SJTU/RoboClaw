@@ -31,9 +31,9 @@ export default function SettingsPageFrame({
   return (
     <div className="page-enter flex flex-col h-full overflow-y-auto">
       <div className="border-b border-bd/50 bg-sf">
-        <div className="max-w-6xl mx-auto px-6 py-5">
+        <div className="w-full px-6 py-5 2xl:px-10">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
+            <div className="min-w-0">
               <div className="text-2xs font-semibold uppercase tracking-[0.22em] text-tx3">
                 {t('settings')}
               </div>
@@ -63,8 +63,8 @@ export default function SettingsPageFrame({
         </div>
       </div>
 
-      <div className="flex-1 px-6 py-6">
-        <div className="max-w-6xl mx-auto">{children}</div>
+      <div className="flex-1 w-full px-6 py-6 2xl:px-10">
+        {children}
       </div>
     </div>
   )

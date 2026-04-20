@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import replace
 
+from roboclaw.embodied.embodiment.hardware.motion import resolve_active_motion
 from roboclaw.embodied.embodiment.hardware.probers import _REGISTRY, get_prober
 from roboclaw.embodied.embodiment.hardware.scan import (
     capture_camera_frames,
@@ -47,6 +48,7 @@ class HardwareDiscovery:
         self._scanned_ports: list[SerialInterface] = []
         self._scanned_cameras: list[VideoInterface] = []
         self._motion_active: bool = False
+        self._active_motion_port_id: str = ""
 
     @property
     def scanned_ports(self) -> list[SerialInterface]:
@@ -116,6 +118,7 @@ class HardwareDiscovery:
                 port.motion_detector.capture_baseline()
         finally:
             restore_stderr(saved)
+        self._active_motion_port_id = ""
         self._motion_active = True
         return len(self._scanned_ports)
 
@@ -138,12 +141,15 @@ class HardwareDiscovery:
                 })
         finally:
             restore_stderr(saved)
-        return results
+        normalized, active_id = resolve_active_motion(results, self._active_motion_port_id)
+        self._active_motion_port_id = active_id
+        return normalized
 
     def stop_motion_detection(self) -> None:
         """Clear baselines and stop motion detection."""
         for port in self._scanned_ports:
             port.motion_detector.reset()
+        self._active_motion_port_id = ""
         self._motion_active = False
 
     def _probe_ports(

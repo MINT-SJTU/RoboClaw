@@ -480,8 +480,8 @@ def _find_camera(dev: str) -> tuple[Any, str]:
     """Scan and find a camera by device path. Returns (camera_or_None, available_list_str)."""
     from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
     cameras = scan_cameras()
-    matched = next((c for c in cameras if c.dev == dev), None)
-    avail = ", ".join(c.dev for c in cameras) if cameras else "none"
+    matched = next((c for c in cameras if c.matches(dev)), None)
+    avail = ", ".join(c.stable_id or c.dev for c in cameras) if cameras else "none"
     return matched, avail
 
 

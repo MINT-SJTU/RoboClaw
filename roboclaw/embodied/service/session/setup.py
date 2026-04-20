@@ -12,6 +12,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from roboclaw.embodied.embodiment.hardware.discovery import HardwareDiscovery
+from roboclaw.embodied.embodiment.hardware.motion import resolve_active_motion
 from roboclaw.embodied.embodiment.hardware.scan import restore_stderr, suppress_stderr
 from roboclaw.embodied.embodiment.interface import Interface, SerialInterface, VideoInterface
 from roboclaw.i18n import t
@@ -73,6 +74,7 @@ class SetupSession:
         self._language: str = "en"
         self._messages: list[str] = []
         self._camera_preview: Any = None
+        self._active_motion_stable_id: str = ""
 
     def drain_messages(self) -> list[str]:
         """Return and clear accumulated messages."""
@@ -176,6 +178,7 @@ class SetupSession:
                 iface.motion_detector.capture_baseline()
         finally:
             restore_stderr(saved)
+        self._active_motion_stable_id = ""
         self._phase = SetupPhase.IDENTIFYING
         return len(serial)
 
@@ -185,6 +188,7 @@ class SetupSession:
             for c in self._candidates:
                 if isinstance(c, SerialInterface):
                     c.motion_detector.reset()
+            self._active_motion_stable_id = ""
             self._phase = SetupPhase.ASSIGNING
         self._parent.release_embodiment(owner="motion-detection")
 
@@ -208,7 +212,9 @@ class SetupSession:
                 })
         finally:
             restore_stderr(saved)
-        return results
+        normalized, active_id = resolve_active_motion(results, self._active_motion_stable_id)
+        self._active_motion_stable_id = active_id
+        return normalized
 
     # -- Assign / Commit -----------------------------------------------------
 
@@ -263,6 +269,38 @@ class SetupSession:
                 self._assignments.pop(i)
                 return
         raise ValueError(f"No assignment with alias '{alias}'.")
+
+    def dismiss(self, interface_stable_id: str) -> None:
+        """Remove a pending candidate from the current setup session."""
+        if self._phase not in (SetupPhase.ASSIGNING, SetupPhase.IDENTIFYING):
+            raise RuntimeError(f"Cannot dismiss in {self._phase} phase.")
+
+        interface = next(
+            (candidate for candidate in self.unassigned if candidate.stable_id == interface_stable_id),
+            None,
+        )
+        if interface is None:
+            raise ValueError(
+                f"Interface {interface_stable_id} not found or already assigned."
+            )
+
+        if isinstance(interface, SerialInterface):
+            interface.motion_detector.reset()
+            if self._active_motion_stable_id == interface.stable_id:
+                self._active_motion_stable_id = ""
+
+        self._candidates = [
+            candidate
+            for candidate in self._candidates
+            if candidate.stable_id != interface_stable_id
+        ]
+
+        remaining_serial = any(
+            isinstance(candidate, SerialInterface)
+            for candidate in self.unassigned
+        )
+        if self._phase == SetupPhase.IDENTIFYING and not remaining_serial:
+            self.stop_motion_detection()
 
     def commit(self) -> int:
         """Write all assignments to manifest.
@@ -756,6 +794,7 @@ class SetupSession:
         self._camera_pending_side = ""
         self._embodiment_category = ""
         self._messages.clear()
+        self._active_motion_stable_id = ""
         # Note: do NOT reset self._language here — it persists through reset
 
     @staticmethod

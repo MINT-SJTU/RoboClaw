@@ -11,7 +11,7 @@ from roboclaw.embodied.embodiment.interface.base import Interface
 class VideoInterface(Interface):
     """A video capture hardware interface."""
 
-    dev: str = ""  # /dev/video0
+    dev: str = ""  # Runtime source: /dev/video0 on Linux, AVFoundation index on macOS
     by_id: str = ""
     by_path: str = ""
     width: int = 640
@@ -21,8 +21,14 @@ class VideoInterface(Interface):
     interface_type: str = field(default="video", init=False)
 
     @property
+    def is_index_device(self) -> bool:
+        return self.dev.isdigit()
+
+    @property
     def label(self) -> str:
         """Human-readable short label: by_path preferred for cameras (stable across reboots)."""
+        if self.is_index_device and self.by_path:
+            return self.by_path
         best = self.by_path or self.by_id
         if best:
             return best.rsplit("/", 1)[-1] or self.dev or "?"
@@ -30,16 +36,33 @@ class VideoInterface(Interface):
 
     @property
     def address(self) -> str:
-        return self.by_path or self.by_id or self.dev
+        return self.stable_id
+
+    @property
+    def runtime_address(self) -> str:
+        return self.dev or self.by_path or self.by_id
+
+    @property
+    def preview_address(self) -> str:
+        if self.is_index_device and self.by_id:
+            return self.by_id
+        return self.runtime_address
 
     @property
     def stable_id(self) -> str:
-        return self.by_path or self.by_id or self.dev
+        return self.by_id or self.by_path or self.dev
 
     @property
     def exists(self) -> bool:
-        addr = self.address
+        addr = self.runtime_address
+        if addr.isdigit():
+            return True
         return bool(addr) and os.path.exists(addr)
+
+    def matches(self, reference: str) -> bool:
+        if not reference:
+            return False
+        return reference in {self.stable_id, self.by_id, self.by_path, self.dev}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +75,16 @@ class VideoInterface(Interface):
             "fps": self.fps,
             "fourcc": self.fourcc,
         }
+
+    @classmethod
+    def from_stable_address(cls, address: str, **kwargs: Any) -> VideoInterface:
+        if address.startswith("/dev/v4l/by-id/"):
+            return cls(by_id=address, **kwargs)
+        if address.startswith("/dev/v4l/by-path/"):
+            return cls(by_path=address, **kwargs)
+        if address.startswith("/dev/"):
+            return cls(dev=address, **kwargs)
+        return cls(by_id=address, **kwargs)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> VideoInterface:

@@ -62,7 +62,12 @@ async def test_identify_with_tty_uses_tty_session(tmp_path: Path) -> None:
 
 # ── Unit tests for hardware module helpers ─────────────────────────────
 
-from roboclaw.embodied.embodiment.hardware.motion import detect_motion
+from roboclaw.embodied.embodiment.hardware.motion import (
+    detect_motion,
+    keep_strongest_motion,
+    resolve_active_motion,
+)
+from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 
 
 def test_detect_motion_above_threshold() -> None:
@@ -84,3 +89,58 @@ def test_detect_motion_missing_ids() -> None:
     baseline = {1: 100, 2: 200, 3: 300}
     current = {1: 150}
     assert detect_motion(baseline, current) == 50
+
+
+def test_keep_strongest_motion_keeps_only_one_active_port() -> None:
+    results = [
+        {"stable_id": "arm-a", "delta": 120, "moved": True},
+        {"stable_id": "arm-b", "delta": 180, "moved": True},
+        {"stable_id": "arm-c", "delta": 20, "moved": False},
+    ]
+
+    assert keep_strongest_motion(results) == [
+        {"stable_id": "arm-a", "delta": 120, "moved": False},
+        {"stable_id": "arm-b", "delta": 180, "moved": True},
+        {"stable_id": "arm-c", "delta": 20, "moved": False},
+    ]
+
+
+def test_resolve_active_motion_latches_previous_port_until_new_motion() -> None:
+    results = [
+        {"stable_id": "arm-a", "delta": 0, "moved": False},
+        {"stable_id": "arm-b", "delta": 0, "moved": False},
+    ]
+
+    normalized, active_id = resolve_active_motion(results, active_id="arm-a")
+
+    assert active_id == "arm-a"
+    assert normalized == [
+        {"stable_id": "arm-a", "delta": 0, "moved": True},
+        {"stable_id": "arm-b", "delta": 0, "moved": False},
+    ]
+
+
+def test_motion_detector_tracks_recent_motion_instead_of_sticky_displacement() -> None:
+    port = SerialInterface(dev="/dev/ttyACM0", motor_ids=(1, 2))
+    detector = port.motion_detector
+
+    with patch(
+        "roboclaw.embodied.embodiment.hardware.motion_detector.MotionDetector._read_positions",
+        side_effect=[
+            {1: 100, 2: 200},
+            {1: 160, 2: 200},
+            {1: 160, 2: 200},
+            {1: 160, 2: 280},
+        ],
+    ):
+        detector.capture_baseline()
+        first = detector.poll()
+        second = detector.poll()
+        third = detector.poll()
+
+    assert first.delta == 60
+    assert first.moved is True
+    assert second.delta == 0
+    assert second.moved is False
+    assert third.delta == 80
+    assert third.moved is True

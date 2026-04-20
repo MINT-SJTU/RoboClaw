@@ -43,6 +43,7 @@ export interface ScannedCamera {
   dev: string
   width: number
   height: number
+  fps: number
   preview_url: string | null
 }
 
@@ -97,6 +98,7 @@ interface SetupCandidate {
   motor_ids?: number[]
   width?: number
   height?: number
+  fps?: number
 }
 
 interface SetupSessionPayload {
@@ -151,6 +153,7 @@ interface SetupStore {
   // Session assign/commit
   assignments: Assignment[]
   sessionAssign: (stableId: string, alias: string, specName: string, side?: 'left' | 'right' | '') => Promise<void>
+  sessionDismiss: (stableId: string) => Promise<void>
   sessionUnassign: (alias: string) => Promise<void>
   sessionCommit: () => Promise<void>
   refreshSession: () => Promise<void>
@@ -271,6 +274,18 @@ function buildScannedPorts(
     })
 }
 
+function findCategoryForModel(catalog: Catalog | null, modelName: string): string {
+  if (!catalog || !modelName) {
+    return ''
+  }
+  for (const [category, models] of Object.entries(catalog.models)) {
+    if (models.some((model) => model.name === modelName)) {
+      return category
+    }
+  }
+  return ''
+}
+
 function buildScannedCameras(
   candidates: SetupCandidate[],
   currentCameras: ScannedCamera[],
@@ -288,6 +303,7 @@ function buildScannedCameras(
         dev: candidate.dev || '',
         width: candidate.width || 640,
         height: candidate.height || 480,
+        fps: candidate.fps || existing?.fps || 0,
         preview_url: existing?.preview_url ?? null,
       }
     })
@@ -422,17 +438,27 @@ export const useSetup = create<SetupStore>((set, get) => ({
     try {
       const previews = await postJson(`${SETUP}/previews`)
       const ts = Date.now()
-      const previewByStableId = new Map<string, string>()
+      const byStableId = new Map<string, { url: string; width?: number; height?: number }>()
       ;(previews || []).forEach((preview: any) => {
         if (preview.stable_id && preview.preview_url) {
-          previewByStableId.set(preview.stable_id, `${preview.preview_url}?t=${ts}`)
+          byStableId.set(preview.stable_id, {
+            url: `${preview.preview_url}?t=${ts}`,
+            width: typeof preview.width === 'number' ? preview.width : undefined,
+            height: typeof preview.height === 'number' ? preview.height : undefined,
+          })
         }
       })
       set((s) => ({
-        scannedCameras: s.scannedCameras.map((c) => ({
-          ...c,
-          preview_url: previewByStableId.get(c.stable_id) ?? null,
-        })),
+        scannedCameras: s.scannedCameras.map((c) => {
+          const hit = byStableId.get(c.stable_id)
+          if (!hit) return { ...c, preview_url: null }
+          return {
+            ...c,
+            preview_url: hit.url,
+            width: hit.width ?? c.width,
+            height: hit.height ?? c.height,
+          }
+        }),
       }))
     } catch (e: unknown) {
       set((s) => ({
@@ -520,6 +546,18 @@ export const useSetup = create<SetupStore>((set, get) => ({
     }
   },
 
+  sessionDismiss: async (stableId) => {
+    set({ error: null })
+    try {
+      await postJson(`${SETUP}/session/dismiss`, {
+        interface_stable_id: stableId,
+      })
+      await get().refreshSession()
+    } catch (e: unknown) {
+      set({ error: (e as Error).message })
+    }
+  },
+
   sessionUnassign: async (alias) => {
     set({ error: null })
     try {
@@ -564,6 +602,11 @@ export const useSetup = create<SetupStore>((set, get) => ({
       syncMotionTimer(session.phase, get().pollMotion)
       set((state) => {
         const wizardActive = state.wizardRequested || isSessionActive(session)
+        const selectedModel = session.model || state.selectedModel
+        const selectedCategory = state.selectedCategory
+          && state.catalog?.models[state.selectedCategory]?.some((model) => model.name === selectedModel)
+          ? state.selectedCategory
+          : findCategoryForModel(state.catalog, selectedModel)
         return {
           assignments: session.assignments,
           busy: session.busy,
@@ -575,7 +618,8 @@ export const useSetup = create<SetupStore>((set, get) => ({
           motionActive: session.phase === 'identifying',
           scannedPorts: buildScannedPorts(session.candidates, state.scannedPorts),
           scannedCameras: buildScannedCameras(session.candidates, state.scannedCameras),
-          selectedModel: session.model || state.selectedModel,
+          selectedCategory,
+          selectedModel,
           sessionPhase: session.phase,
           wizardActive,
           wizardStep: wizardActive ? deriveWizardStep(state.wizardStep, session) : 'select',

@@ -1,10 +1,14 @@
 import { useI18n } from '@/i18n'
-import { deviceLabel } from '@/domains/hardware/setup/store/useSetupStore'
 import type {
   ScannedPort,
   ScannedCamera,
 } from '@/domains/hardware/setup/store/useSetupStore'
 import DeviceNode from './DeviceNode'
+import {
+  presentCameraLabel,
+  presentCameraStream,
+  presentPortLabel,
+} from '@/domains/hardware/setup/lib/devicePresentation'
 
 interface Props {
   ports: ScannedPort[]
@@ -43,7 +47,7 @@ export default function ScanArea({ ports, cameras, scanning }: Props) {
             key={port.stable_id}
             id={`port:${port.stable_id}`}
             kind="port"
-            label={deviceLabel(port)}
+            label={presentPortLabel(port)}
             sublabel={`${port.motor_ids.length} ${t('motorsFound')}`}
             moved={port.moved}
           />
@@ -53,8 +57,8 @@ export default function ScanArea({ ports, cameras, scanning }: Props) {
             key={cam.stable_id}
             id={`camera:${cam.stable_id}`}
             kind="camera"
-            label={deviceLabel(cam)}
-            sublabel={`${cam.width}×${cam.height}`}
+            label={presentCameraLabel(cam, cameras, t)}
+            sublabel={presentCameraStream(cam, t)}
             previewUrl={cam.preview_url}
           />
         ))}

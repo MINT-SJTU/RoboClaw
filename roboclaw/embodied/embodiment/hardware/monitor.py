@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from loguru import logger
 
 from roboclaw.embodied.board.channels import CH_FAULT_DETECTED, CH_FAULT_RESOLVED
+from roboclaw.embodied.embodiment.interface.video import VideoInterface
 from roboclaw.embodied.embodiment.manifest.binding import ArmBinding, CameraBinding
 
 _CHECK_INTERVAL_SECONDS = 5
@@ -87,11 +88,20 @@ def check_arm_status(arm: ArmBinding) -> ArmStatus:
     )
 
 
-def check_camera_status(cam: CameraBinding) -> CameraStatus:
+def check_camera_status(
+    cam: CameraBinding,
+    *,
+    scanned_cameras: list[VideoInterface] | None = None,
+) -> CameraStatus:
     """Check a single camera's connectivity."""
+    from roboclaw.embodied.embodiment.hardware.scan import resolve_camera_interface
+
+    resolved = cam.interface
+    if scanned_cameras is not None:
+        resolved = resolve_camera_interface(cam.port, scanned_cameras)
     return CameraStatus(
         alias=cam.alias,
-        connected=cam.connected,
+        connected=resolved.exists,
         width=cam.interface.width,
         height=cam.interface.height,
     )
@@ -219,8 +229,13 @@ def _check_cameras(
     """Check camera connectivity (skip during active recording)."""
     if recording_active:
         return
+    scanned_cameras: list[VideoInterface] = []
+    if cameras:
+        from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
+
+        scanned_cameras = scan_cameras()
     for cam in cameras:
-        status = check_camera_status(cam)
+        status = check_camera_status(cam, scanned_cameras=scanned_cameras)
         if cam.port and not status.connected:
             faults.append(HardwareFault(
                 fault_type=FaultType.CAMERA_DISCONNECTED,
