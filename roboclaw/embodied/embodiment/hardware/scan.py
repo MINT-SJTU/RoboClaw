@@ -164,6 +164,8 @@ def scan_cameras() -> list[VideoInterface]:
 
     saved = suppress_stderr()
     try:
+        if sys.platform == "darwin":
+            return _probe_cameras_mac(cv2)
         by_path = _read_symlink_map("/dev/v4l/by-path")
         by_id = _read_symlink_map("/dev/v4l/by-id")
         return _probe_cameras(cv2, by_path, by_id)
@@ -263,6 +265,50 @@ def _probe_cameras(cv2, by_path: dict, by_id: dict) -> list[VideoInterface]:
     return _dedupe_by_usb_device(raw)
 
 
+def _probe_cameras_mac(cv2) -> list[VideoInterface]:
+    """Probe cameras on macOS via OpenCV + AVFoundation."""
+    result: list[VideoInterface] = []
+    for index in range(10):
+        cam = _try_open_camera_mac(cv2, index)
+        if cam:
+            result.append(cam)
+    return result
+
+
+def _open_video_capture(cv2, source: str | int):
+    """Open a video capture source with platform-appropriate backend hints."""
+    if sys.platform == "darwin" and isinstance(source, int):
+        backend = getattr(cv2, "CAP_AVFOUNDATION", None)
+        if backend is not None:
+            return cv2.VideoCapture(source, backend)
+    return cv2.VideoCapture(source)
+
+
+def _try_open_camera_mac(cv2, index: int) -> VideoInterface | None:
+    """Open a single camera index on macOS, return VideoInterface or None."""
+    cap = _open_video_capture(cv2, index)
+    try:
+        if not cap.isOpened():
+            return None
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+        fourcc = "MJPG" if fps >= 30 else ""
+        return VideoInterface(
+            by_path="",
+            by_id="",
+            dev=str(index),
+            width=width,
+            height=height,
+            fps=fps,
+            fourcc=fourcc,
+        )
+    finally:
+        cap.release()
+
+
 def _usb_device_key(by_path_str: str) -> str:
     """Extract physical USB device from by-path.
 
@@ -342,7 +388,8 @@ def _capture_camera_frame(
     if not source:
         return None
 
-    cap = cv2.VideoCapture(source)
+    open_source: str | int = int(source) if sys.platform == "darwin" and source.isdigit() else source
+    cap = _open_video_capture(cv2, open_source)
     try:
         if not cap.isOpened():
             return None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -139,6 +140,16 @@ class TestCheckCameras:
         cams = [self._camera_binding(str(port_file))]
         faults: list[HardwareFault] = []
         _check_cameras(cams, time.time(), faults, recording_active=False)
+        assert faults == []
+
+    def test_numeric_camera_index_detected_via_scan(self):
+        cams = [self._camera_binding("0")]
+        faults: list[HardwareFault] = []
+        with patch(
+            "roboclaw.embodied.embodiment.hardware.monitor.scan_connected_camera_ports",
+            return_value={"0", "1"},
+        ):
+            _check_cameras(cams, time.time(), faults, recording_active=False)
         assert faults == []
 
     def test_skip_during_recording(self, tmp_path):

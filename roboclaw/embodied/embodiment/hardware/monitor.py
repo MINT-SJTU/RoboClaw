@@ -89,12 +89,34 @@ def check_arm_status(arm: ArmBinding) -> ArmStatus:
 
 def check_camera_status(cam: CameraBinding) -> CameraStatus:
     """Check a single camera's connectivity."""
+    port = (cam.port or "").strip()
+    connected = cam.connected
+    if port and not connected and port.isdigit():
+        connected = port in scan_connected_camera_ports()
     return CameraStatus(
         alias=cam.alias,
-        connected=cam.connected,
+        connected=connected,
         width=cam.interface.width,
         height=cam.interface.height,
     )
+
+
+def scan_connected_camera_ports() -> set[str]:
+    """Return currently discoverable camera identifiers from the active scan."""
+    try:
+        from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
+    except Exception:
+        return set()
+
+    ports: set[str] = set()
+    try:
+        for cam in scan_cameras():
+            for value in (cam.dev, cam.by_id, cam.by_path):
+                if value:
+                    ports.add(str(value))
+    except Exception:
+        return set()
+    return ports
 
 
 def _fault_key(fault: HardwareFault) -> str:

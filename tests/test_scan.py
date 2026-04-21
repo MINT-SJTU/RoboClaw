@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from roboclaw.embodied.embodiment.hardware.discovery import HardwareDiscovery
 from roboclaw.embodied.embodiment.hardware.scan import (
+    _capture_camera_frame,
     _list_serial_ports,
     scan_serial_ports,
+    scan_cameras,
     serial_patterns_for_platform,
 )
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
+from roboclaw.embodied.embodiment.interface.video import VideoInterface
 
 
 class _FakePort:
@@ -128,3 +132,53 @@ def test_discovery_probes_directly_on_scanned_port() -> None:
     result = HardwareDiscovery._do_probe(ports, _FakeProber(), "feetech")
 
     assert result == [SerialInterface(dev="/dev/cu.usbmodem123", bus_type="feetech", motor_ids=(1, 2, 3))]
+
+
+def test_scan_cameras_uses_macos_probe_on_darwin() -> None:
+    fake_cv2 = object()
+    fake_result = [VideoInterface(dev="0", width=1920, height=1080, fps=30)]
+    with (
+        patch.dict("sys.modules", {"cv2": fake_cv2}),
+        patch("roboclaw.embodied.embodiment.hardware.scan.sys.platform", "darwin"),
+        patch("roboclaw.embodied.embodiment.hardware.scan.suppress_stderr", return_value=123),
+        patch("roboclaw.embodied.embodiment.hardware.scan.restore_stderr"),
+        patch("roboclaw.embodied.embodiment.hardware.scan._probe_cameras_mac", return_value=fake_result) as mac_probe,
+        patch("roboclaw.embodied.embodiment.hardware.scan._read_symlink_map") as read_symlink_map,
+    ):
+        assert scan_cameras() == fake_result
+
+    mac_probe.assert_called_once_with(fake_cv2)
+    read_symlink_map.assert_not_called()
+
+
+def test_capture_camera_frame_uses_integer_source_for_macos_indices(tmp_path) -> None:
+    writes: list[tuple[str, object]] = []
+    calls: list[tuple[str | int, object | None]] = []
+
+    class _FakeCapture:
+        def isOpened(self) -> bool:
+            return True
+
+        def read(self):
+            return True, object()
+
+        def release(self) -> None:
+            return None
+
+    def _video_capture(source, backend=None):
+        calls.append((source, backend))
+        return _FakeCapture()
+
+    fake_cv2 = SimpleNamespace(
+        CAP_AVFOUNDATION=99,
+        VideoCapture=_video_capture,
+        imwrite=lambda path, frame: writes.append((path, frame)) or True,
+    )
+
+    camera = VideoInterface(dev="2", width=640, height=480, fps=30)
+    with patch("roboclaw.embodied.embodiment.hardware.scan.sys.platform", "darwin"):
+        preview = _capture_camera_frame(fake_cv2, camera, tmp_path, "preview-key")
+
+    assert preview is not None
+    assert calls == [(2, 99)]
+    assert writes and writes[0][0].endswith("preview-key.jpg")
