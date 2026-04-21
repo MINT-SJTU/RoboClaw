@@ -323,15 +323,8 @@ class DatasetCatalog:
                 include_videos=include_videos,
                 force=force,
             )
-            self._import_jobs[job_id] = DatasetImportJobRef(
-                job_id=job_id,
-                dataset_id=dataset_id,
-                status="completed",
-                include_videos=include_videos,
-                message="Dataset imported",
-                dataset=dataset,
-            )
         except Exception as exc:
+            logger.exception("Dataset import failed for {}", dataset_id)
             self._import_jobs[job_id] = DatasetImportJobRef(
                 job_id=job_id,
                 dataset_id=dataset_id,
@@ -339,6 +332,15 @@ class DatasetCatalog:
                 include_videos=include_videos,
                 message=str(exc),
             )
+            return
+        self._import_jobs[job_id] = DatasetImportJobRef(
+            job_id=job_id,
+            dataset_id=dataset_id,
+            status="completed",
+            include_videos=include_videos,
+            message="Dataset imported",
+            dataset=dataset,
+        )
 
     def import_remote_dataset(
         self,
@@ -462,8 +464,6 @@ class DatasetCatalog:
 
     def _stamp_source_dataset(self, dataset_dir: Path, source_dataset: str) -> None:
         info_path = dataset_dir / "meta" / "info.json"
-        if not info_path.exists():
-            return
         info = json.loads(info_path.read_text(encoding="utf-8"))
         if info.get("source_dataset") == source_dataset:
             return

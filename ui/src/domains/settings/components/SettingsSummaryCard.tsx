@@ -13,7 +13,7 @@ interface SettingsSummaryCardProps {
   actionLabel: string
   status: string
   metrics: SummaryMetric[]
-  accent: 'ac' | 'yl' | 'gn'
+  accent: 'ac' | 'yl' | 'gn' | 'rd'
   icon: ReactNode
 }
 
@@ -21,12 +21,14 @@ const ACCENT_STYLES = {
   ac: 'border-ac/25 shadow-glow-ac',
   yl: 'border-yl/25 shadow-[0_18px_45px_-28px_rgba(217,163,47,0.45)]',
   gn: 'border-gn/25 shadow-[0_18px_45px_-28px_rgba(63,160,95,0.45)]',
+  rd: 'border-rd/25 shadow-[0_18px_45px_-28px_rgba(200,58,58,0.45)]',
 }
 
 const STATUS_STYLES = {
   ac: 'bg-ac/10 text-ac',
   yl: 'bg-yl/10 text-yl',
   gn: 'bg-gn/10 text-gn',
+  rd: 'bg-rd/10 text-rd',
 }
 
 export default function SettingsSummaryCard({

@@ -53,14 +53,6 @@ export default function RecoveryCenterPage() {
   useEffect(() => {
     void fetchFaults()
     void fetchGuides()
-
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void fetchFaults()
-      }
-    }, 5000)
-
-    return () => window.clearInterval(timer)
   }, [fetchFaults, fetchGuides])
 
   const visibleFaults = useMemo(

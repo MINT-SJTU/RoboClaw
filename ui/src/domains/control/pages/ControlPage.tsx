@@ -72,6 +72,17 @@ function ActionBtn({
   )
 }
 
+function StatusDot({ color, label }: { color: 'ac' | 'gn' | 'yl'; label: string }) {
+  const dotCls: Record<string, string> = { ac: 'bg-ac', gn: 'bg-gn', yl: 'bg-yl' }
+  const textCls: Record<string, string> = { ac: 'text-ac', gn: 'text-gn', yl: 'text-yl' }
+  return (
+    <div className={`mt-2 flex items-center gap-2 text-xs font-medium ${textCls[color]}`}>
+      <span className={`w-2 h-2 rounded-full animate-pulse ${dotCls[color]}`} />
+      {label}
+    </div>
+  )
+}
+
 export default function ControlPage() {
   const session = useSessionStore((state) => state.session)
   const loading = useSessionStore((state) => state.loading)
@@ -147,8 +158,6 @@ export default function ControlPage() {
     const pollInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         void fetchHardwareStatus()
-        void fetchSessionStatus()
-        void loadDatasets()
       }
     }, 5000)
     return () => clearInterval(pollInterval)
@@ -508,36 +517,16 @@ export default function ControlPage() {
                 </div>
               </div>
             )}
-            {recordStopping && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
-                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-                {t('stoppingRecord')}
-              </div>
-            )}
+            {recordStopping && <StatusDot color="yl" label={t('stoppingRecord')} />}
 
-            {/* Inference status */}
             {state === 'preparing' && mode === 'infer' && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
-                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-                {prepareStage || t('statePreparing')}
-              </div>
+              <StatusDot color="yl" label={prepareStage || t('statePreparing')} />
             )}
-            {state === 'inferring' && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-ac font-medium">
-                <span className="w-2 h-2 rounded-full bg-ac animate-pulse" />
-                {t('stateInferring')}
-              </div>
-            )}
-            {inferStopping && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
-                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-                {t('stoppingInference')}
-              </div>
-            )}
+            {state === 'inferring' && <StatusDot color="ac" label={t('stateInferring')} />}
+            {inferStopping && <StatusDot color="yl" label={t('stoppingInference')} />}
           </div>
         </div>
 
-        {/* Second row: Replay */}
         <div className="flex gap-3 max-[900px]:flex-col">
           <div className="flex-1 bg-sf rounded-lg p-3.5 shadow-card animate-slide-up stagger-4">
             <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest mb-3">{t('replay')}</h3>
@@ -582,23 +571,10 @@ export default function ControlPage() {
               </div>
             </div>
             {state === 'preparing' && owner === 'replaying' && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
-                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-                {prepareStage || t('statePreparing')}
-              </div>
+              <StatusDot color="yl" label={prepareStage || t('statePreparing')} />
             )}
-            {state === 'replaying' && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-gn font-medium">
-                <span className="w-2 h-2 rounded-full bg-gn animate-pulse" />
-                {t('stateReplaying')}
-              </div>
-            )}
-            {replayStopping && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-yl font-medium">
-                <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />
-                {t('stoppingReplay')}
-              </div>
-            )}
+            {state === 'replaying' && <StatusDot color="gn" label={t('stateReplaying')} />}
+            {replayStopping && <StatusDot color="yl" label={t('stoppingReplay')} />}
           </div>
         </div>
 

@@ -68,9 +68,9 @@ export default function AppShell() {
   }, [connect, disconnect])
 
   useEffect(() => {
-    fetchHardwareStatus()
+    void fetchHardwareStatus()
     void fetchRecoveryFaults()
-  }, [fetchHardwareStatus, fetchRecoveryFaults, location.pathname])
+  }, [fetchHardwareStatus, fetchRecoveryFaults])
 
   const navItems = [
     { path: '/control', label: t('controlCenter') },

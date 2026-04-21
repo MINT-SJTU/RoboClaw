@@ -548,8 +548,7 @@ def _open_camera_capture(cv2, source: str | int):
     if isinstance(source, str) and source.isdigit():
         source = int(source)
     if sys.platform == "darwin" and isinstance(source, int):
-        backend = getattr(cv2, "CAP_AVFOUNDATION", 0)
-        return cv2.VideoCapture(source, backend)
+        return cv2.VideoCapture(source, cv2.CAP_AVFOUNDATION)
     return cv2.VideoCapture(source)
 
 
@@ -568,34 +567,27 @@ def _list_macos_camera_inventory() -> list[dict[str, str]]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     if result.returncode != 0 or not result.stdout.strip():
-        return []
+        return _list_macos_camera_inventory_fallback()
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return []
-    if result.returncode == 0 and result.stdout.strip():
+        return _list_macos_camera_inventory_fallback()
+    cameras: list[dict[str, str]] = []
+    for item in payload:
+        name = str(item.get("name", "")).strip()
+        unique_id = str(item.get("unique_id", "")).strip()
         try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            payload = []
-        cameras: list[dict[str, str]] = []
-        for item in payload:
-            name = str(item.get("name", "")).strip()
-            unique_id = str(item.get("unique_id", "")).strip()
-            try:
-                index = int(item.get("index", -1))
-            except (TypeError, ValueError):
-                index = -1
-            if index < 0 or (not name and not unique_id):
-                continue
-            cameras.append({
-                "index": index,
-                "name": name or unique_id or f"Camera {index}",
-                "unique_id": unique_id or name or f"camera-index:{index}",
-            })
-        if cameras:
-            return cameras
-    return _list_macos_camera_inventory_fallback()
+            index = int(item.get("index", -1))
+        except (TypeError, ValueError):
+            index = -1
+        if index < 0 or (not name and not unique_id):
+            continue
+        cameras.append({
+            "index": index,
+            "name": name or unique_id or f"Camera {index}",
+            "unique_id": unique_id or name or f"camera-index:{index}",
+        })
+    return cameras or _list_macos_camera_inventory_fallback()
 
 
 def _list_macos_camera_inventory_fallback() -> list[dict[str, str]]:

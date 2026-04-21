@@ -186,13 +186,13 @@ class TestHardwareStatus:
             }],
         }
 
-    def test_recovery_restart_dashboard_schedules_process_restart(self, client):
+    def test_recovery_restart_dashboard_schedules_process_restart(self, client, app):
         with patch.object(recovery_routes, "schedule_dashboard_restart") as restart:
             resp = client.post("/api/recovery/restart-dashboard")
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "restarting"}
-        restart.assert_called_once_with()
+        restart.assert_called_once_with(app)
 
     def test_hardware_previews_return_alias_keyed_urls(self, client, app):
         app.state.embodied_service.bind_camera("top", VideoInterface(dev="/dev/video0"))

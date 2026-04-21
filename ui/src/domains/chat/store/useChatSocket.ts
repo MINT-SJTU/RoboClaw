@@ -6,7 +6,6 @@ import {
   normalizeHistoryMessage,
 } from '@/domains/chat/model/messages'
 import { useSessionStore } from '@/domains/session/store/useSessionStore'
-import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
 import { useHubTransferStore } from '@/domains/hub/store/useHubTransferStore'
 import { useRecoveryStore } from '@/domains/recovery/store/useRecoveryStore'
 
@@ -93,7 +92,6 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
 
       if (data.type?.startsWith('dashboard.')) {
         useSessionStore.getState().handleDashboardEvent(data)
-        useHardwareStore.getState().handleDashboardEvent(data)
         useRecoveryStore.getState().handleDashboardEvent(data)
         useHubTransferStore.getState().handleDashboardEvent(data)
         return

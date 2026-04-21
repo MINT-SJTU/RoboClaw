@@ -99,32 +99,27 @@ const defaultSession: SessionStatus = {
   prepare_stage: '',
 }
 
-export const useSessionStore = create<SessionStore>((set, get) => ({
-  session: { ...defaultSession },
-  loading: null,
-
-  doDismissError: async () => {
-    await postJson(`${SESSION}/dismiss-error`)
-  },
-
-  fetchSessionStatus: async () => {
-    const data = await api(`${SESSION}/status`)
-    set({ session: data })
-  },
-
-  doTeleopStart: async (params) => {
-    set({ loading: 'teleop' })
+export const useSessionStore = create<SessionStore>((set, get) => {
+  const runStart = async <T extends object | void>(
+    kind: Exclude<SessionLoading, `${string}-stop`>,
+    url: string,
+    body?: T,
+  ) => {
+    set({ loading: kind })
     try {
-      await postJson(`${TELEOP}/start`, params || {})
+      await postJson(url, body)
     } finally {
       set({ loading: null })
     }
-  },
+  }
 
-  doTeleopStop: async () => {
-    set({ loading: 'teleop-stop' })
+  const runStop = async (
+    kind: Exclude<SessionLoading, `${string}-stop`>,
+    url: string,
+  ) => {
+    set({ loading: `${kind}-stop` as SessionLoading })
     try {
-      await postJson(`${TELEOP}/stop`)
+      await postJson(url)
     } finally {
       try {
         await get().fetchSessionStatus()
@@ -132,109 +127,51 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         set({ loading: null })
       }
     }
-  },
+  }
 
-  doRecordStart: async (params) => {
-    set({ loading: 'record' })
-    try {
-      await postJson(`${RECORD}/start`, params)
-    } finally {
-      set({ loading: null })
-    }
-  },
+  return {
+    session: { ...defaultSession },
+    loading: null,
 
-  doRecordStop: async () => {
-    set({ loading: 'record-stop' })
-    try {
-      await postJson(`${RECORD}/stop`)
-    } finally {
-      try {
-        await get().fetchSessionStatus()
-      } finally {
-        set({ loading: null })
+    doDismissError: async () => {
+      await postJson(`${SESSION}/dismiss-error`)
+    },
+
+    fetchSessionStatus: async () => {
+      const data = await api(`${SESSION}/status`)
+      set({ session: data })
+    },
+
+    doTeleopStart: (params) => runStart('teleop', `${TELEOP}/start`, params || {}),
+    doTeleopStop: () => runStop('teleop', `${TELEOP}/stop`),
+
+    doRecordStart: (params) => runStart('record', `${RECORD}/start`, params),
+    doRecordStop: () => runStop('record', `${RECORD}/stop`),
+
+    doSaveEpisode: async () => {
+      await postJson(`${RECORD}/episode/save`)
+    },
+
+    doDiscardEpisode: async () => {
+      await postJson(`${RECORD}/episode/discard`)
+    },
+
+    doSkipReset: async () => {
+      await postJson(`${RECORD}/episode/skip-reset`)
+    },
+
+    doReplayStart: (params) => runStart('replay', `${REPLAY}/start`, params),
+    doReplayStop: () => runStop('replay', `${REPLAY}/stop`),
+
+    doInferStart: (params) => runStart('infer', `${INFER}/start`, params),
+    doInferStop: () => runStop('infer', `${INFER}/stop`),
+
+    handleDashboardEvent: (event) => {
+      if (event.type !== 'dashboard.session.state_changed') {
+        return
       }
-    }
-  },
-
-  doSaveEpisode: async () => {
-    await postJson(`${RECORD}/episode/save`)
-  },
-
-  doDiscardEpisode: async () => {
-    await postJson(`${RECORD}/episode/discard`)
-  },
-
-  doSkipReset: async () => {
-    await postJson(`${RECORD}/episode/skip-reset`)
-  },
-
-  doReplayStart: async (params) => {
-    set({ loading: 'replay' })
-    try {
-      await postJson(`${REPLAY}/start`, params)
-    } finally {
-      set({ loading: null })
-    }
-  },
-
-  doReplayStop: async () => {
-    set({ loading: 'replay-stop' })
-    try {
-      await postJson(`${REPLAY}/stop`)
-    } finally {
-      try {
-        await get().fetchSessionStatus()
-      } finally {
-        set({ loading: null })
-      }
-    }
-  },
-
-  doInferStart: async (params) => {
-    set({ loading: 'infer' })
-    try {
-      await postJson(`${INFER}/start`, params)
-    } finally {
-      set({ loading: null })
-    }
-  },
-
-  doInferStop: async () => {
-    set({ loading: 'infer-stop' })
-    try {
-      await postJson(`${INFER}/stop`)
-    } finally {
-      try {
-        await get().fetchSessionStatus()
-      } finally {
-        set({ loading: null })
-      }
-    }
-  },
-
-  handleDashboardEvent: (event) => {
-    if (event.type !== 'dashboard.session.state_changed') {
-      return
-    }
-
-    set({
-      session: {
-        state: event.state || 'idle',
-        episode_phase: event.episode_phase || '',
-        saved_episodes: event.saved_episodes ?? 0,
-        current_episode: event.current_episode ?? 0,
-        target_episodes: event.target_episodes ?? 0,
-        total_frames: event.total_frames ?? 0,
-        elapsed_seconds: event.elapsed_seconds ?? 0,
-        dataset: event.dataset || null,
-        rerun_web_port: event.rerun_web_port || 0,
-        error: event.error || '',
-        calibration_step: event.calibration_step || '',
-        calibration_arm: event.calibration_arm || '',
-        calibration_positions: event.calibration_positions || null,
-        embodiment_owner: event.embodiment_owner || '',
-        prepare_stage: event.prepare_stage || '',
-      },
-    })
-  },
-}))
+      const { type: _type, ...payload } = event
+      set({ session: { ...defaultSession, ...payload } })
+    },
+  }
+})

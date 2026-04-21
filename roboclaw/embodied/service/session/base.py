@@ -101,7 +101,6 @@ class Session:
         self._stopped = True
         await self._enter_stopping_state()
 
-        # Step 1: Send ESC via stdin
         if self._process.stdin:
             try:
                 self._process.stdin.write(b"\x1b\n")
@@ -109,7 +108,6 @@ class Session:
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
-        # Wait for exit
         try:
             await asyncio.wait_for(self._process.wait(), timeout=2.0)
             await self._cleanup()
@@ -117,7 +115,6 @@ class Session:
         except asyncio.TimeoutError:
             pass
 
-        # Step 2: SIGINT
         try:
             self._process.send_signal(signal.SIGINT)
         except ProcessLookupError:
@@ -131,7 +128,6 @@ class Session:
         except asyncio.TimeoutError:
             pass
 
-        # Step 3: kill
         self._process.kill()
         await self._process.wait()
         await self._cleanup()

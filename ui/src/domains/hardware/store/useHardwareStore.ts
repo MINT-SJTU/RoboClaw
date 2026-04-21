@@ -52,7 +52,6 @@ interface HardwareStore {
   networkInfo: NetworkInfo | null
   fetchHardwareStatus: () => Promise<void>
   fetchNetworkInfo: () => Promise<void>
-  handleDashboardEvent: (event: any) => void
 }
 
 export const useHardwareStore = create<HardwareStore>((set) => ({
@@ -73,9 +72,5 @@ export const useHardwareStore = create<HardwareStore>((set) => ({
       throw new Error(`Failed to fetch network info: ${res.status}`)
     }
     set({ networkInfo: await res.json() })
-  },
-
-  handleDashboardEvent: (event) => {
-    void event
   },
 }))

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { api, postJson } from '@/shared/api/client'
 import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
 
 const RECOVERY = '/api/recovery'
@@ -39,7 +40,7 @@ async function waitForDashboardRecovery(timeoutMs: number = 30000): Promise<void
         return
       }
     } catch {
-      // Dashboard is still restarting. Keep polling until timeout.
+      // Dashboard still restarting; keep polling until timeout.
     }
   }
   throw new Error('Dashboard restart timed out')
@@ -52,30 +53,18 @@ export const useRecoveryStore = create<RecoveryStore>((set) => ({
   restarting: false,
 
   fetchFaults: async () => {
-    const response = await fetch(`${RECOVERY}/faults`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch recovery faults: ${response.status}`)
-    }
-    const data = await response.json()
+    const data = await api(`${RECOVERY}/faults`)
     set({ faults: Array.isArray(data.faults) ? data.faults : [] })
   },
 
   fetchGuides: async () => {
-    const response = await fetch(`${RECOVERY}/guides`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch recovery guides: ${response.status}`)
-    }
-    set({ guides: await response.json() })
+    set({ guides: await api(`${RECOVERY}/guides`) })
   },
 
   recheckHardware: async () => {
     set({ rechecking: true })
     try {
-      const response = await fetch(`${RECOVERY}/recheck`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error(`Failed to recheck hardware: ${response.status}`)
-      }
-      const data = await response.json()
+      const data = await postJson(`${RECOVERY}/recheck`)
       const faults = Array.isArray(data.faults) ? data.faults : []
       set({ faults })
       await useHardwareStore.getState().fetchHardwareStatus()
@@ -88,10 +77,7 @@ export const useRecoveryStore = create<RecoveryStore>((set) => ({
   restartDashboard: async () => {
     set({ restarting: true })
     try {
-      const response = await fetch(`${RECOVERY}/restart-dashboard`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error(`Failed to restart dashboard: ${response.status}`)
-      }
+      await postJson(`${RECOVERY}/restart-dashboard`)
       await waitForDashboardRecovery()
     } finally {
       set({ restarting: false })

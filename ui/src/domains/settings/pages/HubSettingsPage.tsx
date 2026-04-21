@@ -43,7 +43,7 @@ export default function HubSettingsPage() {
         setHfProxy(data.proxy || '')
       } catch (error) {
         if (!cancelled) {
-          console.warn('Failed to load HF config', error)
+          setHfError(error instanceof Error ? error.message : String(error))
         }
       }
     }

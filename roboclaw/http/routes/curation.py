@@ -1,9 +1,9 @@
 """FastAPI routes for the curation quality/prototype/annotation pipeline.
 
-This module is a thin HTTP translation layer.  Business logic lives in
+Thin HTTP translation layer. Business logic lives in
 ``roboclaw.data.curation.service.CurationService``, serialisation helpers in
 ``roboclaw.data.curation.serializers``, and HuggingFace import logic in
-``roboclaw.data.curation.hf_import``.
+``roboclaw.data.datasets.DatasetCatalog``.
 """
 
 from __future__ import annotations

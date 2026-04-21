@@ -48,12 +48,14 @@ export default function SettingsOverviewPage() {
   const hardwareStatus = useHardwareStore((state) => state.hardwareStatus)
   const [providerStatus, setProviderStatus] = useState<ProviderStatusResponse | null>(null)
   const [hubSummary, setHubSummary] = useState({ endpoint: '', maskedToken: '', proxy: '' })
+  const [providerError, setProviderError] = useState('')
+  const [hubError, setHubError] = useState('')
 
   useEffect(() => {
     loadDevices()
     fetchHardwareStatus()
     fetchProviderStatus().then(setProviderStatus).catch((error) => {
-      console.warn('Failed to load provider summary', error)
+      setProviderError(error instanceof Error ? error.message : String(error))
     })
     fetchHfConfig().then((config) => {
       setHubSummary({
@@ -62,7 +64,7 @@ export default function SettingsOverviewPage() {
         proxy: config.proxy || '',
       })
     }).catch((error) => {
-      console.warn('Failed to load HF summary', error)
+      setHubError(error instanceof Error ? error.message : String(error))
     })
   }, [fetchHardwareStatus, loadDevices])
 
@@ -105,8 +107,8 @@ export default function SettingsOverviewPage() {
           title={t('settingsProvider')}
           description={t('settingsProviderDesc')}
           actionLabel={t('manageProvider')}
-          status={providerStatus?.active_provider ? t('settingsStatusReady') : t('settingsNotConfigured')}
-          accent={providerStatus?.active_provider ? 'ac' : 'yl'}
+          status={providerError ? providerError : (providerStatus?.active_provider ? t('settingsStatusReady') : t('settingsNotConfigured'))}
+          accent={providerError ? 'rd' : (providerStatus?.active_provider ? 'ac' : 'yl')}
           icon={<ProviderIcon />}
           metrics={[
             { label: t('currentProvider'), value: providerLabel },
@@ -120,8 +122,8 @@ export default function SettingsOverviewPage() {
           title={t('hfConfig')}
           description={t('settingsHubDesc')}
           actionLabel={t('manageHub')}
-          status={hubSummary.maskedToken ? t('saved') : t('settingsNotConfigured')}
-          accent={hubSummary.maskedToken ? 'gn' : 'ac'}
+          status={hubError ? hubError : (hubSummary.maskedToken ? t('saved') : t('settingsNotConfigured'))}
+          accent={hubError ? 'rd' : (hubSummary.maskedToken ? 'gn' : 'ac')}
           icon={<HubIcon />}
           metrics={[
             { label: t('hfEndpoint'), value: hubEndpointLabel },

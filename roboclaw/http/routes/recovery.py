@@ -14,15 +14,19 @@ from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
 from roboclaw.http.recovery import get_recovery_guides_json
 
 
-def schedule_dashboard_restart(delay_s: float = 0.5) -> None:
-    """Restart the current dashboard process in-place after a short delay."""
+def schedule_dashboard_restart(app: FastAPI, delay_s: float = 0.5) -> None:
+    """Restart the dashboard process in-place after *delay_s* seconds.
+
+    The task reference is retained on ``app.state`` so the event loop
+    cannot garbage-collect it before execv fires.
+    """
 
     async def _restart() -> None:
         await asyncio.sleep(delay_s)
         logger.info("Restarting dashboard process")
         os.execv(sys.executable, [sys.executable, "-m", "roboclaw", *sys.argv[1:]])
 
-    asyncio.create_task(_restart())
+    app.state.restart_task = asyncio.create_task(_restart())
 
 
 def register_recovery_routes(app: FastAPI) -> None:
@@ -39,10 +43,10 @@ def register_recovery_routes(app: FastAPI) -> None:
     @app.post("/api/recovery/recheck")
     async def recovery_recheck() -> dict[str, Any]:
         monitor: HardwareMonitor = app.state.hardware_monitor
-        faults = monitor.check_hardware()
+        faults = await asyncio.to_thread(monitor.check_hardware)
         return {"faults": [fault.to_dict() for fault in faults]}
 
     @app.post("/api/recovery/restart-dashboard")
     async def recovery_restart_dashboard() -> dict[str, str]:
-        schedule_dashboard_restart()
+        schedule_dashboard_restart(app)
         return {"status": "restarting"}
