@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
 import { useI18n } from '@/i18n'
 import type { SessionState } from '@/domains/session/store/useSessionStore'
+import { ServoPollingToggle } from '@/domains/hardware/components/ServoPollingToggle'
 
 const MOTOR_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper']
 const MAX_POINTS = 60
@@ -121,6 +123,7 @@ function TemperatureBadges({ temperatures, armNames }: {
 
 export function ServoPanel({ state }: { state: SessionState }) {
   const { t } = useI18n()
+  const servoPollingEnabled = useHardwareStore((store) => store.servoPollingEnabled)
   const [histories, setHistories] = useState<Record<string, ServoHistory>>({})
   const [temperatures, setTemperatures] = useState<Record<string, Record<string, number>>>({})
   const busy = state === 'teleoperating'
@@ -131,7 +134,7 @@ export function ServoPanel({ state }: { state: SessionState }) {
     || state === 'stopping'
 
   const poll = useCallback(async () => {
-    if (busy) return
+    if (busy || !servoPollingEnabled) return
     const r = await fetch('/api/hardware/servos')
     const data = await r.json()
     if (data.error || !data.arms) return
@@ -157,27 +160,50 @@ export function ServoPanel({ state }: { state: SessionState }) {
       if (typeof temps === 'object' && temps) nextTemps[alias] = temps
     }
     setTemperatures(nextTemps)
-  }, [busy])
+  }, [busy, servoPollingEnabled])
 
   useEffect(() => {
-    if (busy) return
+    if (busy || !servoPollingEnabled) return
     poll()
     const timer = setInterval(poll, 500)
     return () => clearInterval(timer)
-  }, [busy, poll])
+  }, [busy, poll, servoPollingEnabled])
 
   const armNames = Object.keys(histories)
+  if (!servoPollingEnabled) {
+    return (
+      <div className="bg-sf rounded-lg p-4 shadow-card space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('servoPositions')}</h3>
+          <ServoPollingToggle />
+        </div>
+        <div className="rounded-lg border border-rd/20 bg-rd/5 px-3 py-2 text-sm text-rd">
+          {t('servoPollingDisabled')}
+        </div>
+      </div>
+    )
+  }
+
   if (!armNames.length && !busy) {
     return (
-      <div className="bg-sf rounded-lg p-4 shadow-card flex items-center justify-center">
-        <div className="text-sm text-tx3">{t('servoLoading')}</div>
+      <div className="bg-sf rounded-lg p-4 shadow-card space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('servoPositions')}</h3>
+          <ServoPollingToggle />
+        </div>
+        <div className="flex items-center justify-center">
+          <div className="text-sm text-tx3">{t('servoLoading')}</div>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="bg-sf rounded-lg p-4 shadow-card space-y-3">
-      <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('servoPositions')}</h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('servoPositions')}</h3>
+        <ServoPollingToggle />
+      </div>
       {busy && (
         <div className="text-xs text-yl flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-yl animate-pulse" />

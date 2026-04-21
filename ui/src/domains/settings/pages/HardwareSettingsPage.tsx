@@ -10,6 +10,7 @@ import PermissionPanel from '@/domains/hardware/setup/components/PermissionPanel
 import { TemperatureHeatMap } from '@/domains/hardware/components/TemperatureHeatMap'
 import { CalibrationPanel } from '@/domains/hardware/components/CalibrationPanel'
 import AutoCalibrationPanel from '@/domains/hardware/components/AutoCalibrationPanel'
+import { ServoPollingToggle } from '@/domains/hardware/components/ServoPollingToggle'
 import SettingsPageFrame from '@/domains/settings/components/SettingsPageFrame'
 
 function SummaryTile({
@@ -218,11 +219,14 @@ export default function HardwareSettingsPage() {
             )}
 
             <section className="rounded-2xl border border-bd/30 bg-sf p-5 shadow-card">
-              <div className="mb-4">
-                <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">
-                  {t('servoTemperature')}
-                </h3>
-                <p className="mt-2 text-sm text-tx3">{t('settingsTemperatureDesc')}</p>
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">
+                    {t('servoTemperature')}
+                  </h3>
+                  <p className="mt-2 text-sm text-tx3">{t('settingsTemperatureDesc')}</p>
+                </div>
+                <ServoPollingToggle />
               </div>
               <TemperatureHeatMap />
             </section>

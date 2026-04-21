@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
 import { useI18n } from '@/i18n'
 
 const MOTOR_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper']
@@ -103,10 +104,12 @@ function ArmTemperatureCard({ alias, temps }: {
 
 export function TemperatureHeatMap() {
   const { t } = useI18n()
+  const servoPollingEnabled = useHardwareStore((state) => state.servoPollingEnabled)
   const [temperatures, setTemperatures] = useState<Record<string, Record<string, number>>>({})
   const [loading, setLoading] = useState(true)
 
   const poll = useCallback(async () => {
+    if (!servoPollingEnabled) return
     const r = await fetch('/api/hardware/servos')
     const data = await r.json()
     if (data.error || !data.arms) return
@@ -117,15 +120,25 @@ export function TemperatureHeatMap() {
     }
     setTemperatures(nextTemps)
     setLoading(false)
-  }, [])
+  }, [servoPollingEnabled])
 
   useEffect(() => {
+    if (!servoPollingEnabled) return
+    setLoading(true)
     poll()
     const timer = setInterval(poll, 2000)
     return () => clearInterval(timer)
-  }, [poll])
+  }, [poll, servoPollingEnabled])
 
   const armNames = Object.keys(temperatures)
+
+  if (!servoPollingEnabled) {
+    return (
+      <div className="rounded-lg border border-rd/20 bg-rd/5 px-3 py-2 text-sm text-rd">
+        {t('servoPollingDisabled')}
+      </div>
+    )
+  }
 
   if (loading) {
     return (
@@ -133,7 +146,11 @@ export function TemperatureHeatMap() {
     )
   }
 
-  if (armNames.length === 0) return null
+  if (armNames.length === 0) {
+    return (
+      <div className="text-sm text-tx3 text-center py-6">{t('servoNoData')}</div>
+    )
+  }
 
   return (
     <div className="space-y-3">
