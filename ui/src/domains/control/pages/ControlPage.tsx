@@ -7,7 +7,6 @@ import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
 import { useI18n } from '@/i18n'
 import { CameraPreviewPanel } from '@/domains/control/components/CameraPreviewPanel'
 import { ServoPanel } from '@/domains/hardware/components/ServoPanel'
-import { LossCurvePanel } from '@/domains/training/components/LossCurvePanel'
 
 const blockedCapability: OperationCapability = { ready: false, missing: [] }
 
@@ -578,8 +577,8 @@ export default function ControlPage() {
           </div>
         </div>
 
-        {/* Bottom: Camera + Servo monitoring + Loss curve */}
-        <div className="grid grid-cols-3 gap-3 min-h-[240px] max-[1200px]:grid-cols-2 max-[900px]:grid-cols-1">
+        {/* Bottom: Camera + Servo monitoring */}
+        <div className="grid grid-cols-2 gap-3 min-h-[240px] max-[900px]:grid-cols-1">
           {camerasExist ? (
             <CameraPreviewPanel cameras={hwStatus!.cameras} busy={busy} />
           ) : (
@@ -588,7 +587,6 @@ export default function ControlPage() {
             </div>
           )}
           <ServoPanel state={state} />
-          <LossCurvePanel />
         </div>
       </div>
     </div>

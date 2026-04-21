@@ -81,7 +81,7 @@ export function LossCurvePanel() {
         />
       </label>
 
-      <div className="mt-4 flex-1 min-h-[240px] rounded-xl border border-dashed border-bd2/80 bg-gradient-to-br from-sf2/80 via-white to-ac/5 p-4">
+      <div className="mt-4 h-[420px] rounded-xl border border-dashed border-bd2/80 bg-gradient-to-br from-sf2/80 via-white to-ac/5 p-4 max-[900px]:h-[340px]">
         <div className="h-full flex gap-3">
           {/* Y-axis label */}
           <div className="w-8 shrink-0 flex items-center justify-center">
