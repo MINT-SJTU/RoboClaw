@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from loguru import logger
 
 from roboclaw.embodied.board.channels import CH_FAULT_DETECTED, CH_FAULT_RESOLVED
+from roboclaw.embodied.calibration.store import CalibrationStore
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
 from roboclaw.embodied.embodiment.manifest.binding import ArmBinding, CameraBinding
 
@@ -77,14 +78,30 @@ class CameraStatus:
         return asdict(self)
 
 
+_calibration_store = CalibrationStore()
+
+
+def _has_profile_on_disk(arm: ArmBinding) -> bool:
+    try:
+        return _calibration_store.has_profile(arm)
+    except RuntimeError:
+        return False
+
+
 def check_arm_status(arm: ArmBinding) -> ArmStatus:
-    """Check a single arm's connectivity and calibration state."""
+    """Check a single arm's connectivity and calibration state.
+
+    `arm.calibrated` comes from the manifest flag, which is set once when a
+    calibration succeeds and never auto-cleared. If the on-disk calibration JSON
+    has since been deleted, downgrade to `False` so the UI reflects reality.
+    """
+    calibrated = arm.calibrated and _has_profile_on_disk(arm)
     return ArmStatus(
         alias=arm.alias,
         arm_type=arm.arm_type,
         role=arm.role.value,
         connected=arm.connected,
-        calibrated=arm.calibrated,
+        calibrated=calibrated,
     )
 
 
