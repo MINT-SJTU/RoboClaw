@@ -1,1 +1,0 @@
-/data/home/yanzezhang/Documents/roboClaw/RoboClaw_Nav/robotics/ros_ws/build/turtlebot3_msgs/rosidl_generator_c/turtlebot3_msgs/msg/detail/sensor_state__struct.h

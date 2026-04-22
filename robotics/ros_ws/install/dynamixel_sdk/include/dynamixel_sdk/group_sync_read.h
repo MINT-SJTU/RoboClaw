@@ -1,1 +1,0 @@
-/data/home/yanzezhang/Documents/roboClaw/RoboClaw_Nav/robotics/ros_ws/src/DynamixelSDK/ros/dynamixel_sdk/include/dynamixel_sdk/group_sync_read.h

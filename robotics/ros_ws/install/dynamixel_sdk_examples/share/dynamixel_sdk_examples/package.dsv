@@ -1,8 +1,0 @@
-source;share/dynamixel_sdk_examples/hook/cmake_prefix_path.ps1
-source;share/dynamixel_sdk_examples/hook/cmake_prefix_path.dsv
-source;share/dynamixel_sdk_examples/hook/cmake_prefix_path.sh
-source;share/dynamixel_sdk_examples/local_setup.bash
-source;share/dynamixel_sdk_examples/local_setup.dsv
-source;share/dynamixel_sdk_examples/local_setup.ps1
-source;share/dynamixel_sdk_examples/local_setup.sh
-source;share/dynamixel_sdk_examples/local_setup.zsh

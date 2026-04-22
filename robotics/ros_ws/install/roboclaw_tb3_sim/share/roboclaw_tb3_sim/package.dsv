@@ -1,8 +1,0 @@
-source;share/roboclaw_tb3_sim/hook/cmake_prefix_path.ps1
-source;share/roboclaw_tb3_sim/hook/cmake_prefix_path.dsv
-source;share/roboclaw_tb3_sim/hook/cmake_prefix_path.sh
-source;share/roboclaw_tb3_sim/local_setup.bash
-source;share/roboclaw_tb3_sim/local_setup.dsv
-source;share/roboclaw_tb3_sim/local_setup.ps1
-source;share/roboclaw_tb3_sim/local_setup.sh
-source;share/roboclaw_tb3_sim/local_setup.zsh

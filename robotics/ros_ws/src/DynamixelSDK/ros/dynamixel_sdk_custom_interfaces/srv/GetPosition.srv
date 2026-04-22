@@ -1,6 +1,0 @@
-# Constants
-# Request
-uint8 id
----
-# Response
-int32 position

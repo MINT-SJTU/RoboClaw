@@ -1,1 +1,0 @@
-/data/home/yanzezhang/Documents/roboClaw/RoboClaw_Nav/robotics/ros_ws/src/DynamixelSDK/ros/dynamixel_sdk_examples/src/read_write_node.py

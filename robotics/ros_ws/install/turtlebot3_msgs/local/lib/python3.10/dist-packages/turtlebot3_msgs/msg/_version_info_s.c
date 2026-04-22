@@ -1,1 +1,0 @@
-/data/home/yanzezhang/Documents/roboClaw/RoboClaw_Nav/robotics/ros_ws/build/turtlebot3_msgs/rosidl_generator_py/turtlebot3_msgs/msg/_version_info_s.c

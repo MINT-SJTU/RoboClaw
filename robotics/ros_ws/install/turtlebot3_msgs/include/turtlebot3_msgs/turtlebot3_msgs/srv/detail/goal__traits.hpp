@@ -1,1 +1,0 @@
-/data/home/yanzezhang/Documents/roboClaw/RoboClaw_Nav/robotics/ros_ws/build/turtlebot3_msgs/rosidl_generator_cpp/turtlebot3_msgs/srv/detail/goal__traits.hpp

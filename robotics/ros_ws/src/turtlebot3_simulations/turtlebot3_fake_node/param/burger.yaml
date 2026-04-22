@@ -1,9 +1,0 @@
-turtlebot3_fake_node:
-  ros__parameters:
-    wheels:
-      separation: 0.160
-      radius: 0.033
-
-    joint_states_frame: "base_footprint"
-    odom_frame: "odom"
-    base_frame: "base_footprint"
