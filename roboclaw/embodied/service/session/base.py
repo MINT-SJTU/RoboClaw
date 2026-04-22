@@ -128,8 +128,14 @@ class Session:
         except asyncio.TimeoutError:
             pass
 
-        self._process.kill()
-        await self._process.wait()
+        try:
+            self._process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await self._process.wait()
+        except Exception:
+            pass
         await self._cleanup()
 
     async def _teardown(self) -> None:
