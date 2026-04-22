@@ -162,6 +162,18 @@ class MotorProber:
         _write_goal(self._bus, self._name, goal)
         self._last_goal_written = goal
 
+    def _anchor_frame_here(self) -> None:
+        """Fire Torque_Enable=128 — firmware writes new Homing_Offset so Present=2048 at
+        the motor's current physical pose, then returns in torque-off/Operating_Mode=0
+        state (caller re-arms torque with whatever goal it wants)."""
+        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
+        _retry(f"Torque_Enable=128 {self._name}", self._bus.write,
+               "Torque_Enable", self._name, 128, normalize=False, num_retry=2)
+        time.sleep(0.1)
+        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
+        _retry(f"write Operating_Mode {self._name}", self._bus.write,
+               "Operating_Mode", self._name, 0, normalize=False)
+
     # ---------- EEPROM ----------
     def prepare(self) -> None:
         """Snapshot orig Min/Max/Homing_Offset, fire Torque_Enable=128 (firmware-level
@@ -185,10 +197,7 @@ class MotorProber:
             f"read Torque_Limit {self._name}",
             self._bus.read, "Torque_Limit", self._name, normalize=False,
         ))
-        _retry(f"Torque_Enable=128 {self._name}", self._bus.write,
-               "Torque_Enable", self._name, 128, normalize=False, num_retry=2)
-        time.sleep(0.1)
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
+        self._anchor_frame_here()
         _retry(f"write Min_Position_Limit {self._name}", self._bus.write,
                "Min_Position_Limit", self._name, POSITION_MIN, normalize=False)
         time.sleep(EEPROM_COMMIT_DELAY)
@@ -200,8 +209,6 @@ class MotorProber:
         _retry(f"write Torque_Limit {self._name}", self._bus.write,
                "Torque_Limit", self._name, PROBE_TORQUE_LIMIT, normalize=False)
         time.sleep(EEPROM_COMMIT_DELAY)
-        _retry(f"write Operating_Mode {self._name}", self._bus.write,
-               "Operating_Mode", self._name, 0, normalize=False)
         self._min_pos = HALF_TURN
         self._max_pos = HALF_TURN
         self._min_real = False
@@ -215,13 +222,7 @@ class MotorProber:
         """Torque_Enable=128 at current physical pose. Clears this iteration's min/max."""
         self._check_stopped()
         logger.info("[cal:prober] {} reset_center", self._name)
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
-        _retry(f"Torque_Enable=128 {self._name}", self._bus.write,
-               "Torque_Enable", self._name, 128, normalize=False, num_retry=2)
-        time.sleep(0.1)
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
-        _retry(f"write Operating_Mode {self._name}", self._bus.write,
-               "Operating_Mode", self._name, 0, normalize=False)
+        self._anchor_frame_here()
         self._min_pos = HALF_TURN
         self._max_pos = HALF_TURN
         self._min_real = False
@@ -240,14 +241,7 @@ class MotorProber:
         mid = (self._min_pos + self._max_pos) // 2
         logger.info("[cal:prober] {} finalize_to_center: move to {} then reset", self._name, mid)
         self.move_to(mid)
-        # Torque_Enable=128 at the centre position.
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
-        _retry(f"Torque_Enable=128 {self._name}", self._bus.write,
-               "Torque_Enable", self._name, 128, normalize=False, num_retry=2)
-        time.sleep(0.1)
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
-        _retry(f"write Operating_Mode {self._name}", self._bus.write,
-               "Operating_Mode", self._name, 0, normalize=False)
+        self._anchor_frame_here()
         # Update internal state: min/max symmetric around HALF_TURN in the new frame.
         half_range = (self._max_pos - self._min_pos) // 2
         self._min_pos = HALF_TURN - half_range
@@ -263,11 +257,7 @@ class MotorProber:
         current position; min/max stay at full 0..4095."""
         self._check_stopped()
         logger.info("[cal:prober] {} capture_current_as_center", self._name)
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
-        _retry(f"Torque_Enable=128 {self._name}", self._bus.write,
-               "Torque_Enable", self._name, 128, normalize=False, num_retry=2)
-        time.sleep(0.1)
-        _retry(f"disable_torque {self._name}", self._bus.disable_torque, self._name, num_retry=3)
+        self._anchor_frame_here()
         # Full range; no hardstops.
         self._min_pos = POSITION_MIN
         self._max_pos = POSITION_MAX
@@ -576,10 +566,8 @@ def concurrent_move(
         _retry(f"enable_torque {p.name}", p._bus.enable_torque, p.name, num_retry=3)
     time.sleep(0.05)
     done: dict[MotorProber, bool] = {p: False for p, _ in pairs}
-    # use first prober's stop_event (all share same event in practice)
-    stop_event = pairs[0][0]._stop_event
     for _ in range(MOVE_MAX_TICKS):
-        _check_stopped(stop_event)
+        pairs[0][0]._check_stopped()
         for p, t in pairs:
             if done[p]:
                 continue

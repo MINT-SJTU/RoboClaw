@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from roboclaw.embodied.embodiment.hardware import monitor as monitor_mod
 from roboclaw.embodied.embodiment.hardware.monitor import (
     FaultType,
     HardwareFault,
@@ -14,6 +15,12 @@ from roboclaw.embodied.embodiment.hardware.monitor import (
     _fault_key,
 )
 from roboclaw.embodied.embodiment.manifest.binding import load_binding
+
+
+@pytest.fixture(autouse=True)
+def _stub_profile_on_disk(monkeypatch):
+    """Report calibration JSON present so ``arm.calibrated=True`` isn't downgraded."""
+    monkeypatch.setattr(monitor_mod, "_has_profile_on_disk", lambda arm: True)
 
 
 # ---------------------------------------------------------------------------
