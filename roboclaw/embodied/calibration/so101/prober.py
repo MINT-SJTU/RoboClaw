@@ -121,6 +121,11 @@ class MotorProber:
         self._orig_homing: int | None = None
         self._orig_torque_limit: int | None = None
         self._probe = _ProbeState()
+        # Track the most recent Goal_Position we wrote. ``concurrent_move`` uses this as
+        # the ramp start (instead of Present) so firmware sees smooth goal transitions
+        # and doesn't interpret wrap-induced Present/goal mismatch as a huge commanded
+        # multi-turn move.
+        self._last_goal_written: int | None = None
 
     # ---------- state snapshot ----------
     @property
@@ -151,6 +156,11 @@ class MotorProber:
 
     def _check_stopped(self) -> None:
         _check_stopped(self._stop_event)
+
+    def _set_goal(self, goal: int) -> None:
+        """Write Goal_Position and remember the value for later smooth hand-off."""
+        _write_goal(self._bus, self._name, goal)
+        self._last_goal_written = goal
 
     # ---------- EEPROM ----------
     def prepare(self) -> None:
@@ -301,7 +311,7 @@ class MotorProber:
         self._probe = _ProbeState(
             direction=direction, start_pos=p, last_pos=p, goal=p, stalled=0, done=False
         )
-        _write_goal(self._bus, self._name, p)
+        self._set_goal(p)
         _retry(f"enable_torque {self._name}", self._bus.enable_torque, self._name, num_retry=3)
         time.sleep(0.05)
         logger.debug("[cal:probe] {} start dir={:+d} start={}", self._name, direction, p)
@@ -314,7 +324,7 @@ class MotorProber:
         self._check_stopped()
         s.goal = max(POSITION_MIN, min(POSITION_MAX, s.goal + s.direction * PROBE_STEP))
         try:
-            _write_goal(self._bus, self._name, s.goal)
+            self._set_goal(s.goal)
         except Exception as e:
             logger.warning("[cal:probe] {} tick write fail: {}", self._name, e)
         try:
@@ -363,7 +373,7 @@ class MotorProber:
             park_pos = actual_pos
         park_pos = max(POSITION_MIN, min(POSITION_MAX, park_pos))
         try:
-            _write_goal(self._bus, self._name, park_pos)
+            self._set_goal(park_pos)
         except Exception as e:
             logger.warning("[cal:probe] {} park fail: {}", self._name, e)
         s.done = True
@@ -409,7 +419,7 @@ class MotorProber:
                "Operating_Mode", self._name, 0, normalize=False)
         p = _read_pos(self._bus, self._name)
         goal = p
-        _write_goal(self._bus, self._name, p)
+        self._set_goal(p)
         _retry(f"enable_torque {self._name}", self._bus.enable_torque, self._name, num_retry=3)
         time.sleep(0.05)
         for _ in range(MOVE_MAX_TICKS):
@@ -419,7 +429,7 @@ class MotorProber:
                 step = max(-MOVE_STEP, min(MOVE_STEP, diff))
                 goal += step
                 try:
-                    _write_goal(self._bus, self._name, goal)
+                    self._set_goal(goal)
                 except Exception as e:
                     logger.warning("[cal:move] {} goal write fail: {}", self._name, e)
             try:
@@ -438,7 +448,7 @@ class MotorProber:
         disable torque on held motors; call this between phases of paired probing."""
         try:
             p = _read_pos(self._bus, self._name)
-            _write_goal(self._bus, self._name, p)
+            self._set_goal(p)
             _retry(f"enable_torque {self._name}", self._bus.enable_torque, self._name, num_retry=2)
             logger.debug("[cal:prober] {} refresh_hold at pos={}", self._name, p)
         except Exception as e:
@@ -553,9 +563,16 @@ def concurrent_move(
                "Operating_Mode", p.name, 0, normalize=False)
     goals: dict[MotorProber, int] = {}
     for p, _ in pairs:
-        cur = _read_pos(p._bus, p.name)
-        goals[p] = cur
-        _write_goal(p._bus, p.name, cur)
+        # Ramp start: prefer the most recent Goal_Position we wrote (e.g. probe's park).
+        # Using Present here would produce a large goal delta on wrap-affected motors
+        # (Present wrapped to a value far from the firmware's internal goal), which the
+        # firmware then executes as a huge commanded move.
+        if p._last_goal_written is not None:
+            start = p._last_goal_written
+        else:
+            start = _read_pos(p._bus, p.name)
+        goals[p] = start
+        p._set_goal(start)
         _retry(f"enable_torque {p.name}", p._bus.enable_torque, p.name, num_retry=3)
     time.sleep(0.05)
     done: dict[MotorProber, bool] = {p: False for p, _ in pairs}
@@ -571,7 +588,7 @@ def concurrent_move(
                 step = max(-MOVE_STEP, min(MOVE_STEP, diff))
                 goals[p] += step
                 try:
-                    _write_goal(p._bus, p.name, goals[p])
+                    p._set_goal(goals[p])
                 except Exception as e:
                     logger.warning("[cal:move] {} goal write gave up: {}", p.name, e)
         for p, t in pairs:

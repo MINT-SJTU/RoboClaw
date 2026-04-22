@@ -189,8 +189,8 @@ def test_calibrator_happy_path_prepares_all_motors_then_probes_and_applies() -> 
         *(f"prepare:{name}" for name in calibrator.ALL_MOTORS),
         "run_sequence",
         "build",
-        "apply:6",
         "final_pose",
+        "apply:6",
     ]
 
 

@@ -2,26 +2,28 @@
 
 The heavy lifting happens in :mod:`roboclaw.embodied.calibration.so101.prober`. This
 module orchestrates one ``MotorProber`` per joint on a fresh bus, runs the probing
-sequence, finalises each motor to have Present=2048 at its mechanical midpoint, writes
-narrowed ``Min_Position_Limit`` / ``Max_Position_Limit`` to EEPROM, moves the arm to a
-user-requested rest pose, and releases torque.
+sequence, writes narrowed ``Min_Position_Limit`` / ``Max_Position_Limit`` to EEPROM,
+moves the arm to a rest pose, and releases torque.
 
 Sequence (designed around SO-101 geometry — gripper independent, wrist_flex kept as a
 brake while shoulder/elbow probe, shoulder+elbow probe paired so gravity is balanced):
 
     1. ``prepare`` all 6 motors (Torque_Enable=128 + widen Min/Max) one-by-one
-    2. gripper ``run_full`` + ``finalize_to_center``
+    2. gripper ``run_full``
     3. wrist_flex ``probe(-1)``       — held retreated as wrist brake
-    4. shoulder_pan ``run_full`` + ``finalize_to_center``
+    4. shoulder_pan ``run_full``
     5. ``paired_iter_probe`` on shoulder_lift + elbow_flex (refreshing wrist_flex hold
        between phases so voltage sag does not silently torque-off it)
-    6. concurrent move shoulder_lift / elbow_flex to centres (wide tol) + finalize
-    7. wrist_flex ``probe(+1)`` + ``finalize_to_center``
+    6. concurrent move shoulder_lift / elbow_flex to centres (wide tol)
+    7. wrist_flex ``probe(+1)``
     8. wrist_roll ``capture_current_as_center`` (no hardstops)
-    9. build ``ProbeResult`` per motor
-    10. write narrowed Min/Max to EEPROM (Homing_Offset already set by finalize)
-    11. concurrent move to final rest pose (m1 centre / m2 min / m3 max /
-        m4 (max+centre)/2 / m6 min)
+    9. build ``ProbeResult`` per motor (applied = ``min_pos + SAFETY`` / ``max_pos - SAFETY``
+       in whichever frame the last ``prepare`` / ``reset_center`` anchored)
+    10. concurrent move to final rest pose (m1 centre / m2 min / m3 max /
+        m4 (max+centre)/2 / m6 min) — done BEFORE EEPROM writes so the torque-off
+        windows in ``_apply_results`` happen at gravity-rest positions (no sag)
+    11. write narrowed Min/Max to EEPROM (Homing_Offset already persisted by firmware
+        during every Torque_Enable=128)
     12. release torque on all motors
 """
 from __future__ import annotations
@@ -39,7 +41,6 @@ from roboclaw.embodied.calibration.model import CalibrationProfile, MotorCalibra
 from roboclaw.embodied.calibration.so101.prober import (
     AutoCalibrationStopped,
     EEPROM_COMMIT_DELAY,
-    HALF_TURN,
     MotorProber,
     POSITION_MAX,
     POSITION_MIN,
@@ -123,8 +124,8 @@ class _SO101AutoCalibrator:
                 self._prepare_motor(name)
             self._run_sequence()
             results = self._build_results()
-            self._apply_results(results)
             self._move_to_final_pose()
+            self._apply_results(results)
             for p in self._probers.values():
                 p.release()
             logger.info("[cal] complete port={}", self._port)
@@ -144,20 +145,18 @@ class _SO101AutoCalibrator:
 
     def _run_sequence(self) -> None:
         """Run the full probing sequence on the current ``self._probers``. After this call,
-        every motor's internal ``min_pos`` / ``max_pos`` is valid and the motor is held at
-        Present=2048 on its mechanical midpoint (``finalize_to_center`` has fired)."""
+        every probed motor's ``min_pos`` / ``max_pos`` is valid in whatever frame the last
+        ``prepare`` / ``reset_center`` firmware Torque_Enable=128 anchored."""
         p = self._probers
 
         logger.info("[cal:seq] step 2: gripper full probe")
         p[self.GRIPPER_NAME].run_full()
-        p[self.GRIPPER_NAME].finalize_to_center()
 
         logger.info("[cal:seq] step 3: wrist_flex -1 (held as wrist brake)")
         p["wrist_flex"].probe(-1)
 
         logger.info("[cal:seq] step 4: shoulder_pan full probe")
         p["shoulder_pan"].run_full()
-        p["shoulder_pan"].finalize_to_center()
 
         logger.info("[cal:seq] step 5: m2+m3 paired iter (refresh wrist_flex between phases)")
         paired_iter_probe(
@@ -165,7 +164,7 @@ class _SO101AutoCalibrator:
             refresh_holds=[p["wrist_flex"]],
         )
 
-        logger.info("[cal:seq] step 6: m2+m3 -> centres (wide tol), finalize each")
+        logger.info("[cal:seq] step 6: m2+m3 -> centres (wide tol)")
         p["wrist_flex"].refresh_hold()
         concurrent_move(
             [
@@ -174,12 +173,9 @@ class _SO101AutoCalibrator:
             ],
             tol=M2M3_CENTER_TOL,
         )
-        p["shoulder_lift"].finalize_to_center()
-        p["elbow_flex"].finalize_to_center()
 
         logger.info("[cal:seq] step 7: wrist_flex +1")
         p["wrist_flex"].probe(+1)
-        p["wrist_flex"].finalize_to_center()
 
         logger.info("[cal:seq] step 8: wrist_roll capture current as centre")
         p[self.WRIST_ROLL_NAME].capture_current_as_center()
@@ -205,23 +201,23 @@ class _SO101AutoCalibrator:
                     name, POSITION_MIN, POSITION_MAX, h_now,
                 )
                 continue
-            half = p.range_ticks // 2
-            applied_min = max(POSITION_MIN, HALF_TURN - half + SAFETY_MARGIN_TICKS)
-            applied_max = min(POSITION_MAX, HALF_TURN + half - SAFETY_MARGIN_TICKS)
+            hard_min, hard_max = p.min_pos, p.max_pos
+            applied_min = max(POSITION_MIN, hard_min + SAFETY_MARGIN_TICKS)
+            applied_max = min(POSITION_MAX, hard_max - SAFETY_MARGIN_TICKS)
             if applied_min >= applied_max:
                 raise RuntimeError(
-                    f"{name}: safety margin collapses range: hard=[{HALF_TURN - half}, "
-                    f"{HALF_TURN + half}] margin={SAFETY_MARGIN_TICKS}"
+                    f"{name}: safety margin collapses range: "
+                    f"hard=[{hard_min}, {hard_max}] margin={SAFETY_MARGIN_TICKS}"
                 )
             results[name] = ProbeResult(
                 motor_id=p.motor_id, motor_name=name,
-                hard_min=HALF_TURN - half, hard_max=HALF_TURN + half,
+                hard_min=hard_min, hard_max=hard_max,
                 applied_min=applied_min, applied_max=applied_max,
                 homing_offset=h_now, drive_mode=0,
             )
             logger.info(
                 "[cal:build] {} hard=[{},{}] applied=[{},{}] h={}",
-                name, HALF_TURN - half, HALF_TURN + half, applied_min, applied_max, h_now,
+                name, hard_min, hard_max, applied_min, applied_max, h_now,
             )
         return results
 
@@ -252,12 +248,13 @@ class _SO101AutoCalibrator:
         min, elbow_flex at max, wrist_flex halfway between centre and max, gripper closed.
         wrist_roll is not moved (user's pose is already the centre)."""
         p = self._probers
+        m4_target = (p["wrist_flex"].max_pos + p["wrist_flex"].center) // 2
         targets: list[tuple[MotorProber, int]] = [
-            (p["shoulder_pan"], HALF_TURN),
-            (p["shoulder_lift"], HALF_TURN - p["shoulder_lift"].range_ticks // 2 + SAFETY_MARGIN_TICKS),
-            (p["elbow_flex"], HALF_TURN + p["elbow_flex"].range_ticks // 2 - SAFETY_MARGIN_TICKS),
-            (p["wrist_flex"], HALF_TURN + p["wrist_flex"].range_ticks // 4),
-            (p[self.GRIPPER_NAME], HALF_TURN - p[self.GRIPPER_NAME].range_ticks // 2 + SAFETY_MARGIN_TICKS),
+            (p["shoulder_pan"], p["shoulder_pan"].center),
+            (p["shoulder_lift"], p["shoulder_lift"].min_pos + SAFETY_MARGIN_TICKS),
+            (p["elbow_flex"], p["elbow_flex"].max_pos - SAFETY_MARGIN_TICKS),
+            (p["wrist_flex"], m4_target),
+            (p[self.GRIPPER_NAME], p[self.GRIPPER_NAME].min_pos + SAFETY_MARGIN_TICKS),
         ]
         logger.info(
             "[cal:final] rest pose {}",
