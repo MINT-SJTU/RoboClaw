@@ -136,6 +136,22 @@ def _write_policy_checkpoint(root: Path, name: str) -> Path:
     return checkpoint
 
 
+def _infer_argv(tmp_path: Path, checkpoint: Path, *, num_episodes: int = 1) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "roboclaw.embodied.command.wrapper",
+        "record",
+        "--robot.type=so101_follower",
+        '--robot.cameras={"wrist": {"type": "opencv"}}',
+        f"--policy.path={checkpoint}",
+        "--dataset.repo_id=local/eval",
+        f"--dataset.root={tmp_path / 'datasets' / 'local' / 'eval'}",
+        f"--dataset.num_episodes={num_episodes}",
+        "--dataset.episode_time_s=60",
+    ]
+
+
 def _single_follower_status() -> list[ArmStatus]:
     return [ArmStatus("follower", "so101_follower", "follower", True, True)]
 
@@ -197,19 +213,7 @@ async def test_run_inference_waits_for_process_completion_without_tty(tmp_path: 
     service.infer = ControlledSession(service.board, "Inference finished.")
     run_inference = getattr(service, "run_inference")
     checkpoint = _write_policy_checkpoint(tmp_path / "policies", "act")
-    infer_argv = [
-        sys.executable,
-        "-m",
-        "roboclaw.embodied.command.wrapper",
-        "record",
-        "--robot.type=so101_follower",
-        '--robot.cameras={"wrist": {"type": "opencv"}}',
-        f"--policy.path={checkpoint}",
-        "--dataset.repo_id=local/eval",
-        f"--dataset.root={tmp_path / 'datasets' / 'local' / 'eval'}",
-        "--dataset.num_episodes=3",
-        "--dataset.episode_time_s=60",
-    ]
+    infer_argv = _infer_argv(tmp_path, checkpoint, num_episodes=3)
 
     with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
         "roboclaw.embodied.service.check_camera_status",
@@ -293,11 +297,13 @@ async def test_start_inference_releases_lock_on_session_start_failure(tmp_path: 
     service = _make_service(tmp_path)
     _bind_infer_setup(service)
     service.infer = FailingSession()
+    checkpoint = _write_policy_checkpoint(tmp_path / "policies", "act")
+    infer_argv = _infer_argv(tmp_path, checkpoint)
 
     with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
         "roboclaw.embodied.service.check_camera_status",
         return_value=CameraStatus("wrist", True, 640, 480),
-    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
+    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=infer_argv):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_inference(checkpoint_path="/models/act")
 
