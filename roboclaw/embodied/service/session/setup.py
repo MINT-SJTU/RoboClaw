@@ -258,6 +258,15 @@ class SetupSession:
             alias=alias, spec_name=spec_name, interface=interface, side=side,
         )
         self._assignments.append(assignment)
+        if self._phase == SetupPhase.IDENTIFYING:
+            saved = suppress_stderr()
+            try:
+                for iface in self.unassigned:
+                    if isinstance(iface, SerialInterface):
+                        iface.motion_detector.capture_baseline()
+            finally:
+                restore_stderr(saved)
+            self._active_motion_stable_id = ""
         return assignment
 
     def unassign(self, alias: str) -> None:

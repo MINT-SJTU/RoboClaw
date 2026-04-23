@@ -219,8 +219,8 @@ function deriveWizardStep(
     if (currentStep === 'identify') {
       return 'identify'
     }
-    if (currentStep === 'review' && session.unassigned.length > 0) {
-      return 'identify'
+    if (currentStep === 'review') {
+      return 'review'
     }
     return session.candidates.length > 0 ? 'scan' : 'select'
   }
