@@ -18,6 +18,12 @@ class _FakeNavigationService:
     def navigate_to_pose(self, **kwargs):
         return {"action": "navigate_to_pose", "ok": True, "kwargs": kwargs}
 
+    def resolve_place(self, **kwargs):
+        return {"action": "resolve_place", "ok": True, "kwargs": kwargs}
+
+    def navigate_to_place(self, **kwargs):
+        return {"action": "navigate_to_place", "ok": True, "kwargs": kwargs}
+
     def follow_waypoints(self, **kwargs):
         return {"action": "follow_waypoints", "ok": True, "kwargs": kwargs}
 
@@ -43,6 +49,18 @@ def test_navigation_tool_dispatches_navigate_to_pose() -> None:
 
     assert data["action"] == "navigate_to_pose"
     assert data["kwargs"]["x"] == 1.25
+    assert data["kwargs"]["feedback"] is False
+
+
+def test_navigation_tool_dispatches_navigate_to_place() -> None:
+    tool = NavigationToolGroup(service=_FakeNavigationService())
+
+    raw = asyncio.run(tool.execute(action="navigate_to_place", place="bedroom", map_id="house", feedback=False))
+    data = json.loads(raw)
+
+    assert data["action"] == "navigate_to_place"
+    assert data["kwargs"]["place"] == "bedroom"
+    assert data["kwargs"]["map_id"] == "house"
     assert data["kwargs"]["feedback"] is False
 
 

@@ -13,6 +13,8 @@ _NAVIGATION_ACTIONS = [
     "nav_status",
     "smoke_test",
     "navigate_to_pose",
+    "resolve_place",
+    "navigate_to_place",
     "follow_waypoints",
     "cancel_nav",
     "collect_metrics",
@@ -62,6 +64,30 @@ class NavigationToolGroup(StandaloneTool):
                 "frame_id": {
                     "type": "string",
                     "description": "Target frame id. Defaults to map.",
+                },
+                "place": {
+                    "type": "string",
+                    "description": "Semantic place label, such as bedroom or kitchen.",
+                },
+                "map_id": {
+                    "type": "string",
+                    "description": "Named simulation map id for semantic navigation. Use house for demo2.",
+                },
+                "map_path": {
+                    "type": "string",
+                    "description": "Optional occupancy map YAML path for semantic grounding.",
+                },
+                "semantic_graph_path": {
+                    "type": "string",
+                    "description": "Optional semantic graph JSON path.",
+                },
+                "clearance_m": {
+                    "type": "number",
+                    "description": "Required free-space clearance radius for semantic goal selection.",
+                },
+                "goal_stride_m": {
+                    "type": "number",
+                    "description": "Grid stride in meters for scanning semantic regions.",
                 },
                 "behavior_tree": {
                     "type": "string",
@@ -120,6 +146,32 @@ class NavigationToolGroup(StandaloneTool):
                 y=float(kwargs["y"]),
                 yaw=float(kwargs.get("yaw", 0.0)),
                 frame_id=kwargs.get("frame_id", "map"),
+                behavior_tree=kwargs.get("behavior_tree", ""),
+                feedback=kwargs.get("feedback", True),
+                timeout_s=kwargs.get("timeout_s"),
+            )
+        elif action == "resolve_place":
+            if not kwargs.get("place"):
+                return "resolve_place requires place."
+            result = self._service.resolve_place(
+                place=str(kwargs["place"]),
+                map_id=kwargs.get("map_id"),
+                map_path=kwargs.get("map_path"),
+                semantic_graph_path=kwargs.get("semantic_graph_path"),
+                clearance_m=float(kwargs.get("clearance_m", 0.25)),
+                goal_stride_m=float(kwargs.get("goal_stride_m", 0.10)),
+            )
+        elif action == "navigate_to_place":
+            if not kwargs.get("place"):
+                return "navigate_to_place requires place."
+            result = self._service.navigate_to_place(
+                profile_id=kwargs.get("profile_id"),
+                place=str(kwargs["place"]),
+                map_id=kwargs.get("map_id"),
+                map_path=kwargs.get("map_path"),
+                semantic_graph_path=kwargs.get("semantic_graph_path"),
+                clearance_m=float(kwargs.get("clearance_m", 0.25)),
+                goal_stride_m=float(kwargs.get("goal_stride_m", 0.10)),
                 behavior_tree=kwargs.get("behavior_tree", ""),
                 feedback=kwargs.get("feedback", True),
                 timeout_s=kwargs.get("timeout_s"),

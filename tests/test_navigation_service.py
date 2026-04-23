@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from roboclaw.embodied.navigation.service import NavigationService
 
 
@@ -81,6 +84,70 @@ class _FakeNavClient:
         return {"ok": True, "attempts": []}
 
 
+def _write_semantic_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    (tmp_path / "map.pgm").write_text(
+        "\n".join(
+            [
+                "P2",
+                "8 8",
+                "255",
+                "0 0 0 0 0 0 0 0",
+                "0 255 255 255 255 255 255 0",
+                "0 255 255 255 255 255 255 0",
+                "0 255 255 255 255 255 255 0",
+                "0 255 255 255 255 255 255 0",
+                "0 255 255 255 255 255 255 0",
+                "0 255 255 255 255 255 255 0",
+                "0 0 0 0 0 0 0 0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    map_path = tmp_path / "map.yaml"
+    map_path.write_text(
+        "\n".join(
+            [
+                "image: map.pgm",
+                "resolution: 1.0",
+                "origin: [0.0, 0.0, 0.0]",
+                "negate: 0",
+                "occupied_thresh: 0.65",
+                "free_thresh: 0.25",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    graph_path = tmp_path / "map.semantic.json"
+    graph_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "id": "test_graph",
+                "map_id": "test_map",
+                "map_path": "map.yaml",
+                "places": [
+                    {
+                        "id": "bedroom",
+                        "type": "room",
+                        "region": {
+                            "frame_id": "map",
+                            "polygon": [
+                                {"x": 1.0, "y": 1.0},
+                                {"x": 6.0, "y": 1.0},
+                                {"x": 6.0, "y": 6.0},
+                                {"x": 1.0, "y": 6.0},
+                            ],
+                        },
+                    }
+                ],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return graph_path, map_path
+
+
 def test_navigation_service_nav_status_reports_available_actions() -> None:
     service = NavigationService(
         simulation_service=_FakeSimulationService(_doctor_result()),
@@ -104,6 +171,95 @@ def test_navigation_service_blocks_goal_when_nav_not_ready() -> None:
 
     assert result["ok"] is False
     assert result["decision"] == "blocked"
+
+
+def test_navigation_service_resolves_place_from_semantic_graph(tmp_path: Path) -> None:
+    graph_path, map_path = _write_semantic_fixture(tmp_path)
+    service = NavigationService(
+        simulation_service=_FakeSimulationService(_doctor_result()),
+        nav_client=_FakeNavClient(),
+    )
+
+    result = service.resolve_place(
+        place="bedroom",
+        map_path=map_path,
+        semantic_graph_path=graph_path,
+    )
+
+    assert result["ok"] is True
+    assert result["decision"] == "place_grounded"
+    assert result["goal"]["place_id"] == "bedroom"
+    assert result["goal"]["source"] == "region_free_space"
+
+
+def test_navigation_service_resolves_project_paths_from_non_repo_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = NavigationService(
+        simulation_service=_FakeSimulationService(_doctor_result()),
+        nav_client=_FakeNavClient(),
+    )
+
+    monkeypatch.chdir(tmp_path)
+    resolved = service._resolve_project_path("pyproject.toml")
+
+    assert resolved.name == "pyproject.toml"
+    assert resolved.is_file()
+
+
+def test_navigation_service_ignores_blank_semantic_path_overrides() -> None:
+    service = NavigationService(
+        simulation_service=_FakeSimulationService(_doctor_result()),
+        nav_client=_FakeNavClient(),
+    )
+
+    result = service.resolve_place(
+        place="bedroom",
+        map_id="house",
+        map_path="",
+        semantic_graph_path="   ",
+    )
+
+    assert result["ok"] is True
+    assert result["decision"] == "place_grounded"
+    assert result["semantic_graph"]["path"].endswith("map_house.semantic.json")
+
+
+def test_navigation_service_rejects_empty_project_path() -> None:
+    service = NavigationService(
+        simulation_service=_FakeSimulationService(_doctor_result()),
+        nav_client=_FakeNavClient(),
+    )
+
+    try:
+        service._resolve_project_path("")
+    except ValueError as exc:
+        assert "must not be empty" in str(exc)
+    else:
+        raise AssertionError("Expected empty path to be rejected.")
+
+
+def test_navigation_service_navigates_to_resolved_place(tmp_path: Path) -> None:
+    graph_path, map_path = _write_semantic_fixture(tmp_path)
+    nav_client = _FakeNavClient()
+    service = NavigationService(
+        simulation_service=_FakeSimulationService(_doctor_result()),
+        nav_client=nav_client,
+    )
+
+    result = service.navigate_to_place(
+        place="bedroom",
+        map_path=map_path,
+        semantic_graph_path=graph_path,
+        feedback=False,
+    )
+
+    assert result["ok"] is True
+    assert result["succeeded"] is True
+    assert result["grounding"]["goal"]["place_id"] == "bedroom"
+    assert nav_client.navigate_calls[0]["x"] == result["grounding"]["goal"]["pose"]["x"]
+    assert nav_client.navigate_calls[0]["feedback"] is False
 
 
 def test_navigation_service_smoke_test_passive_ready() -> None:

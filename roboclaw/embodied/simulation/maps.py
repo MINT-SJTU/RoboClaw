@@ -14,6 +14,7 @@ class SimulationMap:
     description: str
     path: str
     world_launch: str | None = None
+    semantic_graph_path: str | None = None
     aliases: tuple[str, ...] = ()
 
 
@@ -32,6 +33,7 @@ HOUSE_MAP = SimulationMap(
     description="House map for semantic navigation and room-to-room demos.",
     path="robotics/ros_ws/src/roboclaw_tb3_sim/maps/map_house.yaml",
     world_launch="turtlebot3_house.launch.py",
+    semantic_graph_path="robotics/ros_ws/src/roboclaw_tb3_sim/maps/map_house.semantic.json",
     aliases=("semantic", "semantic_house", "house_map", "room", "room_to_room", "room2room"),
 )
 

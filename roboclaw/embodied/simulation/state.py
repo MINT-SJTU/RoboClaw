@@ -23,7 +23,7 @@ from roboclaw.embodied.simulation.profiles import (
 
 
 STATE_VERSION = 1
-_PATH_KEYS = ("launch", "map", "map_id", "world", "config")
+_PATH_KEYS = ("launch", "map", "map_id", "world", "config", "semantic_graph")
 _CAPABILITY_KEYS = ("packages", "nodes", "topics", "actions", "services", "transforms")
 
 

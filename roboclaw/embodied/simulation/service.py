@@ -232,6 +232,7 @@ class SimulationService:
             map_id=selected_map.map_id if selected_map is not None else map_id,
             map_path=resolved_map_path,
             world_launch=resolved_world_launch,
+            semantic_graph_path=selected_map.semantic_graph_path if selected_map is not None else None,
         )
         saved = save_simulation_state(updated, self._state_path)
         return {
@@ -296,6 +297,7 @@ class SimulationService:
         map_id: str | None,
         map_path: str | Path | None,
         world_launch: str | None,
+        semantic_graph_path: str | None = None,
     ) -> dict[str, Any]:
         updated = dict(state)
         paths = dict(updated.get("paths", {}))
@@ -306,6 +308,8 @@ class SimulationService:
             paths["map"] = str(map_path)
         if world_launch is not None:
             paths["world"] = world_launch
+        if semantic_graph_path is not None:
+            paths["semantic_graph"] = semantic_graph_path
         updated["paths"] = paths
         return updated
 
@@ -328,6 +332,9 @@ class SimulationService:
             "selected_map_id": selected_map.map_id if selected_map is not None else None,
             "selected_map_description": selected_map.description if selected_map is not None else None,
             "selected_world_launch": selected_map.world_launch if selected_map is not None else None,
+            "selected_semantic_graph": (
+                selected_map.semantic_graph_path if selected_map is not None else None
+            ),
             "resolved_map_path": str(resolved_map_path) if resolved_map_path is not None else None,
             "resolved_world_launch": resolved_world_launch,
         }
