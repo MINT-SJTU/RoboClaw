@@ -2,6 +2,49 @@ import { useState, useEffect, useMemo } from 'react'
 import { useTrainingStore, type TrainingCurve } from '@/domains/training/store/useTrainingStore'
 import { useI18n } from '@/i18n'
 
+function parseStepValue(step: string) {
+  const match = step.trim().match(/^(-?\d+(?:\.\d+)?)([KMBTQ]?)$/i)
+  if (!match) return Number.NaN
+  const value = Number(match[1])
+  const suffix = match[2].toUpperCase()
+  const multiplier = suffix === 'K' ? 1_000
+    : suffix === 'M' ? 1_000_000
+      : suffix === 'B' ? 1_000_000_000
+        : suffix === 'T' ? 1_000_000_000_000
+          : suffix === 'Q' ? 1_000_000_000_000_000
+            : 1
+  return value * multiplier
+}
+
+function formatStepTick(step: number) {
+  if (Math.abs(step) >= 1_000_000) return `${(step / 1_000_000).toFixed(step % 1_000_000 === 0 ? 0 : 1)}M`
+  if (Math.abs(step) >= 1_000) return `${(step / 1_000).toFixed(step % 1_000 === 0 ? 0 : 1)}K`
+  return String(Math.round(step))
+}
+
+function resolveStepValues(steps: string[]) {
+  const parsed = steps.map(parseStepValue)
+  const diffs = parsed
+    .slice(1)
+    .map((value, index) => value - parsed[index])
+    .filter(value => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b)
+  const fallbackStep = diffs.length ? diffs[Math.floor(diffs.length / 2)] : 1
+  const values: number[] = []
+
+  for (const rawValue of parsed) {
+    const previous = values[values.length - 1]
+    let value = rawValue
+    if (!Number.isFinite(value)) value = previous == null ? 0 : previous + fallbackStep
+    if (previous != null && (value <= previous || value - previous > fallbackStep * 1.75)) {
+      value = previous + fallbackStep
+    }
+    values.push(value)
+  }
+
+  return values
+}
+
 function useChartData(curve: TrainingCurve | null) {
   return useMemo(() => {
     const pts = curve?.points ?? []
@@ -12,24 +55,32 @@ function useChartData(curve: TrainingCurve | null) {
         yTicks: ['1.00', '0.70', '0.40', '0.10'],
       }
     }
-    const eps = pts.map(p => p.ep)
+    const steps = resolveStepValues(pts.map(p => p.step))
     const losses = pts.map(p => p.loss)
-    const xMin = Math.min(...eps), xMax = Math.max(...eps)
+    const xMin = Math.min(...steps), xMax = Math.max(...steps)
     const rawYMin = Math.min(...losses), rawYMax = Math.max(...losses)
     const yPad = Math.max((rawYMax - rawYMin) * 0.15, 0.05)
     const yMin = Math.max(0, rawYMin - yPad), yMax = rawYMax + yPad
     const xSpan = Math.max(xMax - xMin, 1), ySpan = Math.max(yMax - yMin, 0.1)
 
-    const polyline = pts.map(p => {
-      const x = 8 + ((p.ep - xMin) / xSpan) * 84
+    const polyline = pts.map((p, index) => {
+      const x = 8 + ((steps[index] - xMin) / xSpan) * 84
       const y = 88 - ((p.loss - yMin) / ySpan) * 74
       return `${x.toFixed(1)},${y.toFixed(1)}`
     }).join(' ')
 
-    const xTicks = Array.from({ length: 5 }, (_, i) => String(Math.round(xMin + xSpan * (i / 4))))
+    const xTicks = Array.from({ length: 5 }, (_, i) => formatStepTick(xMin + xSpan * (i / 4)))
     const yTicks = Array.from({ length: 4 }, (_, i) => (yMin + ySpan * (1 - i / 3)).toFixed(2))
+    const bestIndex = losses.reduce((best, loss, index) => loss < losses[best] ? index : best, 0)
 
-    return { has: true, polyline, xTicks, yTicks }
+    return {
+      has: true,
+      polyline,
+      xTicks,
+      yTicks,
+      latestStep: formatStepTick(steps[steps.length - 1]),
+      bestStep: formatStepTick(steps[bestIndex]),
+    }
   }, [curve?.points])
 }
 
@@ -61,9 +112,9 @@ export function LossCurvePanel() {
           {chart.has ? (
             <>
               <div>{t('latestLoss')}: {trainCurve?.last_loss?.toFixed(3)}</div>
-              <div>{t('latestEpoch')}: {trainCurve?.points[trainCurve.points.length - 1]?.ep}</div>
+              <div>{t('latestStep')}: {chart.latestStep}</div>
               <div className="mt-1">{t('bestLoss')}: {trainCurve?.best_loss?.toFixed(3)}</div>
-              <div>{t('bestEpoch')}: {trainCurve?.best_ep}</div>
+              <div>{t('bestStep')}: {chart.bestStep}</div>
             </>
           ) : (
             <div className="px-2 py-1 rounded-full bg-ac/10 text-ac font-semibold">Live</div>
@@ -81,7 +132,7 @@ export function LossCurvePanel() {
         />
       </label>
 
-      <div className="mt-4 flex-1 min-h-[240px] rounded-xl border border-dashed border-bd2/80 bg-gradient-to-br from-sf2/80 via-white to-ac/5 p-4">
+      <div className="mt-4 h-[420px] rounded-xl border border-dashed border-bd2/80 bg-gradient-to-br from-sf2/80 via-white to-ac/5 p-4 max-[900px]:h-[340px]">
         <div className="h-full flex gap-3">
           {/* Y-axis label */}
           <div className="w-8 shrink-0 flex items-center justify-center">
@@ -132,7 +183,7 @@ export function LossCurvePanel() {
               {chart.xTicks.map(tick => <span key={tick}>{tick}</span>)}
             </div>
             <div className="mt-1 text-center text-xs font-mono uppercase tracking-[0.25em] text-tx3">
-              {t('epoch')}
+              {t('step')}
             </div>
           </div>
 

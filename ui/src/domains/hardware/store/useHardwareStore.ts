@@ -51,13 +51,16 @@ export interface NetworkInfo {
 interface HardwareStore {
   hardwareStatus: HardwareStatus | null
   networkInfo: NetworkInfo | null
+  servoPollingEnabled: boolean
   fetchHardwareStatus: () => Promise<void>
   fetchNetworkInfo: () => Promise<void>
+  setServoPollingEnabled: (enabled: boolean) => void
 }
 
 export const useHardwareStore = create<HardwareStore>((set) => ({
   hardwareStatus: null,
   networkInfo: null,
+  servoPollingEnabled: true,
 
   fetchHardwareStatus: async () => {
     set({ hardwareStatus: await api(`${HARDWARE}/status`) })
@@ -65,5 +68,9 @@ export const useHardwareStore = create<HardwareStore>((set) => ({
 
   fetchNetworkInfo: async () => {
     set({ networkInfo: await api(`${SYSTEM}/network`) })
+  },
+
+  setServoPollingEnabled: (enabled) => {
+    set({ servoPollingEnabled: enabled })
   },
 }))

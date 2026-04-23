@@ -37,11 +37,24 @@ class TrainSession:
         argv = CommandBuilder.train(
             manifest,
             dataset=dataset.runtime,
+            policy_type=kwargs.get("policy_type", "act"),
             steps=kwargs.get("steps", 100_000),
             device=kwargs.get("device", "cuda"),
         )
         job_id = await SubprocessExecutor().run_detached(argv=argv, log_dir=logs_dir())
         return f"Training started. Job ID: {job_id}"
+
+    async def stop_job(
+        self,
+        manifest: Manifest,
+        kwargs: dict[str, Any],
+        tty_handoff: Any,
+    ) -> str:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        job_id = kwargs.get("job_id", "")
+        status = await SubprocessExecutor().stop_job(job_id=job_id, log_dir=logs_dir())
+        return "\n".join(f"{key}: {value}" for key, value in status.items())
 
     async def job_status(
         self,
@@ -54,6 +67,16 @@ class TrainSession:
         job_id = kwargs.get("job_id", "")
         status = await SubprocessExecutor().job_status(job_id=job_id, log_dir=logs_dir())
         return "\n".join(f"{key}: {value}" for key, value in status.items())
+
+    async def current_job(
+        self,
+        manifest: Manifest,
+        kwargs: dict[str, Any],
+        tty_handoff: Any,
+    ) -> dict[str, str | int | bool | None]:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        return await SubprocessExecutor().latest_running_job(log_dir=logs_dir())
 
     def curve_data(self, job_id: str) -> dict[str, Any]:
         job_id = job_id.strip()

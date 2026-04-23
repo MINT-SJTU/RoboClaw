@@ -28,6 +28,24 @@ _BIMANUAL_ID = "bimanual"
 
 _DEFAULT_REPLAY_ROOT = Path("~/.cache/huggingface/lerobot").expanduser()
 
+TRAIN_POLICY_TYPES = {
+    "act",
+    "diffusion",
+    "groot",
+    "multi_task_dit",
+    "pi0",
+    "pi0_fast",
+    "pi05",
+    "reward_classifier",
+    "sac",
+    "sarm",
+    "smolvla",
+    "tdmpc",
+    "vqbet",
+    "wall_x",
+    "xvla",
+}
+
 
 # ── Private helper functions ─────────────────────────────────────────────
 
@@ -265,19 +283,25 @@ class CommandBuilder:
         manifest: Any,
         *,
         dataset: DatasetRuntimeRef,
+        policy_type: str = "act",
         steps: int = 100_000,
         device: str = "cuda",
     ) -> list[str]:
         """Build training argv (standalone lerobot-train, not through wrapper)."""
+        if policy_type not in TRAIN_POLICY_TYPES:
+            allowed = ", ".join(sorted(TRAIN_POLICY_TYPES))
+            raise ActionError(f"Unsupported policy_type '{policy_type}'. Expected one of: {allowed}.")
+
         policies_root = manifest.snapshot.get("policies", {}).get("root", "")
-        output_dir = Path(policies_root).expanduser() / dataset.name
+        output_dir_name = dataset.name if policy_type == "act" else f"{dataset.name}_{policy_type}"
+        output_dir = Path(policies_root).expanduser() / output_dir_name
 
         argv = [
             "lerobot-train",
             f"--dataset.repo_id={dataset.repo_id}",
             f"--dataset.root={dataset.local_path}",
             "--dataset.video_backend=pyav",
-            "--policy.type=act",
+            f"--policy.type={policy_type}",
             "--policy.push_to_hub=false",
             f"--policy.repo_id={dataset.repo_id}",
             f"--output_dir={output_dir}",

@@ -285,8 +285,6 @@ def ensure_bimanual_cal_dir(
         if not source.exists():
             continue
         dest = target_dir / f"bimanual_{side}.json"
-        if dest.exists() and source.stat().st_mtime <= dest.stat().st_mtime:
-            continue
         shutil.copy2(source, dest)
     return str(target_dir)
 

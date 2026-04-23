@@ -25,6 +25,14 @@ const NAV_ICONS: Record<string, JSX.Element> = {
       <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" />
     </svg>
   ),
+  '/training': (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 19V5" />
+      <path d="M4 19h16" />
+      <path d="M7 15l3-4 3 2 4-7" />
+      <path d="M17 6h3v3" />
+    </svg>
+  ),
   '/recovery': (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -76,6 +84,7 @@ export default function AppShell() {
     { path: '/control', label: t('controlCenter') },
     { path: '/recovery', label: t('recoveryNav'), badge: recoveryFaults.length || undefined },
     { path: '/datasets', label: t('datasetsNav') },
+    { path: '/training', label: t('trainingCenter') },
     { path: '/curation', label: t('curationNav') },
     { path: '/settings', label: t('settings') },
     { path: '/logs', label: t('logs') },

@@ -4,6 +4,7 @@ import ControlPage from '@/domains/control/pages/ControlPage'
 import RecoveryCenterPage from '@/domains/recovery/pages/RecoveryCenterPage'
 import DatasetsPage from '@/domains/datasets/pages/DatasetsPage'
 import DatasetExplorerPage from '@/domains/datasets/explorer/pages/DatasetExplorerPage'
+import TrainingCenterPage from '@/domains/training/pages/TrainingCenterPage'
 import QualityValidationPage from '@/domains/curation/quality/pages/QualityValidationPage'
 import TextAlignmentPage from '@/domains/curation/text-alignment/pages/TextAlignmentPage'
 import SettingsOverviewPage from '@/domains/settings/pages/SettingsOverviewPage'
@@ -22,6 +23,7 @@ function App() {
           <Route path="recovery" element={<RecoveryCenterPage />} />
           <Route path="datasets" element={<DatasetsPage />} />
           <Route path="datasets/explorer" element={<DatasetExplorerPage />} />
+          <Route path="training" element={<TrainingCenterPage />} />
           <Route path="curation" element={<Navigate to="/curation/quality" replace />} />
           <Route path="curation/quality" element={<QualityValidationPage />} />
           <Route path="curation/text-alignment" element={<TextAlignmentPage />} />
