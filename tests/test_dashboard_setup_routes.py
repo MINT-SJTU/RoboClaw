@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -385,6 +386,84 @@ def test_assign_commit_and_devices_list(tmp_path: Path) -> None:
     payload = devices.json()
     assert [arm["alias"] for arm in payload["arms"]] == ["follower"]
     assert [camera["alias"] for camera in payload["cameras"]] == ["top"]
+
+
+def test_commit_with_legacy_unsided_bimanual_leaders(tmp_path: Path) -> None:
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({
+            "version": 2,
+            "arms": [
+                {
+                    "alias": "left_leader",
+                    "type": "so101_leader",
+                    "port": "/dev/serial/by-id/left-leader",
+                    "calibration_dir": "/cal/left-leader",
+                    "calibrated": True,
+                },
+                {
+                    "alias": "right_leader",
+                    "type": "so101_leader",
+                    "port": "/dev/serial/by-id/right-leader",
+                    "calibration_dir": "/cal/right-leader",
+                    "calibrated": True,
+                },
+            ],
+            "hands": [],
+            "cameras": [],
+            "datasets": {"root": "/data"},
+            "policies": {"root": "/policies"},
+        }),
+        encoding="utf-8",
+    )
+    app = _make_app(tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with _patched_scan(ports=_RAW_PORTS_PAIR, cameras=_MOCK_CAMERAS):
+        scan = client.post("/api/setup/scan")
+    left_port, right_port = [port["stable_id"] for port in scan.json()["ports"]]
+    cam_id = scan.json()["cameras"][0]["stable_id"]
+
+    left_resp = client.post(
+        "/api/setup/session/assign",
+        json={
+            "interface_stable_id": left_port,
+            "alias": "left_follower",
+            "spec_name": "so101_follower",
+            "side": "left",
+        },
+    )
+    right_resp = client.post(
+        "/api/setup/session/assign",
+        json={
+            "interface_stable_id": right_port,
+            "alias": "right_follower",
+            "spec_name": "so101_follower",
+            "side": "right",
+        },
+    )
+    camera_resp = client.post(
+        "/api/setup/session/assign",
+        json={
+            "interface_stable_id": cam_id,
+            "alias": "top",
+            "spec_name": "opencv",
+            "side": "",
+        },
+    )
+    commit = client.post("/api/setup/session/commit")
+
+    assert left_resp.status_code == 200
+    assert right_resp.status_code == 200
+    assert camera_resp.status_code == 200
+    assert commit.status_code == 200
+    assert commit.json() == {"status": "committed", "bindings_created": 3}
+    arms = {arm["alias"]: arm["side"] for arm in client.get("/api/devices").json()["arms"]}
+    assert arms == {
+        "left_leader": "left",
+        "right_leader": "right",
+        "left_follower": "left",
+        "right_follower": "right",
+    }
 
 
 def test_dismiss_pending_camera_allows_commit_of_existing_assignments(tmp_path: Path) -> None:

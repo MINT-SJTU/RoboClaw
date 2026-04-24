@@ -55,7 +55,9 @@ def test_load_binding_returns_typed_objects() -> None:
 
     assert isinstance(arm, ArmBinding)
     assert arm.role is ArmRole.FOLLOWER
+    assert arm.side == "left"
     assert arm.to_dict()["type"] == "so101_follower"
+    assert arm.to_dict()["side"] == "left"
     assert not hasattr(arm, "is_follower")
     assert not hasattr(arm, "kind")
 
@@ -121,6 +123,49 @@ def test_manifest_returns_typed_bindings_and_stable_snapshot(tmp_path: Path) -> 
 
     persisted = load_manifest(manifest_path)
     assert manifest.snapshot == persisted
+
+
+def test_manifest_load_infers_legacy_bimanual_arm_sides(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        """
+{
+  "version": 2,
+  "arms": [
+    {
+      "alias": "left_leader",
+      "type": "so101_leader",
+      "port": "/dev/ttyACM0",
+      "calibration_dir": "/cal/left",
+      "calibrated": true
+    },
+    {
+      "alias": "right_leader",
+      "type": "so101_leader",
+      "port": "/dev/ttyACM1",
+      "calibration_dir": "/cal/right",
+      "calibrated": true
+    }
+  ],
+  "hands": [],
+  "cameras": [],
+  "datasets": {"root": "/data"},
+  "policies": {"root": "/policies"}
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = Manifest(path=manifest_path)
+
+    assert {arm.alias: arm.side for arm in manifest.arms} == {
+        "left_leader": "left",
+        "right_leader": "right",
+    }
+    assert {arm["alias"]: arm["side"] for arm in manifest.snapshot["arms"]} == {
+        "left_leader": "left",
+        "right_leader": "right",
+    }
 
 
 def test_manifest_setters_return_typed_bindings(tmp_path: Path) -> None:

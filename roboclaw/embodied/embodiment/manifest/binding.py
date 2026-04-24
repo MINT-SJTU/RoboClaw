@@ -40,6 +40,17 @@ def validate_arm_side(side: str, alias: str = "") -> None:
     validate_side(side, alias, kind="arm")
 
 
+def infer_side_from_alias(alias: str) -> str:
+    """Infer a device side from conventional left_/right_ aliases."""
+    normalized = alias.strip().lower()
+    for side in _VALID_SIDES:
+        if normalized == side:
+            return side
+        if normalized.startswith(f"{side}_") or normalized.startswith(f"{side}-"):
+            return side
+    return ""
+
+
 @dataclass(frozen=True)
 class Binding:
     """Common immutable binding state shared by all device bindings."""
@@ -164,7 +175,7 @@ def _arm_from_dict(
     data: dict[str, Any],
     guards: dict[str, InterfaceGuard],
 ) -> ArmBinding:
-    side = data.get("side", "")
+    side = data.get("side", "") or infer_side_from_alias(data.get("alias", ""))
     validate_arm_side(side, data.get("alias", ""))
     interface = SerialInterface(
         by_id=data.get("port", ""),
