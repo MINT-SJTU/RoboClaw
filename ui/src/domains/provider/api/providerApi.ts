@@ -36,6 +36,17 @@ export interface ProviderModelsResponse {
   error?: string
 }
 
+export interface ProviderTestPayload extends SaveProviderPayload {
+  input?: string
+}
+
+export interface ProviderTestResponse {
+  ok: boolean
+  finish_reason: string
+  content?: string
+  error?: string
+}
+
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const data = await response.json().catch(() => null)
   const detail = data?.detail
@@ -64,6 +75,20 @@ export async function fetchProviderModels(payload: SaveProviderPayload): Promise
   })
   if (!response.ok) {
     throw await responseError(response, 'Failed to discover provider models.')
+  }
+  return response.json()
+}
+
+export async function testProviderConfig(payload: ProviderTestPayload): Promise<ProviderTestResponse> {
+  const response = await fetch('/api/system/provider-test', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw await responseError(response, 'Failed to test provider configuration.')
   }
   return response.json()
 }

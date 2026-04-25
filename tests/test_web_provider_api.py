@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from roboclaw.config.loader import save_config, set_config_path
 from roboclaw.config.schema import Config
 from roboclaw.http.server import create_app
+from roboclaw.providers.base import LLMResponse
 
 
 def test_provider_status_and_save_roundtrip(tmp_path: Path) -> None:
@@ -169,3 +171,44 @@ def test_provider_models_rejects_unknown_provider(tmp_path: Path) -> None:
 
     response = client.post("/api/system/provider-models", json={"provider": "missing"})
     assert response.status_code == 400
+
+
+def test_provider_test_returns_provider_permission_error(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.agents.defaults.provider = "custom"
+    config.agents.defaults.model = "gpt-4o-mini"
+    config.providers.custom.api_base = "http://127.0.0.1:8000/v1"
+    config.providers.custom.api_key = "sk-existing"
+    save_config(config, config_path)
+    set_config_path(config_path)
+
+    class PermissionDeniedProvider:
+        async def chat_with_retry(self, **kwargs: Any) -> LLMResponse:
+            assert kwargs["messages"][0]["content"] == "测试输入"
+            return LLMResponse(
+                content="Error: Error code: 403 - {'error': 'API Key 不允许访问该渠道，请前往令牌管理界面修改令牌权限'}",
+                finish_reason="error",
+            )
+
+    monkeypatch.setattr("roboclaw.http.server.build_provider", lambda _config: PermissionDeniedProvider())
+
+    app = create_app(config_path=str(config_path), workspace=str(tmp_path / "workspace"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/system/provider-test",
+        json={
+            "provider": "custom",
+            "model": "gpt-4o-mini",
+            "api_base": "http://127.0.0.1:8000/v1",
+            "api_key": "sk-test",
+            "input": "测试输入",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["finish_reason"] == "error"
+    assert "API Key 不允许访问该渠道" in payload["error"]

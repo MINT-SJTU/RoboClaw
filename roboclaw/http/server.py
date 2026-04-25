@@ -164,6 +164,10 @@ def _register_system_routes(app: FastAPI, runtime: WebRuntime) -> None:
     async def provider_models(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return await _handle_provider_models(payload)
 
+    @app.post("/api/system/provider-test")
+    async def provider_test(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        return await _handle_provider_test(payload)
+
     @app.get("/api/system/hf-config")
     async def hf_config_status() -> dict[str, Any]:
         config = load_config(get_config_path())
@@ -238,14 +242,7 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
     try:
         new_provider = build_provider(config)
     except ProviderConfigurationError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "provider_configuration_error",
-                "message": str(exc),
-                "hint": exc.hint,
-            },
-        ) from exc
+        raise _provider_config_http_error(exc) from exc
 
     save_config(config, get_config_path())
     runtime.swap_provider(new_provider, config)
@@ -287,6 +284,65 @@ async def _handle_provider_models(payload: dict[str, Any]) -> dict[str, Any]:
     return {"models": models, "error": error}
 
 
+async def _handle_provider_test(payload: dict[str, Any]) -> dict[str, Any]:
+    """Send a minimal chat request with unsaved provider settings."""
+    config = load_config(get_config_path())
+    provider_name = str(payload.get("provider") or config.agents.defaults.provider or "custom")
+    section = getattr(config.providers, provider_name, None)
+    if section is None:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
+
+    if payload.get("clear_api_key"):
+        section.api_key = ""
+
+    api_key = payload.get("api_key")
+    if isinstance(api_key, str) and api_key.strip():
+        section.api_key = api_key.strip()
+
+    api_base = payload.get("api_base")
+    if isinstance(api_base, str):
+        section.api_base = api_base.strip() or None
+
+    error = _apply_extra_headers(payload, section)
+    if error:
+        raise HTTPException(status_code=400, detail=error["message"])
+
+    model = payload.get("model")
+    if isinstance(model, str) and model.strip():
+        config.agents.defaults.model = model.strip()
+    else:
+        spec = find_by_name(provider_name)
+        if spec and spec.default_model:
+            config.agents.defaults.model = spec.default_model
+
+    config.agents.defaults.provider = provider_name if provider_name != "auto" else "auto"
+
+    try:
+        provider = build_provider(config)
+    except ProviderConfigurationError as exc:
+        raise _provider_config_http_error(exc) from exc
+
+    test_input = payload.get("input")
+    if not isinstance(test_input, str) or not test_input.strip():
+        test_input = "Reply with OK if the RoboClaw AI provider test reaches you."
+
+    response = await provider.chat_with_retry(
+        messages=[{"role": "user", "content": test_input.strip()}],
+        model=config.agents.defaults.model,
+    )
+    if response.finish_reason == "error":
+        return {
+            "ok": False,
+            "finish_reason": response.finish_reason,
+            "error": response.content or "Provider returned an error.",
+        }
+    return {
+        "ok": True,
+        "finish_reason": response.finish_reason,
+        "content": response.content or "",
+    }
+
+
 def _apply_extra_headers(payload: dict[str, Any], section: Any) -> dict[str, Any] | None:
     """Parse and apply extra_headers from payload. Returns error dict on failure."""
     extra_headers = payload.get("extra_headers")
@@ -298,6 +354,17 @@ def _apply_extra_headers(payload: dict[str, Any], section: Any) -> dict[str, Any
     if isinstance(extra_headers, dict):
         section.extra_headers = extra_headers or None
     return None
+
+
+def _provider_config_http_error(exc: ProviderConfigurationError) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "code": "provider_configuration_error",
+            "message": str(exc),
+            "hint": exc.hint,
+        },
+    )
 
 
 # ------------------------------------------------------------------

@@ -5,6 +5,7 @@ import {
   fetchProviderModels,
   fetchProviderStatus,
   saveProviderConfig,
+  testProviderConfig,
   type ProviderOption,
 } from '@/domains/provider/api/providerApi'
 
@@ -64,7 +65,9 @@ export default function ProviderSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [discoveringModels, setDiscoveringModels] = useState(false)
+  const [testingProvider, setTestingProvider] = useState(false)
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([])
+  const [testInput, setTestInput] = useState('Reply with OK if the RoboClaw AI provider test reaches you.')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -171,6 +174,31 @@ export default function ProviderSettingsPage() {
       setError(discoverError instanceof Error ? discoverError.message : 'Failed to discover models.')
     } finally {
       setDiscoveringModels(false)
+    }
+  }
+
+  async function handleTestProvider() {
+    setTestingProvider(true)
+    setError('')
+    setNotice('')
+
+    try {
+      const payload = await testProviderConfig({
+        provider: selectedProvider || 'custom',
+        model,
+        api_key: apiKey,
+        api_base: apiBase,
+        input: testInput,
+      })
+      if (payload.ok) {
+        setNotice(`${t('providerTestSuccess')} ${payload.content || ''}`.trim())
+      } else {
+        setError(`${t('providerTestFailed')} ${payload.error || ''}`.trim())
+      }
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : 'Failed to test provider.')
+    } finally {
+      setTestingProvider(false)
     }
   }
 
@@ -347,6 +375,26 @@ export default function ProviderSettingsPage() {
                     />
                   </label>
                 )}
+
+                <div className="space-y-2 rounded-xl border border-bd/50 bg-white/70 p-3">
+                  <label className="block">
+                    <div className="mb-1.5 text-xs font-medium text-tx2">{t('providerTestInput')}</div>
+                    <textarea
+                      value={testInput}
+                      onChange={(e) => setTestInput(e.target.value)}
+                      className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                      placeholder={t('providerTestPlaceholder')}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleTestProvider}
+                    disabled={testingProvider}
+                    className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {testingProvider ? t('testingProvider') : t('testProvider')}
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-3">
                   <button
