@@ -35,10 +35,21 @@ function needsBaseUrl(p: ProviderOption): boolean {
 }
 
 function providerModel(provider: ProviderOption, currentModel = ''): string {
-  if (!currentModel || !modelMatchesProvider(currentModel, provider)) {
+  if (!currentModel) {
+    return provider.default_model || ''
+  }
+  if (acceptsArbitraryModel(provider) || modelMatchesProvider(currentModel, provider)) {
+    return currentModel
+  }
+  if (provider.default_model) {
     return provider.default_model || currentModel
   }
   return currentModel
+}
+
+function acceptsArbitraryModel(provider: ProviderOption): boolean {
+  const category = providerCategory(provider)
+  return provider.direct || provider.local || category === 'gateway'
 }
 
 function modelMatchesProvider(model: string, provider: ProviderOption): boolean {
@@ -51,6 +62,10 @@ function modelMatchesProvider(model: string, provider: ProviderOption): boolean 
     const normalizedKeyword = keyword.toLowerCase().replace(/-/g, '_')
     return normalizedModel.includes(normalizedKeyword)
   })
+}
+
+function uniqueModels(models: string[]): string[] {
+  return [...new Set(models.map((item) => item.trim()).filter(Boolean))]
 }
 
 export default function ProviderSettingsPage() {
@@ -120,7 +135,7 @@ export default function ProviderSettingsPage() {
     setApiKey('')
     setApiBase(nextProvider?.api_base || '')
     if (nextProvider) {
-      setModel(providerModel(nextProvider))
+      setModel(providerModel(nextProvider, model))
     }
     setDiscoveredModels([])
   }
@@ -203,6 +218,13 @@ export default function ProviderSettingsPage() {
   }
 
   const selected = providers.find((provider) => provider.name === selectedProvider) || null
+  const selectableModels = selected ? uniqueModels([
+    model,
+    activeModel,
+    selected.default_model,
+    ...selected.model_presets,
+    ...discoveredModels,
+  ]) : []
 
   const groups = useMemo(() => ([
     { key: 'standard', title: t('providerGroupStandard') },
@@ -342,11 +364,11 @@ export default function ProviderSettingsPage() {
                     {discoveringModels ? t('discoveringModels') : t('discoverModels')}
                   </button>
 
-                  {discoveredModels.length > 0 && (
+                  {selectableModels.length > 0 && (
                     <div className="rounded-xl border border-bd/50 bg-white/70 p-2">
                       <div className="mb-2 text-xs font-medium text-tx2">{t('availableModels')}</div>
                       <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-                        {discoveredModels.map((item) => (
+                        {selectableModels.map((item) => (
                           <button
                             key={item}
                             type="button"

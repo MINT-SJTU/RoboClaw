@@ -42,6 +42,7 @@ def test_provider_status_and_save_roundtrip(tmp_path: Path) -> None:
     assert saved["status"] == "ok"
     assert saved["custom_provider"]["configured"] is True
     assert saved["custom_provider"]["default_model"] == "gpt-4o-mini"
+    assert "gpt-5.5" in saved["custom_provider"]["model_presets"]
     assert saved["default_provider"] == "custom"
     assert saved["custom_provider"]["has_api_key"] is True
     assert saved["custom_provider"]["masked_api_key"] == "已保存"

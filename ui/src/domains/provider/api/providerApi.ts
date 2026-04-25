@@ -3,6 +3,7 @@ export interface ProviderOption {
   label: string
   keywords: string[]
   default_model: string
+  model_presets: string[]
   oauth: boolean
   local: boolean
   direct: boolean
