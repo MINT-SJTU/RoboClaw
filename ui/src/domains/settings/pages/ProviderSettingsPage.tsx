@@ -49,6 +49,14 @@ export default function ProviderSettingsPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
+  function modelDiscoveryNotice(discoveryError?: string) {
+    const normalizedError = (discoveryError || '').toLowerCase()
+    if (normalizedError.includes('403') || normalizedError.includes('forbidden')) {
+      return t('modelDiscoveryForbidden')
+    }
+    return discoveryError ? `${t('noModelsDiscovered')} ${discoveryError}` : t('noModelsDiscovered')
+  }
+
   useEffect(() => {
     let cancelled = false
 
@@ -131,7 +139,7 @@ export default function ProviderSettingsPage() {
         setModel((current) => current || payload.models[0])
         setNotice(t('modelsDiscovered'))
       } else {
-        setNotice(payload.error ? `${t('noModelsDiscovered')} ${payload.error}` : t('noModelsDiscovered'))
+        setNotice(modelDiscoveryNotice(payload.error))
       }
     } catch (discoverError) {
       setError(discoverError instanceof Error ? discoverError.message : 'Failed to discover models.')

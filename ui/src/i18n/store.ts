@@ -95,6 +95,7 @@ const translations = {
     availableModels: '可用模型',
     modelsDiscovered: '已获取可用模型。',
     noModelsDiscovered: '没有探查到模型，请手动填写模型名。',
+    modelDiscoveryForbidden: '这个 API 网关不允许列出模型，但聊天接口仍可能可用。请直接手动填写模型名。',
 
     // Data Collection
     connect: '连接',
@@ -631,6 +632,7 @@ const translations = {
     availableModels: 'Available models',
     modelsDiscovered: 'Available models loaded.',
     noModelsDiscovered: 'No models were discovered. Enter the model name manually.',
+    modelDiscoveryForbidden: 'This API gateway does not allow listing models, but chat requests may still work. Enter the model name manually.',
 
     // Data Collection
     connect: 'Connect',
