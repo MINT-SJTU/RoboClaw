@@ -22,6 +22,7 @@ export interface ProviderStatusResponse {
 
 export interface SaveProviderPayload {
   provider?: string
+  model?: string
   api_key?: string
   api_base?: string
   extra_headers?: Record<string, string>

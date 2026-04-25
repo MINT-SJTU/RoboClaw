@@ -37,6 +37,7 @@ export default function ProviderSettingsPage() {
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [activeProvider, setActiveProvider] = useState<string | null>(null)
   const [activeModel, setActiveModel] = useState('')
+  const [model, setModel] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [apiBase, setApiBase] = useState('')
@@ -56,6 +57,7 @@ export default function ProviderSettingsPage() {
         setProviders(uiProviders)
         setActiveProvider(payload.active_provider)
         setActiveModel(payload.default_model)
+        setModel(payload.default_model)
 
         const initial = payload.active_provider && uiProviders.some((provider) => provider.name === payload.active_provider)
           ? payload.active_provider
@@ -92,6 +94,7 @@ export default function ProviderSettingsPage() {
     try {
       const payload = await saveProviderConfig({
         provider: selectedProvider || 'custom',
+        model,
         api_key: apiKey,
         api_base: apiBase,
       })
@@ -227,6 +230,16 @@ export default function ProviderSettingsPage() {
                     />
                   </label>
                 )}
+
+                <label className="block">
+                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('settingsDefaultModel')}</div>
+                  <input
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="w-full rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                    placeholder={t('modelPlaceholder')}
+                  />
+                </label>
 
                 {needsApiKey(selected) && (
                   <label className="block">

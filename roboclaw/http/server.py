@@ -201,8 +201,12 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
     if error:
         return error
 
-    # Auto-discover model for providers that use a custom base URL
-    if section.api_base:
+    model = payload.get("model")
+    if isinstance(model, str) and model.strip():
+        config.agents.defaults.model = model.strip()
+    # Auto-discover model for providers that use a custom base URL when the
+    # user has not chosen one explicitly.
+    elif section.api_base:
         discovered_model = await _discover_custom_model(section.api_base, section.api_key or None)
         if discovered_model:
             config.agents.defaults.model = discovered_model
