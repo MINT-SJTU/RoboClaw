@@ -8,7 +8,7 @@
 
 ### GitHub 同步
 
-- 本仓库的持续工作分支是 `pipline/new-version`。修改代码前先确认并切到该分支；完成可验证的任务后，及时提交并推送到 `origin/pipline/new-version`。
+- 本仓库的持续工作分支是 `Pipline/new-version`。修改代码前先确认当前工作会推送到远端 `origin/Pipline/new-version`；完成可验证的任务后，及时提交并推送到该分支。
 - 提交时只包含当前任务相关文件。未明确属于当前任务的未跟踪文件或用户改动不要提交、删除或回滚。
 
 ### 架构原则

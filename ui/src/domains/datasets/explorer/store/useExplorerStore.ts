@@ -75,7 +75,13 @@ export interface EpisodeDetail {
   }
   sample_rows: Array<Record<string, unknown>>
   joint_trajectory: JointTrajectoryPayload
-  videos: Array<{ path: string; url: string; stream: string }>
+  videos: Array<{
+    path: string
+    url: string
+    stream: string
+    from_timestamp?: number | null
+    to_timestamp?: number | null
+  }>
 }
 
 export interface DatasetSuggestion {
