@@ -21,6 +21,7 @@ from roboclaw.data.curation.features import (
 from roboclaw.data.curation.state import (
     load_annotations,
     load_propagation_results,
+    load_quality_results,
 )
 from roboclaw.data.curation.validators import load_episode_data
 
@@ -142,6 +143,12 @@ def serialize_prototype_results(results: dict[str, Any] | None) -> dict[str, Any
         "entry_count": int(results.get("entry_count", 0) or 0),
         "cluster_count": int(results.get("cluster_count", len(clusters)) or len(clusters)),
         "anchor_record_keys": anchor_record_keys,
+        "quality_filter_mode": str(results.get("quality_filter_mode", "passed") or "passed"),
+        "selected_episode_indices": [
+            coerce_int(value)
+            for value in results.get("selected_episode_indices", [])
+            if coerce_int(value) is not None
+        ],
         "clusters": clusters,
     }
 
@@ -194,6 +201,25 @@ def build_workspace_payload(
     latest_propagation = None
     if propagation and propagation.get("source_episode_index") == episode_index:
         latest_propagation = propagation
+    quality = load_quality_results(dataset_path) or {}
+    quality_entry = next(
+        (
+            episode
+            for episode in quality.get("episodes", [])
+            if coerce_int(episode.get("episode_index")) == episode_index
+        ),
+        None,
+    )
+    failed_validators = []
+    quality_tags = []
+    if isinstance(quality_entry, dict):
+        validators = quality_entry.get("validators", {}) or {}
+        failed_validators = [
+            str(name)
+            for name, validator in validators.items()
+            if isinstance(validator, dict) and not validator.get("passed", False)
+        ]
+        quality_tags = ["quality-pass" if quality_entry.get("passed") else "quality-risk"]
 
     return {
         "episode_index": episode_index,
@@ -209,6 +235,16 @@ def build_workspace_payload(
             "end_timestamp": end_timestamp,
             "duration_s": duration_s,
             "video_count": len(relative_videos),
+            "quality_status": (
+                "passed"
+                if quality_entry and quality_entry.get("passed")
+                else "failed"
+                if quality_entry
+                else "unvalidated"
+            ),
+            "quality_score": float(quality_entry.get("score", 0.0) or 0.0)
+            if isinstance(quality_entry, dict)
+            else None,
         },
         "videos": [
             {
@@ -223,4 +259,14 @@ def build_workspace_payload(
         "joint_trajectory": joint_trajectory,
         "annotations": saved_annotations,
         "latest_propagation": latest_propagation,
+        "quality": {
+            "validated": bool(quality_entry),
+            "passed": bool(quality_entry.get("passed")) if isinstance(quality_entry, dict) else None,
+            "score": float(quality_entry.get("score", 0.0) or 0.0)
+            if isinstance(quality_entry, dict)
+            else None,
+            "failed_validators": failed_validators,
+            "quality_tags": quality_tags,
+            "issues": quality_entry.get("issues", []) if isinstance(quality_entry, dict) else [],
+        },
     }

@@ -11,6 +11,7 @@ from loguru import logger
 from .canonical import build_canonical_trajectory
 from .clustering import discover_prototype_clusters, refine_clusters_with_dba
 from .dtw import resolve_dtw_configuration
+from .dtw import dtw_alignment
 from .exports import (
     dataset_quality_parquet_path,
     dataset_text_annotations_parquet_path,
@@ -30,6 +31,7 @@ from .propagation import (
     build_confidence_payload,
     derive_quality_tags,
     detect_grasp_place_events,
+    build_alignment_series,
     propagate_annotation_spans,
 )
 from .serializers import (
@@ -79,6 +81,19 @@ def _set_stage_status(
     state["stages"][stage_key]["status"] = status
     save_workflow_state(dataset_path, state)
     return state
+
+
+def _set_prototype_stage_context(
+    dataset_path: Path,
+    *,
+    quality_filter_mode: str,
+    selected_episode_indices: list[int],
+) -> None:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["prototype_discovery"]
+    stage["quality_filter_mode"] = quality_filter_mode
+    stage["selected_episode_indices"] = list(selected_episode_indices)
+    save_workflow_state(dataset_path, state)
 
 
 def _update_stage_summary(
@@ -300,14 +315,25 @@ class CurationService:
         dataset_name: str,
         cluster_count: int | None,
         candidate_limit: int,
+        episode_indices: list[int] | None = None,
+        quality_filter_mode: str = "passed",
     ) -> dict[str, str]:
         svc = _LegacyCurationService(dataset_path, dataset_name)
+        selected_episode_indices = list(episode_indices or [])
+        _set_prototype_stage_context(
+            dataset_path,
+            quality_filter_mode=quality_filter_mode,
+            selected_episode_indices=selected_episode_indices,
+        )
 
         async def _task() -> None:
             await asyncio.to_thread(
                 svc.run_prototype_discovery,
                 cluster_count,
                 candidate_limit,
+                None,
+                selected_episode_indices or None,
+                quality_filter_mode,
             )
 
         self._register_workflow_task(dataset_path, "prototype_discovery", _task())
@@ -408,6 +434,131 @@ class CurationService:
         episode_index: int,
     ) -> dict[str, Any]:
         return build_workspace_payload(dataset, dataset_path, episode_index)
+
+    def get_alignment_overview(self, dataset_path: Path) -> dict[str, Any]:
+        quality = load_quality_results(dataset_path) or {}
+        prototype = serialize_prototype_results(load_prototype_results(dataset_path))
+        propagation = serialize_propagation_results(load_propagation_results(dataset_path))
+        quality_rows = quality.get("episodes", []) or []
+        annotated_lookup: dict[int, dict[str, Any]] = {}
+        annotations_dir = dataset_path / ".workflow" / "annotations"
+        if annotations_dir.exists():
+            for annotation_path in sorted(annotations_dir.glob("ep_*.json")):
+                try:
+                    payload = load_annotations(dataset_path, int(annotation_path.stem.split("_", 1)[1]))
+                except (IndexError, ValueError):
+                    payload = None
+                if not payload:
+                    continue
+                episode_index = coerce_int(payload.get("episode_index"))
+                if episode_index is None:
+                    continue
+                spans = payload.get("annotations", []) or []
+                annotated_lookup[episode_index] = {
+                    "annotation_count": len(spans),
+                    "updated_at": payload.get("updated_at") or payload.get("created_at") or "",
+                    "has_manual_annotation": len(spans) > 0,
+                }
+
+        propagated_lookup: dict[int, dict[str, Any]] = {}
+        for item in propagation.get("propagated", []) or []:
+            episode_index = coerce_int(item.get("episode_index"))
+            if episode_index is None:
+                continue
+            spans = item.get("spans", []) or []
+            propagated_lookup[episode_index] = {
+                "propagated_count": len(spans),
+                "prototype_score": item.get("prototype_score"),
+            }
+
+        issue_distribution: dict[str, int] = {}
+        rows: list[dict[str, Any]] = []
+        aligned_count = 0
+        annotated_count = 0
+
+        for episode in quality_rows:
+            episode_index = coerce_int(episode.get("episode_index"))
+            if episode_index is None:
+                continue
+            issues = episode.get("issues", []) or []
+            for issue in issues:
+                if issue.get("passed") is True:
+                    continue
+                issue_name = str(issue.get("check_name") or "").strip()
+                if issue_name:
+                    issue_distribution[issue_name] = issue_distribution.get(issue_name, 0) + 1
+
+            annotation_meta = annotated_lookup.get(episode_index, {})
+            propagation_meta = propagated_lookup.get(episode_index, {})
+            annotation_count = int(annotation_meta.get("annotation_count", 0) or 0)
+            propagated_count = int(propagation_meta.get("propagated_count", 0) or 0)
+            if annotation_count > 0 or propagated_count > 0:
+                aligned_count += 1
+            if annotation_count > 0:
+                annotated_count += 1
+
+            alignment_status = "not_started"
+            if propagated_count > 0:
+                alignment_status = "propagated"
+            elif annotation_count > 0:
+                alignment_status = "annotated"
+
+            validators = episode.get("validators", {}) or {}
+            rows.append({
+                "episode_index": episode_index,
+                "record_key": str(episode_index),
+                "task": "",
+                "quality_passed": bool(episode.get("passed", False)),
+                "quality_score": float(episode.get("score", 0.0) or 0.0),
+                "quality_status": "passed" if episode.get("passed") else "failed",
+                "validator_scores": {
+                    name: float(value.get("score", 0.0) or 0.0)
+                    for name, value in validators.items()
+                    if isinstance(value, dict)
+                },
+                "failed_validators": [
+                    str(name)
+                    for name, value in validators.items()
+                    if isinstance(value, dict) and not value.get("passed", False)
+                ],
+                "issues": issues,
+                "alignment_status": alignment_status,
+                "annotation_count": annotation_count,
+                "propagated_count": propagated_count,
+                "prototype_score": propagation_meta.get("prototype_score"),
+                "updated_at": annotation_meta.get("updated_at", ""),
+            })
+
+        total = len(rows)
+        passed = sum(1 for row in rows if row["quality_passed"])
+        failed = total - passed
+        perfect = sum(1 for row in rows if row["quality_score"] >= 99.95)
+
+        return {
+            "summary": {
+                "total_checked": total,
+                "passed_count": passed,
+                "failed_count": failed,
+                "perfect_ratio": round((perfect / max(total, 1)) * 100, 1) if total else 0.0,
+                "aligned_count": aligned_count,
+                "annotated_count": annotated_count,
+                "propagated_count": sum(1 for row in rows if row["alignment_status"] == "propagated"),
+                "prototype_cluster_count": prototype.get("cluster_count", 0),
+                "quality_filter_mode": prototype.get("quality_filter_mode", "passed"),
+            },
+            "distribution": {
+                "issue_types": [
+                    {"label": label, "count": count}
+                    for label, count in sorted(issue_distribution.items(), key=lambda item: item[1], reverse=True)
+                ],
+                "alignment_status": [
+                    {"label": "not_started", "count": sum(1 for row in rows if row["alignment_status"] == "not_started")},
+                    {"label": "annotated", "count": sum(1 for row in rows if row["alignment_status"] == "annotated")},
+                    {"label": "propagated", "count": sum(1 for row in rows if row["alignment_status"] == "propagated")},
+                ],
+            },
+            "rows": rows,
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -601,16 +752,18 @@ class _LegacyCurationService:
         cluster_count: int | None = None,
         candidate_limit: int = 50,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        episode_indices: list[int] | None = None,
+        quality_filter_mode: str = "passed",
     ) -> dict[str, Any]:
-        """Run DTW + k-medoids prototype discovery on quality-passed episodes."""
+        """Run DTW + k-medoids prototype discovery on the selected episode subset."""
         _set_stage_status(self.dataset_path, "prototype_discovery", "running")
         logger.info("Prototype discovery started for {}", self.dataset_path.name)
 
-        passed_episodes = _collect_passed_episodes(self.dataset_path)
-        if not passed_episodes:
+        selected_episodes = list(episode_indices or _collect_passed_episodes(self.dataset_path))
+        if not selected_episodes:
             return _finish_prototype_empty(self.dataset_path)
 
-        candidates = passed_episodes[:candidate_limit]
+        candidates = selected_episodes[:candidate_limit]
         entries = _build_canonical_entries(self.dataset_path, candidates, progress_callback)
         if not entries:
             return _finish_prototype_empty(self.dataset_path)
@@ -632,6 +785,8 @@ class _LegacyCurationService:
             "candidate_count": len(candidates),
             "entry_count": len(entries),
             "cluster_count": refined.get("cluster_count", clustering.get("cluster_count", 0)),
+            "quality_filter_mode": quality_filter_mode,
+            "selected_episode_indices": candidates,
         }
         save_prototype_results(self.dataset_path, results)
         _update_stage_summary(
@@ -641,6 +796,7 @@ class _LegacyCurationService:
                 "candidate_count": len(candidates),
                 "entry_count": len(entries),
                 "cluster_count": results["cluster_count"],
+                "quality_filter_mode": quality_filter_mode,
             },
         )
         logger.info(
@@ -674,6 +830,8 @@ class _LegacyCurationService:
             return _finish_propagation_empty(self.dataset_path, source_episode_index)
 
         source_duration = _load_episode_duration(self.dataset_path, source_episode_index)
+        source_data = load_episode_data(self.dataset_path, source_episode_index)
+        source_sequence, source_time_axis = build_alignment_series(source_data.get("rows", []))
         prototype_results = load_prototype_results(self.dataset_path)
         targets = _collect_propagation_targets(
             prototype_results, source_episode_index,
@@ -688,6 +846,8 @@ class _LegacyCurationService:
                 target,
                 spans,
                 source_duration,
+                source_sequence,
+                source_time_axis,
                 source_annotations,
                 source_episode_index,
             )
@@ -858,22 +1018,39 @@ def _propagate_single_target(
     target: dict[str, Any],
     spans: list[dict[str, Any]],
     source_duration: float,
+    source_sequence: list[list[float]],
+    source_time_axis: list[float],
     source_annotations: dict[str, Any],
     source_episode_index: int,
 ) -> tuple[dict[str, Any], bool]:
     target_idx = target["episode_index"]
     target_duration = _load_episode_duration(dataset_path, target_idx)
+    target_data = load_episode_data(dataset_path, target_idx)
+    target_sequence, target_time_axis = build_alignment_series(target_data.get("rows", []))
+    alignment_distance = None
+    alignment_path: list[tuple[int, int]] | None = None
+    if len(source_time_axis) > 1 and len(target_time_axis) > 1:
+        alignment_distance, alignment_path = dtw_alignment(
+            source_sequence,
+            target_sequence,
+            window_ratio=0.2,
+        )
     target_spans = propagate_annotation_spans(
         spans,
         source_duration=source_duration,
         target_duration=target_duration,
         target_record_key=str(target_idx),
         prototype_score=target.get("prototype_score", 0.0),
+        source_time_axis=source_time_axis if alignment_path else None,
+        target_time_axis=target_time_axis if alignment_path else None,
+        alignment_path=alignment_path,
     )
     result = {
         "episode_index": target_idx,
         "spans": target_spans,
         "prototype_score": target.get("prototype_score", 0.0),
+        "alignment_method": "dtw" if alignment_path else "scale",
+        "alignment_distance": alignment_distance,
     }
     existing = load_annotations(dataset_path, target_idx) or {}
     existing_annotations = existing.get("annotations", []) or []

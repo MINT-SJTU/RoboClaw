@@ -16,6 +16,10 @@ from .features import mean
 # K-medoids clustering with automatic cluster count selection
 # ---------------------------------------------------------------------------
 
+AUTO_CLUSTER_MIN_MEMBER_COUNT = 2
+AUTO_CLUSTER_ABS_SILHOUETTE_TOLERANCE = 0.05
+AUTO_CLUSTER_REL_SILHOUETTE_TOLERANCE = 0.10
+
 
 def discover_prototype_clusters(
     entries: list[dict[str, Any]],
@@ -244,26 +248,55 @@ def _auto_select_cluster_count(
     entries: list[dict[str, Any]],
     runner: _KMedoidsRunner,
 ) -> dict[str, Any]:
-    best_clustering: dict[str, Any] | None = None
-    best_score = float("-inf")
+    evaluated: list[dict[str, Any]] = []
     max_candidate = min(len(entries), max(len(entries) // 5, 15))
 
     for k in range(1, max_candidate + 1):
         candidate = runner.run(k, emit_progress=False)
-        smallest = min(
-            (c.get("member_count", 0) for c in candidate["clusters"]),
-            default=0,
-        )
-        if k > 1 and smallest < 1:
-            continue
+        member_counts = [int(c.get("member_count", 0) or 0) for c in candidate["clusters"]]
+        smallest = min(member_counts, default=0)
         score = runner.average_silhouette(candidate["clusters"])
-        if score > best_score:
-            best_score = score
-            best_clustering = candidate
+        evaluated.append({
+            "k": k,
+            "candidate": candidate,
+            "score": score,
+            "smallest_member_count": smallest,
+            "member_counts": member_counts,
+        })
 
-    if best_clustering is None:
+    if not evaluated:
         return runner.run(1, emit_progress=True)
-    return runner.run(best_clustering["cluster_count"], emit_progress=True)
+
+    preferred = [
+        item
+        for item in evaluated
+        if item["k"] == 1 or item["smallest_member_count"] >= AUTO_CLUSTER_MIN_MEMBER_COUNT
+    ]
+    candidate_pool = preferred if any(item["k"] > 1 for item in preferred) else evaluated
+
+    best_score = max(item["score"] for item in candidate_pool)
+    tolerance = _silhouette_tolerance(best_score)
+    qualifying = [
+        item
+        for item in candidate_pool
+        if item["score"] >= best_score - tolerance
+    ]
+    selected = min(
+        qualifying,
+        key=lambda item: (int(item["k"]), -float(item["score"])),
+    )
+    return runner.run(selected["candidate"]["cluster_count"], emit_progress=True)
+
+
+def _silhouette_tolerance(best_score: float) -> float:
+    return min(
+        0.08,
+        max(
+            0.03,
+            float(best_score) * AUTO_CLUSTER_REL_SILHOUETTE_TOLERANCE,
+            AUTO_CLUSTER_ABS_SILHOUETTE_TOLERANCE,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

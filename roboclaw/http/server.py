@@ -251,7 +251,7 @@ def create_app(
 
     runtime = WebRuntime.build(config, host=host, port=port)
 
-    app = FastAPI(title="RoboClaw Web UI")
+    app = FastAPI(title="RoboClaw")
 
     # CORS middleware
     web_cfg = config.channels.web
@@ -437,5 +437,5 @@ def main(
     _check_device_permissions()
     _ensure_ui_build()
     app = create_app(config_path=config_path, workspace=workspace, host=host, port=port)
-    logger.info("Starting RoboClaw Web UI at http://{}:{}", app.state.web_host, app.state.web_port)
+    logger.info("Starting RoboClaw at http://{}:{}", app.state.web_host, app.state.web_port)
     uvicorn.run(app, host=app.state.web_host, port=app.state.web_port, log_level="info")

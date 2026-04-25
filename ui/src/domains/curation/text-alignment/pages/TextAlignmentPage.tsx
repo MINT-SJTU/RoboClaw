@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import AnnotationPanel from '@/domains/curation/components/AnnotationPanel'
 import PrototypePanel from '@/domains/curation/components/PrototypePanel'
-import { ActionButton, GlassPanel, MetricCard } from '@/shared/ui'
+import { ActionButton, GlassPanel } from '@/shared/ui'
 import { useI18n } from '@/i18n'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
 
@@ -16,6 +16,9 @@ export default function TextAlignmentView() {
     publishTextAnnotationsParquet,
     selectDataset,
     stopPolling,
+    alignmentQualityFilter,
+    setAlignmentQualityFilter,
+    workflowState,
   } = useWorkflow()
   const [publishing, setPublishing] = useState(false)
   const [publishMessage, setPublishMessage] = useState('')
@@ -45,15 +48,18 @@ export default function TextAlignmentView() {
     }
   }
 
-  return (
-    <div className="page-enter quality-view">
-      <div className="quality-view__hero">
-        <div>
-          <h2 className="quality-view__title">{t('textAlignmentTitle')}</h2>
-          <p className="quality-view__desc">{t('textAlignmentDesc')}</p>
-        </div>
-      </div>
+  const qualityReady =
+    workflowState?.stages.quality_validation.status === 'completed'
+    || workflowState?.stages.quality_validation.status === 'paused'
+    || Boolean(qualityResults?.episodes.length)
+  const validatedEpisodes = qualityResults?.episodes || []
+  const filteredCount = validatedEpisodes.filter((episode) => {
+    if (alignmentQualityFilter === 'all') return true
+    return alignmentQualityFilter === 'passed' ? episode.passed : !episode.passed
+  }).length
 
+  return (
+    <div className="page-enter quality-view pipeline-page">
       {selectedDataset && datasetInfo ? (
         <div className="workflow-view__info-bar">
           <span>{datasetInfo.label}</span>
@@ -67,80 +73,59 @@ export default function TextAlignmentView() {
         </GlassPanel>
       )}
 
-      <div className="text-alignment-layout">
-        <div className="text-alignment-layout__main">
-          <div className="quality-kpis">
-            <MetricCard
-              label={t('passedEpisodes')}
-              value={qualityResults?.passed ?? '--'}
-              accent="sage"
-            />
-            <MetricCard
-              label={t('clusters')}
-              value={prototypeResults?.cluster_count ?? '--'}
-              accent="amber"
-            />
-            <MetricCard
-              label={t('annotation')}
-              value={prototypeResults?.anchor_record_keys.length ?? '--'}
-              accent="teal"
-            />
-            <MetricCard
-              label={t('runPropagation')}
-              value={propagationResults?.target_count ?? '--'}
-              accent="coral"
-            />
-          </div>
-
-          <GlassPanel className="text-alignment-section">
-            <div className="text-alignment-section__head">
-              <div>
-                <h3>{t('prototypeDiscovery')}</h3>
-                <p>{t('prototypeDesc')}</p>
+      <div className="text-alignment-workbench">
+        <GlassPanel className="text-alignment-control-card">
+          <div className="text-alignment-control-card__row">
+            <div className="text-alignment-control-card__meta">
+              <div className="text-alignment-control-card__title">{t('qualityValidation')}</div>
+              <div className="text-alignment-control-card__stats">
+                <span>{t('validatedEpisodes')}: {qualityResults?.total ?? 0}</span>
+                <span>{t('selectedEpisodes')}: {qualityReady ? filteredCount : 0}</span>
+                <span>{t('clusters')}: {prototypeResults?.cluster_count ?? 0}</span>
+                <span>{t('runPropagation')}: {propagationResults?.target_count ?? 0}</span>
               </div>
             </div>
-            <PrototypePanel />
-          </GlassPanel>
-
-          <AnnotationPanel />
-        </div>
-
-        <GlassPanel className="quality-layout__sidebar">
-          <div className="quality-sidebar__section">
-            <h3>{t('textAlignment')}</h3>
-            <p>{t('annotationDesc')}</p>
+            <div className="text-alignment-control-card__actions">
+              <select
+                className="dataset-selector__select"
+                disabled={!qualityReady}
+                value={alignmentQualityFilter}
+                onChange={(event) =>
+                  setAlignmentQualityFilter(event.target.value as 'passed' | 'failed' | 'all')
+                }
+              >
+                <option value="passed">{t('passedEpisodes')}</option>
+                <option value="failed">{t('failedEpisodes')}</option>
+                <option value="all">{t('allValidated')}</option>
+              </select>
+              <ActionButton
+                type="button"
+                variant="secondary"
+                disabled={!selectedDataset || publishing}
+                onClick={() => void handlePublish()}
+                className="justify-center"
+              >
+                {publishing ? t('publishing') : t('publishTextParquet')}
+              </ActionButton>
+            </div>
           </div>
-
-          <div className="quality-sidebar__section">
-            <div className="quality-sidebar__path">
-              {t('passedEpisodes')}: {qualityResults?.passed ?? 0}
-            </div>
-            <div className="quality-sidebar__path">
-              {t('clusters')}: {prototypeResults?.cluster_count ?? 0}
-            </div>
+          {!qualityReady ? (
+            <div className="status-panel">{t('textAlignmentNeedsQuality')}</div>
+          ) : null}
+          <div className="text-alignment-control-card__footer">
             <div className="quality-sidebar__path">
               {t('textAnnotationsParquet')}: {propagationResults?.published_parquet_path || '-'}
             </div>
-          </div>
-
-          <div className="quality-sidebar__section">
-            <ActionButton
-              type="button"
-              variant="secondary"
-              disabled={!selectedDataset || publishing}
-              onClick={() => void handlePublish()}
-              className="w-full justify-center"
-            >
-              {publishing ? t('publishing') : t('publishTextParquet')}
-            </ActionButton>
-            {publishMessage && (
-              <div className="quality-sidebar__path">{publishMessage}</div>
-            )}
-            {publishError && (
-              <div className="quality-sidebar__error">{publishError}</div>
-            )}
+            {publishMessage ? <div className="quality-sidebar__path">{publishMessage}</div> : null}
+            {publishError ? <div className="quality-sidebar__error">{publishError}</div> : null}
           </div>
         </GlassPanel>
+
+        <GlassPanel className="text-alignment-section text-alignment-section--compact">
+          <PrototypePanel />
+        </GlassPanel>
+
+        <AnnotationPanel />
       </div>
     </div>
   )

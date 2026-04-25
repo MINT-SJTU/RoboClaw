@@ -67,6 +67,8 @@ def init_workflow_state(dataset_path: Path) -> dict[str, Any]:
                 "status": "idle",
                 "latest_run": None,
                 "summary": None,
+                "quality_filter_mode": "passed",
+                "selected_episode_indices": [],
             },
             "annotation": {
                 "status": "idle",
@@ -102,6 +104,8 @@ def _normalize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     prototype_stage.setdefault("status", "idle")
     prototype_stage.setdefault("latest_run", None)
     prototype_stage.setdefault("summary", None)
+    prototype_stage.setdefault("quality_filter_mode", "passed")
+    prototype_stage.setdefault("selected_episode_indices", [])
 
     annotation_stage = stages.setdefault("annotation", {})
     annotation_stage.setdefault("status", "idle")

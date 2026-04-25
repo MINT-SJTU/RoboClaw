@@ -14,6 +14,7 @@ from roboclaw.http.routes import curation as curation_routes
 from roboclaw.data.curation import exports as curation_exports
 from roboclaw.data.curation import serializers as curation_serializers
 from roboclaw.data.curation import service as curation_service
+from roboclaw.data import dataset_sessions
 from roboclaw.data.curation.state import (
     load_workflow_state,
     save_prototype_results,
@@ -229,6 +230,121 @@ def test_workflow_result_endpoints_serialize_ui_shapes(
     assert prototype_payload["clusters"][0]["members"][0]["episode_index"] == 0
 
 
+def test_curation_dataset_list_includes_session_datasets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _dataset_path = _build_client(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        curation_routes,
+        "list_curation_dataset_summaries",
+        lambda: [
+            {
+                "name": "demo",
+                "display_name": "demo",
+                "source_kind": "workspace",
+                "total_episodes": 1,
+                "total_frames": 2,
+                "fps": 30,
+                "robot_type": "so101",
+            },
+            {
+                "name": "session:remote:abc123",
+                "display_name": "cadene/droid_1.0.1",
+                "source_kind": "remote_session",
+                "total_episodes": 3,
+                "total_frames": 42,
+                "fps": 30,
+                "robot_type": "so101",
+            },
+        ],
+    )
+
+    response = client.get("/api/curation/datasets")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[1]["name"] == "session:remote:abc123"
+    assert payload[1]["display_name"] == "cadene/droid_1.0.1"
+
+
+def test_quality_detail_can_resolve_session_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, dataset_path = _build_client(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        curation_routes,
+        "resolve_dataset_path",
+        lambda name: dataset_path if name == "session:remote:abc123" else (tmp_path / name),
+    )
+
+    save_quality_results(
+        dataset_path,
+        {
+            "total": 1,
+            "passed": 1,
+            "failed": 0,
+            "overall_score": 100,
+            "episodes": [{"episode_index": 0, "passed": True, "score": 100}],
+            "selected_validators": ["metadata"],
+        },
+    )
+
+    response = client.get(
+        "/api/curation/quality-results",
+        params={"dataset": "session:remote:abc123"},
+    )
+    assert response.status_code == 200
+    assert response.json()["overall_score"] == 100
+
+
+def test_prototype_run_passes_selected_episode_indices_and_filter_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _dataset_path = _build_client(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    async def _fake_start_prototype_run(
+        dataset_path: Path,
+        dataset_name: str,
+        cluster_count: int | None,
+        candidate_limit: int,
+        episode_indices: list[int] | None = None,
+        quality_filter_mode: str = "passed",
+    ) -> dict[str, str]:
+        captured["dataset_path"] = dataset_path
+        captured["dataset_name"] = dataset_name
+        captured["cluster_count"] = cluster_count
+        captured["candidate_limit"] = candidate_limit
+        captured["episode_indices"] = episode_indices
+        captured["quality_filter_mode"] = quality_filter_mode
+        return {"status": "started"}
+
+    monkeypatch.setattr(curation_routes, "_service", curation_service.CurationService())
+    monkeypatch.setattr(curation_routes._service, "start_prototype_run", _fake_start_prototype_run)
+
+    response = client.post(
+        "/api/curation/prototype-run",
+        json={
+            "dataset": "demo",
+            "cluster_count": 3,
+            "candidate_limit": 40,
+            "episode_indices": [0, 2, 5],
+            "quality_filter_mode": "all",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["dataset_name"] == "demo"
+    assert captured["cluster_count"] == 3
+    assert captured["candidate_limit"] == 40
+    assert captured["episode_indices"] == [0, 2, 5]
+    assert captured["quality_filter_mode"] == "all"
+
+
 def test_quality_pause_request_marks_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -245,6 +361,104 @@ def test_quality_pause_request_marks_state(
 
     updated = load_workflow_state(dataset_path)
     assert updated["stages"]["quality_validation"]["pause_requested"] is True
+
+
+def test_alignment_overview_combines_quality_and_alignment_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, dataset_path = _build_client(tmp_path, monkeypatch)
+
+    save_quality_results(
+        dataset_path,
+        {
+            "total": 2,
+            "passed": 1,
+            "failed": 1,
+            "overall_score": 91.0,
+            "episodes": [
+                {
+                    "episode_index": 0,
+                    "passed": True,
+                    "score": 98.0,
+                    "validators": {"metadata": {"passed": True, "score": 100.0}},
+                    "issues": [],
+                },
+                {
+                    "episode_index": 1,
+                    "passed": False,
+                    "score": 84.0,
+                    "validators": {"timing": {"passed": False, "score": 70.0}},
+                    "issues": [{"check_name": "timing", "passed": False, "message": "bad timing"}],
+                },
+            ],
+            "selected_validators": ["metadata", "timing"],
+        },
+    )
+    save_prototype_results(
+        dataset_path,
+        {
+            "candidate_count": 2,
+            "entry_count": 2,
+            "cluster_count": 1,
+            "quality_filter_mode": "all",
+            "selected_episode_indices": [0, 1],
+            "refinement": {
+                "anchor_record_keys": ["0"],
+                "clusters": [],
+            },
+        },
+    )
+    curation_service.save_annotations(
+        dataset_path,
+        0,
+        {
+            "episode_index": 0,
+            "task_context": {"label": "Pick", "text": "pick object"},
+            "annotations": [
+                {
+                    "id": "ann-1",
+                    "label": "Pick",
+                    "category": "movement",
+                    "color": "#ff8a5b",
+                    "startTime": 0.0,
+                    "endTime": 0.5,
+                    "text": "pick object",
+                    "tags": ["manual"],
+                    "source": "user",
+                }
+            ],
+        },
+    )
+    curation_service.save_propagation_results(
+        dataset_path,
+        {
+            "source_episode_index": 0,
+            "target_count": 1,
+            "propagated": [
+                {
+                    "episode_index": 1,
+                    "prototype_score": 0.88,
+                    "spans": [{"label": "Pick", "startTime": 0.1, "endTime": 0.4}],
+                }
+            ],
+        },
+    )
+
+    response = client.get(
+        "/api/curation/alignment-overview",
+        params={"dataset": "demo"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["total_checked"] == 2
+    assert payload["summary"]["aligned_count"] == 2
+    assert payload["summary"]["quality_filter_mode"] == "all"
+    assert payload["distribution"]["issue_types"][0]["label"] == "timing"
+    rows = {row["episode_index"]: row for row in payload["rows"]}
+    assert rows[0]["alignment_status"] == "annotated"
+    assert rows[1]["alignment_status"] == "propagated"
+    assert rows[1]["quality_status"] == "failed"
 
 
 def test_quality_batch_can_pause_and_resume(
@@ -562,7 +776,18 @@ def test_workflow_import_hf_dataset_job(
     assert final_payload["imported_dataset_id"] == "cadene/droid_1.0.1"
 
 
-def test_workflow_dataset_detail_uses_remote_dataset_info(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workflow_dataset_detail_uses_remote_dataset_info(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "datasets"
+    dataset_root.mkdir()
+    monkeypatch.setattr(
+        curation_routes,
+        "datasets_root",
+        lambda: dataset_root,
+    )
+
     app = FastAPI()
     curation_routes.register_curation_routes(app)
     client = TestClient(app)

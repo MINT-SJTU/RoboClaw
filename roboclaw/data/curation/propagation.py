@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from .dtw import dtw_alignment
 from .features import (
     clamp,
     mean,
+    normalize_scalar_series,
     percentile,
     resolve_action_vector,
     resolve_state_vector,
     resolve_timestamp,
+    sample_indices,
 )
 
 # ---------------------------------------------------------------------------
@@ -108,6 +111,148 @@ def build_confidence_payload(
 # Annotation propagation
 # ---------------------------------------------------------------------------
 
+def build_alignment_series(
+    rows: list[dict[str, Any]],
+    *,
+    max_dims: int = 6,
+    max_points: int = 90,
+) -> tuple[list[list[float]], list[float]]:
+    """Build a normalized per-row vector series plus a relative time axis.
+
+    This intentionally mirrors ``build_episode_sequence`` behavior but also
+    returns a monotonic time axis so annotations can be aligned with DTW.
+    """
+    if max_dims <= 0:
+        return [[0.0]], [0.0]
+
+    raw_vectors: list[list[float]] = []
+    raw_times: list[float] = []
+
+    for fallback_index, row in enumerate(rows):
+        state = resolve_state_vector(row)
+        action = resolve_action_vector(row)
+        source = state or action
+        if not source:
+            continue
+
+        capped: list[float] = []
+        capped_size = min(max_dims, len(source))
+        for index in range(capped_size):
+            value = source[index]
+            try:
+                capped.append(float(value) if value is not None else 0.0)
+            except (TypeError, ValueError):
+                capped.append(0.0)
+
+        # If the source has more dims, prefer keeping the last dim (often gripper)
+        # by replacing the last slot. This helps alignment across different robots.
+        if len(source) > max_dims and capped:
+            try:
+                capped[-1] = float(source[-1]) if source[-1] is not None else 0.0
+            except (TypeError, ValueError):
+                capped[-1] = 0.0
+
+        if not capped:
+            continue
+        raw_vectors.append(capped)
+
+        timestamp = resolve_timestamp(row)
+        raw_times.append(float(timestamp) if timestamp is not None else float(fallback_index))
+
+    if len(raw_vectors) < 2:
+        return [[0.0] * max_dims], [0.0]
+
+    indices = sample_indices(len(raw_vectors), max_points=max_points)
+    sampled_vectors = [raw_vectors[index] for index in indices]
+    sampled_times = [raw_times[index] for index in indices]
+
+    base_time = sampled_times[0] if sampled_times else 0.0
+    rel_times = [max(float(t) - float(base_time), 0.0) for t in sampled_times]
+    # Enforce monotonicity for downstream interpolation.
+    for index in range(1, len(rel_times)):
+        if rel_times[index] < rel_times[index - 1]:
+            rel_times[index] = rel_times[index - 1]
+
+    dim_count = max(len(vector) for vector in sampled_vectors)
+    normalized_dimensions: list[list[float]] = []
+    for dim_index in range(dim_count):
+        dim_values = [
+            vector[dim_index] if dim_index < len(vector) else 0.0
+            for vector in sampled_vectors
+        ]
+        normalized_dimensions.append(normalize_scalar_series(dim_values))
+
+    normalized_sequence: list[list[float]] = []
+    for row_index in range(len(sampled_vectors)):
+        normalized_sequence.append([
+            normalized_dimensions[dim_index][row_index]
+            for dim_index in range(dim_count)
+        ])
+
+    return normalized_sequence, rel_times
+
+
+def _build_monotonic_index_map(
+    path: list[tuple[int, int]],
+    source_len: int,
+    target_len: int,
+) -> list[int]:
+    if source_len <= 0 or target_len <= 0:
+        return []
+    buckets: list[list[int]] = [[] for _ in range(source_len)]
+    for left_index, right_index in path:
+        if 0 <= left_index < source_len and 0 <= right_index < target_len:
+            buckets[left_index].append(right_index)
+
+    mapping: list[int] = [0 for _ in range(source_len)]
+    last = 0
+    for index, right_indices in enumerate(buckets):
+        if right_indices:
+            mapped = int(round(sum(right_indices) / len(right_indices)))
+        else:
+            mapped = last
+        mapped = max(mapped, last)  # enforce monotonic non-decreasing
+        mapped = min(max(mapped, 0), target_len - 1)
+        mapping[index] = mapped
+        last = mapped
+    return mapping
+
+
+def _map_time_by_alignment(
+    source_times: list[float],
+    target_times: list[float],
+    index_map: list[int],
+    source_time: float,
+) -> float:
+    if not source_times or not target_times or not index_map:
+        return 0.0
+
+    safe_source_time = clamp(float(source_time), 0.0, float(source_times[-1] or 0.0))
+    if safe_source_time <= float(source_times[0]):
+        return float(target_times[index_map[0]])
+    if safe_source_time >= float(source_times[-1]):
+        return float(target_times[index_map[-1]])
+
+    left = 0
+    right = len(source_times) - 1
+    while left + 1 < right:
+        mid = (left + right) // 2
+        if float(source_times[mid]) < safe_source_time:
+            left = mid
+        else:
+            right = mid
+
+    t0 = float(source_times[left])
+    t1 = float(source_times[right])
+    if t1 <= t0:
+        return float(target_times[index_map[left]])
+    weight = (safe_source_time - t0) / (t1 - t0)
+    j0 = index_map[left]
+    j1 = index_map[right]
+    y0 = float(target_times[j0])
+    y1 = float(target_times[j1])
+    return y0 + (y1 - y0) * weight
+
 
 def propagate_annotation_spans(
     spans: list[dict[str, Any]],
@@ -116,15 +261,47 @@ def propagate_annotation_spans(
     target_duration: float,
     target_record_key: str,
     prototype_score: float,
+    source_time_axis: list[float] | None = None,
+    target_time_axis: list[float] | None = None,
+    alignment_path: list[tuple[int, int]] | None = None,
 ) -> list[dict[str, Any]]:
     safe_source_duration = max(source_duration, 1e-6)
     scale = max(target_duration, 0.0) / safe_source_duration
 
+    index_map: list[int] | None = None
+    if (
+        alignment_path
+        and source_time_axis
+        and target_time_axis
+        and len(source_time_axis) > 1
+        and len(target_time_axis) > 1
+    ):
+        index_map = _build_monotonic_index_map(
+            alignment_path,
+            source_len=len(source_time_axis),
+            target_len=len(target_time_axis),
+        )
+
     propagated: list[dict[str, Any]] = []
     for span in spans:
-        start_time = float(span.get("startTime", 0.0)) * scale
+        raw_start = float(span.get("startTime", 0.0))
+        if index_map and source_time_axis and target_time_axis:
+            start_time = _map_time_by_alignment(source_time_axis, target_time_axis, index_map, raw_start)
+        else:
+            start_time = raw_start * scale
         raw_end = span.get("endTime")
-        end_time = float(raw_end) * scale if raw_end is not None else None
+        if raw_end is None:
+            end_time = None
+        else:
+            end_source = float(raw_end)
+            if index_map and source_time_axis and target_time_axis:
+                end_time = _map_time_by_alignment(source_time_axis, target_time_axis, index_map, end_source)
+            else:
+                end_time = end_source * scale
+
+        if end_time is not None and end_time < start_time:
+            end_time = start_time
+
         propagated.append({
             **span,
             "startTime": round(start_time, 4),

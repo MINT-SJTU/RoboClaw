@@ -256,6 +256,8 @@ def build_text_annotation_rows(dataset_name: str, dataset_path: Path) -> list[di
                 "confidence": _coerce_float(span.get("prototype_score"))
                 or (1.0 if span.get("source") == "user" else None),
                 "propagated": bool(span.get("propagated", False)),
+                "quality_passed": "quality-pass" in quality_tags,
+                "quality_tags": json.dumps(quality_tags, ensure_ascii=False),
                 "version_number": version_number,
                 "updated_at": updated_at,
                 "task_label": task_context.get("label", ""),

@@ -78,6 +78,21 @@ export interface EpisodeDetail {
   videos: Array<{ path: string; url: string; stream: string }>
 }
 
+export interface DatasetSuggestion {
+  id: string
+  label?: string
+  path?: string
+  source?: 'remote' | 'local' | 'path'
+}
+
+export type ExplorerSource = 'remote' | 'local' | 'path'
+
+export interface ExplorerDatasetRef {
+  source: ExplorerSource
+  dataset?: string
+  path?: string
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -97,10 +112,10 @@ interface ExplorerStore {
   episodeLoading: boolean
   episodeError: string
 
-  loadSummary: (dataset: string) => Promise<ExplorerSummary>
-  loadDashboard: (dataset: string) => Promise<ExplorerDashboard>
-  loadEpisodePage: (dataset: string, page?: number, pageSize?: number) => Promise<void>
-  selectEpisode: (dataset: string, index: number) => Promise<void>
+  loadSummary: (ref: ExplorerDatasetRef) => Promise<ExplorerSummary>
+  loadDashboard: (ref: ExplorerDatasetRef) => Promise<ExplorerDashboard>
+  loadEpisodePage: (ref: ExplorerDatasetRef, page?: number, pageSize?: number) => Promise<void>
+  selectEpisode: (ref: ExplorerDatasetRef, index: number) => Promise<void>
   clearEpisode: () => void
 }
 
@@ -121,6 +136,40 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export async function searchDatasetSuggestions(
+  query: string,
+  source: ExplorerSource,
+  limit = 8,
+): Promise<DatasetSuggestion[]> {
+  const needle = query.trim()
+  if (!needle) {
+    return []
+  }
+  return fetchJson<DatasetSuggestion[]>(
+    `/api/explorer/suggest?q=${encodeURIComponent(needle)}&limit=${limit}&source=${encodeURIComponent(source)}`,
+  )
+}
+
+export async function listExplorerDatasets(
+  source: Extract<ExplorerSource, 'local'> = 'local',
+): Promise<DatasetSuggestion[]> {
+  return fetchJson<DatasetSuggestion[]>(
+    `/api/explorer/datasets?source=${encodeURIComponent(source)}`,
+  )
+}
+
+function buildExplorerQuery(ref: ExplorerDatasetRef): string {
+  const params = new URLSearchParams()
+  params.set('source', ref.source)
+  if (ref.dataset) {
+    params.set('dataset', ref.dataset)
+  }
+  if (ref.path) {
+    params.set('path', ref.path)
+  }
+  return params.toString()
+}
+
 export const useExplorer = create<ExplorerStore>((set) => ({
   summary: null,
   summaryLoading: false,
@@ -136,7 +185,7 @@ export const useExplorer = create<ExplorerStore>((set) => ({
   episodeLoading: false,
   episodeError: '',
 
-  loadSummary: async (dataset: string) => {
+  loadSummary: async (ref: ExplorerDatasetRef) => {
     set({
       summary: null,
       summaryLoading: true,
@@ -144,7 +193,7 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     })
     try {
       const summary = await fetchJson<ExplorerSummary>(
-        `/api/explorer/summary?dataset=${encodeURIComponent(dataset)}`,
+        `/api/explorer/summary?${buildExplorerQuery(ref)}`,
       )
       set({ summary })
       return summary
@@ -158,7 +207,7 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     }
   },
 
-  loadDashboard: async (dataset: string) => {
+  loadDashboard: async (ref: ExplorerDatasetRef) => {
     set({
       dashboard: null,
       dashboardLoading: true,
@@ -166,7 +215,7 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     })
     try {
       const dashboard = await fetchJson<ExplorerDashboard>(
-        `/api/explorer/details?dataset=${encodeURIComponent(dataset)}`,
+        `/api/explorer/details?${buildExplorerQuery(ref)}`,
       )
       set({ dashboard })
       return dashboard
@@ -182,8 +231,8 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     }
   },
 
-  loadEpisodePage: async (dataset: string, page = 1, pageSize = 50) => {
-    if (!dataset) return
+  loadEpisodePage: async (ref: ExplorerDatasetRef, page = 1, pageSize = 50) => {
+    if (!ref.dataset && !ref.path) return
     set({
       episodePageLoading: true,
       episodePageError: '',
@@ -193,7 +242,7 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     })
     try {
       const episodePage = await fetchJson<ExplorerEpisodePage>(
-        `/api/explorer/episodes?dataset=${encodeURIComponent(dataset)}&page=${page}&page_size=${pageSize}`,
+        `/api/explorer/episodes?${buildExplorerQuery(ref)}&page=${page}&page_size=${pageSize}`,
       )
       set({ episodePage })
     } catch (error) {
@@ -205,8 +254,8 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     }
   },
 
-  selectEpisode: async (dataset: string, index: number) => {
-    if (!dataset) return
+  selectEpisode: async (ref: ExplorerDatasetRef, index: number) => {
+    if (!ref.dataset && !ref.path) return
     set({
       selectedEpisodeIndex: index,
       episodeDetail: null,
@@ -215,7 +264,7 @@ export const useExplorer = create<ExplorerStore>((set) => ({
     })
     try {
       const detail = await fetchJson<EpisodeDetail>(
-        `/api/explorer/episode?dataset=${encodeURIComponent(dataset)}&episode_index=${index}`,
+        `/api/explorer/episode?${buildExplorerQuery(ref)}&episode_index=${index}`,
       )
       set({ episodeDetail: detail })
     } catch (error) {
