@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import SettingsPageFrame from '@/domains/settings/components/SettingsPageFrame'
 import { useI18n } from '@/i18n'
 import {
+  fetchProviderModels,
   fetchProviderStatus,
   saveProviderConfig,
   type ProviderOption,
@@ -14,28 +15,6 @@ const UI_PROVIDERS = [
   'ollama', 'vllm',
   'custom',
 ]
-
-const MODEL_PRESETS: Record<string, string[]> = {
-  anthropic: ['anthropic/claude-opus-4-5', 'claude-3-5-sonnet-latest'],
-  openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini'],
-  deepseek: ['deepseek/deepseek-chat', 'deepseek/deepseek-reasoner'],
-  dashscope: ['dashscope/qwen-plus', 'dashscope/qwen-max', 'dashscope/qwen-turbo'],
-  gemini: ['gemini/gemini-2.5-pro', 'gemini/gemini-2.5-flash'],
-  zhipu: ['zhipu/glm-4-plus', 'zhipu/glm-4-air'],
-  moonshot: ['moonshot/moonshot-v1-128k', 'moonshot/moonshot-v1-32k'],
-  minimax: ['minimax/minimax-text-01'],
-  openrouter: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'deepseek/deepseek-chat'],
-  aihubmix: ['gpt-4o-mini', 'gpt-4.1-mini', 'claude-3-5-sonnet-latest', 'deepseek-chat'],
-  siliconflow: ['Qwen/Qwen2.5-72B-Instruct', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1'],
-  volcengine: ['doubao-1-5-pro-32k-250115', 'doubao-1-5-lite-32k-250115'],
-  ollama: ['llama3.1', 'qwen2.5-coder', 'deepseek-r1'],
-  vllm: ['meta-llama/Llama-3.1-8B-Instruct', 'Qwen/Qwen2.5-7B-Instruct'],
-  custom: ['gpt-4o-mini', 'gpt-4.1-mini', 'claude-3-5-sonnet-latest', 'deepseek-chat'],
-}
-
-function uniqueModels(models: string[]): string[] {
-  return [...new Set(models.filter((item) => item.trim()))]
-}
 
 function providerCategory(p: ProviderOption): 'standard' | 'gateway' | 'local' | 'custom' {
   if (p.name === 'custom') return 'custom'
@@ -65,6 +44,8 @@ export default function ProviderSettingsPage() {
   const [apiBase, setApiBase] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [discoveringModels, setDiscoveringModels] = useState(false)
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -105,6 +86,7 @@ export default function ProviderSettingsPage() {
     setNotice('')
     setApiKey('')
     setApiBase(providers.find((provider) => provider.name === name)?.api_base || '')
+    setDiscoveredModels([])
   }
 
   async function handleSave(event: React.FormEvent) {
@@ -133,12 +115,32 @@ export default function ProviderSettingsPage() {
     }
   }
 
+  async function handleDiscoverModels() {
+    setDiscoveringModels(true)
+    setError('')
+    setNotice('')
+
+    try {
+      const payload = await fetchProviderModels({
+        provider: selectedProvider || 'custom',
+        api_key: apiKey,
+        api_base: apiBase,
+      })
+      setDiscoveredModels(payload.models)
+      if (payload.models.length > 0) {
+        setModel((current) => current || payload.models[0])
+        setNotice(t('modelsDiscovered'))
+      } else {
+        setNotice(payload.error ? `${t('noModelsDiscovered')} ${payload.error}` : t('noModelsDiscovered'))
+      }
+    } catch (discoverError) {
+      setError(discoverError instanceof Error ? discoverError.message : 'Failed to discover models.')
+    } finally {
+      setDiscoveringModels(false)
+    }
+  }
+
   const selected = providers.find((provider) => provider.name === selectedProvider) || null
-  const modelOptions = useMemo(
-    () => uniqueModels([activeModel, ...(MODEL_PRESETS[selectedProvider || ''] || [])]),
-    [activeModel, selectedProvider],
-  )
-  const selectedModelChoice = modelOptions.includes(model) ? model : '__custom__'
 
   const groups = useMemo(() => ([
     { key: 'standard', title: t('providerGroupStandard') },
@@ -259,24 +261,6 @@ export default function ProviderSettingsPage() {
                 )}
 
                 <label className="block">
-                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('modelSelect')}</div>
-                  <select
-                    value={selectedModelChoice}
-                    onChange={(e) => {
-                      if (e.target.value !== '__custom__') {
-                        setModel(e.target.value)
-                      }
-                    }}
-                    className="w-full rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
-                  >
-                    {modelOptions.map((item) => (
-                      <option key={item} value={item}>{item}</option>
-                    ))}
-                    <option value="__custom__">{t('customModel')}</option>
-                  </select>
-                </label>
-
-                <label className="block">
                   <div className="mb-1.5 text-xs font-medium text-tx2">{t('exactModel')}</div>
                   <input
                     value={model}
@@ -285,6 +269,37 @@ export default function ProviderSettingsPage() {
                     placeholder={t('modelPlaceholder')}
                   />
                 </label>
+
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleDiscoverModels}
+                    disabled={discoveringModels}
+                    className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {discoveringModels ? t('discoveringModels') : t('discoverModels')}
+                  </button>
+
+                  {discoveredModels.length > 0 && (
+                    <div className="rounded-xl border border-bd/50 bg-white/70 p-2">
+                      <div className="mb-2 text-xs font-medium text-tx2">{t('availableModels')}</div>
+                      <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                        {discoveredModels.map((item) => (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setModel(item)}
+                            className={`block w-full rounded-lg px-2.5 py-1.5 text-left font-mono text-xs transition-colors ${
+                              item === model ? 'bg-ac/10 text-ac' : 'text-tx2 hover:bg-ac/5 hover:text-tx'
+                            }`}
+                          >
+                            {item}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {needsApiKey(selected) && (
                   <label className="block">

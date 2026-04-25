@@ -90,6 +90,11 @@ const translations = {
     customModel: '自定义模型',
     exactModel: '精确模型名',
     modelPlaceholder: '输入模型名称，例如 gpt-4o-mini',
+    discoverModels: '探查模型',
+    discoveringModels: '探查中...',
+    availableModels: '可用模型',
+    modelsDiscovered: '已获取可用模型。',
+    noModelsDiscovered: '没有探查到模型，请手动填写模型名。',
 
     // Data Collection
     connect: '连接',
@@ -621,6 +626,11 @@ const translations = {
     customModel: 'Custom model',
     exactModel: 'Exact model name',
     modelPlaceholder: 'Enter a model name, for example gpt-4o-mini',
+    discoverModels: 'Discover Models',
+    discoveringModels: 'Discovering...',
+    availableModels: 'Available models',
+    modelsDiscovered: 'Available models loaded.',
+    noModelsDiscovered: 'No models were discovered. Enter the model name manually.',
 
     // Data Collection
     connect: 'Connect',

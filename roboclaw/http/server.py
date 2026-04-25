@@ -14,14 +14,14 @@ if TYPE_CHECKING:
     from roboclaw.http.runtime import WebRuntime
 
 import httpx
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from roboclaw.channels.web import WebChannel
 from roboclaw.config.loader import get_config_path, load_config, load_runtime_config, save_config
 from roboclaw.providers.factory import build_provider
-from roboclaw.providers.registry import PROVIDERS
+from roboclaw.providers.registry import PROVIDERS, find_by_name
 from roboclaw.utils.helpers import sync_workspace_templates
 
 
@@ -90,13 +90,19 @@ def _provider_status_payload(config: Any) -> dict[str, Any]:
     }
 
 
-async def _discover_custom_model(api_base: str, api_key: str | None) -> str | None:
+async def _discover_provider_models(
+    api_base: str,
+    api_key: str | None,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[list[str], str]:
     if not api_base:
-        return None
+        return [], ""
     url = api_base.rstrip("/") + "/models"
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    if extra_headers:
+        headers.update(extra_headers)
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -105,15 +111,23 @@ async def _discover_custom_model(api_base: str, api_key: str | None) -> str | No
         payload = response.json()
     except (httpx.HTTPError, json.JSONDecodeError) as exc:
         logger.warning("Failed to auto-discover models from {}: {}", url, exc)
-        return None
+        return [], str(exc)
 
-    data = payload.get("data", [])
+    data = payload.get("data", []) if isinstance(payload, dict) else payload
     if not isinstance(data, list):
-        return None
+        return [], "Model endpoint returned an unsupported response shape."
+    models: list[str] = []
     for item in data:
         if isinstance(item, dict) and item.get("id"):
-            return str(item["id"])
-    return None
+            models.append(str(item["id"]))
+        elif isinstance(item, str) and item.strip():
+            models.append(item.strip())
+    return sorted(set(models), key=str.lower), ""
+
+
+async def _discover_custom_model(api_base: str, api_key: str | None) -> str | None:
+    models, _error = await _discover_provider_models(api_base, api_key)
+    return models[0] if models else None
 
 
 # ------------------------------------------------------------------
@@ -141,6 +155,10 @@ def _register_system_routes(app: FastAPI, runtime: WebRuntime) -> None:
     @app.post("/api/system/provider-config")
     async def save_provider_config(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return await _handle_save_provider(payload, runtime)
+
+    @app.post("/api/system/provider-models")
+    async def provider_models(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        return await _handle_provider_models(payload)
 
     @app.get("/api/system/hf-config")
     async def hf_config_status() -> dict[str, Any]:
@@ -220,6 +238,40 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
     runtime.swap_provider(new_provider, config)
 
     return {"status": "ok", **_provider_status_payload(config)}
+
+
+async def _handle_provider_models(payload: dict[str, Any]) -> dict[str, Any]:
+    """Discover model ids for the selected provider without saving settings."""
+    config = load_config(get_config_path())
+    provider_name = str(payload.get("provider") or config.agents.defaults.provider or "custom")
+    provider_config = getattr(config.providers, provider_name, None)
+    if provider_config is None:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
+
+    api_base = payload.get("api_base")
+    if isinstance(api_base, str) and api_base.strip():
+        resolved_api_base = api_base.strip()
+    else:
+        resolved_api_base = provider_config.api_base or ""
+
+    if not resolved_api_base:
+        spec = find_by_name(provider_name)
+        if spec and spec.default_api_base:
+            resolved_api_base = spec.default_api_base
+
+    if not resolved_api_base:
+        raise HTTPException(status_code=400, detail="Model discovery requires an API base URL.")
+
+    api_key = payload.get("api_key")
+    resolved_api_key = api_key.strip() if isinstance(api_key, str) and api_key.strip() else provider_config.api_key
+    extra_headers = payload.get("extra_headers")
+    resolved_headers = extra_headers if isinstance(extra_headers, dict) else provider_config.extra_headers
+    models, error = await _discover_provider_models(
+        resolved_api_base,
+        resolved_api_key or None,
+        resolved_headers,
+    )
+    return {"models": models, "error": error}
 
 
 def _apply_extra_headers(payload: dict[str, Any], section: Any) -> dict[str, Any] | None:

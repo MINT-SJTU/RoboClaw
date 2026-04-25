@@ -29,10 +29,30 @@ export interface SaveProviderPayload {
   clear_api_key?: boolean
 }
 
+export interface ProviderModelsResponse {
+  models: string[]
+  error?: string
+}
+
 export async function fetchProviderStatus(): Promise<ProviderStatusResponse> {
   const response = await fetch('/api/system/provider-status')
   if (!response.ok) {
     throw new Error('Failed to load provider status.')
+  }
+  return response.json()
+}
+
+export async function fetchProviderModels(payload: SaveProviderPayload): Promise<ProviderModelsResponse> {
+  const response = await fetch('/api/system/provider-models', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    throw new Error(data?.detail || 'Failed to discover provider models.')
   }
   return response.json()
 }
