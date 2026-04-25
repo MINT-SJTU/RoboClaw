@@ -76,12 +76,11 @@ const NAV_ICONS: Record<string, JSX.Element> = {
 
 export default function AppShell() {
   const location = useLocation()
-  const { connect, disconnect, connected, messages } = useChatSocket()
+  const { connect, disconnect } = useChatSocket()
   const fetchHardwareStatus = useHardwareStore((state) => state.fetchHardwareStatus)
   const fetchRecoveryFaults = useRecoveryStore((state) => state.fetchFaults)
   const recoveryFaults = useRecoveryStore((state) => state.faults)
   const { t } = useI18n()
-  const [chatOpen, setChatOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [pipelineExpanded, setPipelineExpanded] = useState(location.pathname.startsWith('/curation'))
 
@@ -248,25 +247,7 @@ export default function AppShell() {
         </main>
 
         <div className="chat-widget">
-          {chatOpen && (
-            <div className="chat-widget__panel">
-              <ChatPanel variant="widget" onClose={() => setChatOpen(false)} />
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setChatOpen((value) => !value)}
-            className={cn('chat-widget__trigger', chatOpen && 'chat-widget__trigger--open')}
-            aria-expanded={chatOpen}
-            aria-label={chatOpen ? 'Close chat' : 'Open chat'}
-          >
-            <span className={cn('chat-widget__dot', connected && 'chat-widget__dot--live')} />
-            <span className="chat-widget__label">AI</span>
-            {!chatOpen && messages.length > 0 && (
-              <span className="chat-widget__count">{Math.min(messages.length, 99)}</span>
-            )}
-          </button>
+          <ChatPanel variant="widget" />
         </div>
 
         <ToastContainer />

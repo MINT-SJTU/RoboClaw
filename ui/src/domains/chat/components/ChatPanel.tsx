@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import { useChatSocket } from '@/domains/chat/store/useChatSocket'
 import { fetchProviderStatus } from '@/domains/provider/api/providerApi'
 import { useI18n } from '@/i18n'
-import { GlassPanel, StatusPill } from '@/shared/ui'
+import { cn } from '@/shared/lib/cn'
 
 type ChatPanelVariant = 'page' | 'widget'
 
@@ -60,146 +60,153 @@ export default function ChatPanel({
     submitCurrentMessage()
   }
 
-  return (
-    <GlassPanel
-      className={
-        compact
-          ? 'flex h-[min(680px,calc(100vh-124px))] w-[min(460px,calc(100vw-28px))] flex-col overflow-hidden rounded-[30px] p-0'
-          : 'page-enter flex h-[calc(100vh-176px)] min-h-[620px] flex-col overflow-hidden p-0'
-      }
-    >
-      {compact ? (
-        <div className="flex items-center justify-between gap-3 border-b border-[color:rgba(29,43,54,0.08)] px-4 py-4">
-          <div>
-            <div className="text-sm font-semibold text-tx">RoboClaw AI</div>
-            <div className="mt-1 text-xs text-tx2">
-              {messages.length > 0 ? `${messages.length} messages` : t('startChat')}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <StatusPill active={connected}>
-              {connected ? t('connected') : t('disconnected')}
-            </StatusPill>
-            {onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[color:rgba(109,153,211,0.16)] bg-white text-sm font-semibold text-tx transition hover:bg-[rgba(141,184,236,0.12)]"
-                aria-label="Close chat"
-              >
-                X
-              </button>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="border-b border-[color:rgba(29,43,54,0.08)] px-5 py-5 md:px-6">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-base font-semibold text-tx">Conversation</div>
-              <div className="mt-1 text-sm text-tx2">
-                {messages.length > 0
-                  ? `${messages.length} messages in this session`
-                  : 'Ready for a live conversation'}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <StatusPill active={connected}>
-                {connected ? t('connected') : t('disconnected')}
-              </StatusPill>
-
-              <div className="rounded-full bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-tx2">
-                Session {sessionId || 'pending'}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {!providerConfigured && (
-        compact ? (
-          <div className="px-4 pt-3 text-xs text-yl">
+  if (compact) {
+    return (
+      <section className="chat-widget__surface" aria-label="RoboClaw AI chat">
+        <div className="chat-widget__conversation" aria-live="polite">
+          {!providerConfigured ? (
+            <div className="chat-widget__notice">
               {t('providerWarning')}{' '}
-              <Link to="/settings/provider" className="font-semibold underline underline-offset-4">
-                {t('settingsPage')}
-              </Link>{' '}
-            {t('providerWarningEnd')}
-          </div>
-        ) : (
-          <div className="border-b border-[color:rgba(29,43,54,0.08)] px-5 py-4 md:px-6">
-            <div className="rounded-[22px] border border-[rgba(109,153,211,0.18)] bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(226,239,255,0.72))] px-4 py-3 text-sm text-tx2">
-              {t('providerWarning')}{' '}
-              <Link to="/settings/provider" className="font-semibold text-ac underline underline-offset-4">
+              <Link to="/settings/provider" className="chat-widget__notice-link">
                 {t('settingsPage')}
               </Link>{' '}
               {t('providerWarningEnd')}
             </div>
+          ) : messages.length === 0 ? (
+            <div className="chat-widget__empty">
+              <span
+                className={cn('chat-widget__status', connected && 'chat-widget__status--live')}
+                aria-hidden="true"
+              />
+              <span>RoboClaw AI</span>
+            </div>
+          ) : (
+            <div className="chat-widget__message-stack">
+              {messages.map((message, index) => {
+                const isUser = message.role === 'user'
+                return (
+                  <article
+                    key={message.id}
+                    className={cn('chat-message', isUser && 'chat-message--user')}
+                    style={{ animationDelay: `${Math.min(index * 28, 180)}ms` }}
+                  >
+                    <ReactMarkdown className="chat-markdown">
+                      {message.content}
+                    </ReactMarkdown>
+                    <time className="chat-message__time" dateTime={new Date(message.timestamp).toISOString()}>
+                      {new Date(message.timestamp).toLocaleTimeString()}
+                    </time>
+                  </article>
+                )
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={handleSubmit} className="chat-composer" aria-label="RoboClaw AI message">
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                submitCurrentMessage()
+              }
+            }}
+            placeholder={connected ? t('inputPlaceholder') : t('waitingConnection')}
+            disabled={!connected}
+            rows={1}
+            className="chat-composer__input"
+          />
+          <button
+            type="submit"
+            disabled={!connected || !input.trim()}
+            className="chat-composer__send"
+            aria-label={t('send')}
+          >
+            <span aria-hidden="true" />
+          </button>
+        </form>
+      </section>
+    )
+  }
+
+  return (
+    <section className="chat-panel">
+      <header className="chat-panel__header">
+        <div className="chat-panel__identity">
+          <span className="chat-panel__avatar" aria-hidden="true">AI</span>
+          <div className="chat-panel__title-group">
+            <h2 className="chat-panel__title">{compact ? 'RoboClaw AI' : 'Conversation'}</h2>
+            {!compact && (
+              <div className="chat-panel__meta">
+                {messages.length > 0 ? `${messages.length} messages` : 'Ready for a live conversation'}
+              </div>
+            )}
           </div>
-        )
+        </div>
+
+        <div className="chat-panel__actions">
+          <span className={cn('chat-panel__status', connected && 'chat-panel__status--live')}>
+            <span className="chat-panel__status-dot" aria-hidden="true" />
+            {connected ? t('connected') : t('disconnected')}
+          </span>
+
+          {!compact && (
+            <span className="chat-panel__session">Session {sessionId || 'pending'}</span>
+          )}
+
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="chat-panel__close"
+              aria-label="Close chat"
+            >
+              <span aria-hidden="true">x</span>
+            </button>
+          )}
+        </div>
+      </header>
+
+      {!providerConfigured && (
+        <div className="chat-panel__notice">
+          {t('providerWarning')}{' '}
+          <Link to="/settings/provider" className="chat-panel__notice-link">
+            {t('settingsPage')}
+          </Link>{' '}
+          {t('providerWarningEnd')}
+        </div>
       )}
 
-      <div className={`sidebar-scroll flex-1 overflow-y-auto ${compact ? 'px-4 py-4' : 'px-5 py-5 md:px-6'}`}>
+      <div className="chat-panel__messages">
         {messages.length === 0 ? (
-          <div
-            className={
-              compact
-                ? 'grid min-h-[280px] place-items-center text-center'
-                : 'grid min-h-[320px] place-items-center rounded-[28px] border border-dashed border-[color:rgba(109,153,211,0.18)] bg-white/56 p-6 text-center'
-            }
-          >
-            <div className="space-y-3">
-              <div className={`${compact ? 'text-lg' : 'text-2xl'} font-semibold text-tx`}>
-                {t('startChat')}
-              </div>
-              <div className={`${compact ? 'max-w-sm text-sm leading-6' : 'max-w-md text-sm leading-7'} text-tx2`}>
-                Ask RoboClaw to inspect hardware state, suggest next recording steps, or summarize recent robot activity.
-              </div>
-            </div>
+          <div className="chat-panel__empty">
+            <h3>{t('startChat')}</h3>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="chat-panel__message-stack">
             {messages.map((message, index) => {
               const isUser = message.role === 'user'
               return (
-                <div
+                <article
                   key={message.id}
-                  className={`tile-enter flex ${isUser ? 'justify-end' : 'justify-start'}`}
-                  style={{ animationDelay: `${Math.min(index * 40, 260)}ms` }}
+                  className={cn('chat-message', isUser && 'chat-message--user')}
+                  style={{ animationDelay: `${Math.min(index * 28, 180)}ms` }}
                 >
-                  <div
-                    className={`${
-                      compact ? 'max-w-[92%] rounded-[20px] px-4 py-3' : 'max-w-3xl rounded-[28px] px-5 py-4 shadow-[0_18px_34px_rgba(88,67,47,0.09)]'
-                    } ${
-                      isUser
-                        ? 'bg-ac text-white'
-                        : compact
-                          ? 'border border-[color:rgba(109,153,211,0.14)] bg-[rgba(141,184,236,0.12)] text-tx'
-                          : 'border border-white/60 bg-white/74 text-tx'
-                    }`}
-                  >
-                    {!compact && (
-                      <div
-                        className={`mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] ${
-                          isUser ? 'text-white/70' : 'text-tx2'
-                        }`}
-                      >
-                        <span>{isUser ? 'Operator' : 'RoboClaw'}</span>
-                        <span className={`inline-flex h-2 w-2 rounded-full ${isUser ? 'bg-white/80' : 'bg-ac'}`} />
-                      </div>
-                    )}
+                  {!compact && (
+                    <div className="chat-message__author">{isUser ? 'Operator' : 'RoboClaw'}</div>
+                  )}
 
-                    <ReactMarkdown
-                      className={`chat-markdown ${isUser ? '[&_code]:bg-white/10 [&_code]:text-white' : ''}`}
-                    >
-                      {message.content}
-                    </ReactMarkdown>
+                  <ReactMarkdown className="chat-markdown">
+                    {message.content}
+                  </ReactMarkdown>
 
-                    <div className={`mt-4 text-[11px] ${isUser ? 'text-white/60' : 'text-tx2'}`}>
-                      {new Date(message.timestamp).toLocaleTimeString()}
-                    </div>
-                  </div>
-                </div>
+                  <time className="chat-message__time" dateTime={new Date(message.timestamp).toISOString()}>
+                    {new Date(message.timestamp).toLocaleTimeString()}
+                  </time>
+                </article>
               )
             })}
             <div ref={messagesEndRef} />
@@ -207,15 +214,9 @@ export default function ChatPanel({
         )}
       </div>
 
-      <div
-        className={
-          compact
-            ? 'border-t border-[color:rgba(29,43,54,0.08)] px-4 pb-4 pt-3'
-            : 'border-t border-[color:rgba(29,43,54,0.08)] bg-white/45 px-5 py-4 md:px-6'
-        }
-      >
-        <form onSubmit={handleSubmit} className={compact ? '' : 'space-y-3'}>
-          <div className="field-shell px-4 py-3">
+      <footer className="chat-panel__footer">
+        <form onSubmit={handleSubmit} className="chat-panel__form">
+          <div className="chat-panel__input-shell">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -227,26 +228,22 @@ export default function ChatPanel({
               }}
               placeholder={connected ? t('inputPlaceholder') : t('waitingConnection')}
               disabled={!connected}
-              rows={compact ? 3 : 4}
-              className="w-full resize-none border-0 bg-transparent text-sm leading-7 text-tx outline-none placeholder:text-tx3 disabled:opacity-50"
+              rows={compact ? 2 : 4}
+              className="chat-panel__input"
             />
           </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs text-tx2">
-              {compact ? 'Enter to send' : 'Enter to send, Shift+Enter for a new line.'}
-            </div>
-
+          <div className="chat-panel__form-row">
             <button
               type="submit"
               disabled={!connected || !input.trim()}
-              className="inline-flex items-center justify-center rounded-full bg-ac px-5 py-2.5 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(47,111,228,0.22)] transition hover:-translate-y-0.5 hover:bg-[color:#245dc7] disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40"
+              className="chat-panel__send"
             >
               {t('send')}
             </button>
           </div>
         </form>
-      </div>
-    </GlassPanel>
+      </footer>
+    </section>
   )
 }
