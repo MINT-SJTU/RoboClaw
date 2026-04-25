@@ -18,6 +18,7 @@ export default function ChatPanel({
   const compact = variant === 'widget'
   const [input, setInput] = useState('')
   const [providerConfigured, setProviderConfigured] = useState(true)
+  const [widgetCollapsed, setWidgetCollapsed] = useState(false)
   const { messages, sendMessage, connected, sessionId } = useChatSocket()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { t } = useI18n()
@@ -61,8 +62,37 @@ export default function ChatPanel({
   }
 
   if (compact) {
+    if (widgetCollapsed) {
+      return (
+        <button
+          type="button"
+          className="chat-widget__collapsed-trigger"
+          onClick={() => setWidgetCollapsed(false)}
+          aria-label="Open RoboClaw AI chat"
+        >
+          <span
+            className={cn(
+              'chat-widget__collapsed-dot',
+              connected && 'chat-widget__collapsed-dot--live',
+            )}
+            aria-hidden="true"
+          />
+          <span className="chat-widget__collapsed-label" aria-hidden="true">AI</span>
+        </button>
+      )
+    }
+
     return (
       <section className="chat-widget__surface" aria-label="RoboClaw AI chat">
+        <button
+          type="button"
+          className="chat-widget__minimize"
+          onClick={() => setWidgetCollapsed(true)}
+          aria-label="Minimize RoboClaw AI chat"
+        >
+          <span aria-hidden="true" />
+        </button>
+
         <div className="chat-widget__conversation" aria-live="polite">
           {!providerConfigured ? (
             <div className="chat-widget__notice">
