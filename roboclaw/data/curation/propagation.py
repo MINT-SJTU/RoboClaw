@@ -261,14 +261,22 @@ def propagate_annotation_spans(
     target_duration: float,
     target_record_key: str,
     prototype_score: float,
+    source_sequence: list[list[float]] | None = None,
+    target_sequence: list[list[float]] | None = None,
     source_time_axis: list[float] | None = None,
     target_time_axis: list[float] | None = None,
     alignment_path: list[tuple[int, int]] | None = None,
+    dtw_config: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     safe_source_duration = max(source_duration, 1e-6)
     scale = max(target_duration, 0.0) / safe_source_duration
 
     index_map: list[int] | None = None
+    alignment_path = alignment_path or _build_alignment_path(
+        source_sequence,
+        target_sequence,
+        dtw_config,
+    )
     if (
         alignment_path
         and source_time_axis
@@ -308,10 +316,21 @@ def propagate_annotation_spans(
             "endTime": round(end_time, 4) if end_time is not None else None,
             "target_record_key": target_record_key,
             "propagated": True,
-            "source": "propagated",
-            "prototype_score": round(prototype_score, 4),
+            "source": "dtw_propagated" if index_map else "duration_scaled",
+            "prototype_score": round(clamp(prototype_score, 0.0, 1.0), 4),
         })
     return propagated
+
+
+def _build_alignment_path(
+    source_sequence: list[list[float]] | None,
+    target_sequence: list[list[float]] | None,
+    dtw_config: dict[str, Any] | None,
+) -> list[tuple[int, int]] | None:
+    if not source_sequence or not target_sequence:
+        return None
+    _distance, path = dtw_alignment(source_sequence, target_sequence, **(dtw_config or {}))
+    return path or None
 
 
 # ---------------------------------------------------------------------------

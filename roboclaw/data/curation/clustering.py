@@ -231,6 +231,8 @@ class _KMedoidsRunner:
         cluster_members: list[list[str]],
     ) -> float:
         same = [k for k in cluster_members[cluster_index] if k != member_key]
+        if not same:
+            return 0.0
         intra = mean([float(self._dm[member_key][k]) for k in same]) if same else 0.0
         inter_dists: list[float] = []
         for oi, other_keys in enumerate(cluster_members):
