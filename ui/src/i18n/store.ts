@@ -86,6 +86,9 @@ const translations = {
     saveRedirectHint: '保存后立即生效。',
     saveSuccess: 'Provider settings saved. Changes take effect immediately.',
     loading: 'Loading provider settings...',
+    modelSelect: '选择模型',
+    customModel: '自定义模型',
+    exactModel: '精确模型名',
     modelPlaceholder: '输入模型名称，例如 gpt-4o-mini',
 
     // Data Collection
@@ -614,6 +617,9 @@ const translations = {
     saveRedirectHint: 'Changes take effect immediately after saving.',
     saveSuccess: 'Provider settings saved. Changes take effect immediately.',
     loading: 'Loading provider settings...',
+    modelSelect: 'Model',
+    customModel: 'Custom model',
+    exactModel: 'Exact model name',
     modelPlaceholder: 'Enter a model name, for example gpt-4o-mini',
 
     // Data Collection

@@ -15,6 +15,28 @@ const UI_PROVIDERS = [
   'custom',
 ]
 
+const MODEL_PRESETS: Record<string, string[]> = {
+  anthropic: ['anthropic/claude-opus-4-5', 'claude-3-5-sonnet-latest'],
+  openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini'],
+  deepseek: ['deepseek/deepseek-chat', 'deepseek/deepseek-reasoner'],
+  dashscope: ['dashscope/qwen-plus', 'dashscope/qwen-max', 'dashscope/qwen-turbo'],
+  gemini: ['gemini/gemini-2.5-pro', 'gemini/gemini-2.5-flash'],
+  zhipu: ['zhipu/glm-4-plus', 'zhipu/glm-4-air'],
+  moonshot: ['moonshot/moonshot-v1-128k', 'moonshot/moonshot-v1-32k'],
+  minimax: ['minimax/minimax-text-01'],
+  openrouter: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'deepseek/deepseek-chat'],
+  aihubmix: ['gpt-4o-mini', 'gpt-4.1-mini', 'claude-3-5-sonnet-latest', 'deepseek-chat'],
+  siliconflow: ['Qwen/Qwen2.5-72B-Instruct', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1'],
+  volcengine: ['doubao-1-5-pro-32k-250115', 'doubao-1-5-lite-32k-250115'],
+  ollama: ['llama3.1', 'qwen2.5-coder', 'deepseek-r1'],
+  vllm: ['meta-llama/Llama-3.1-8B-Instruct', 'Qwen/Qwen2.5-7B-Instruct'],
+  custom: ['gpt-4o-mini', 'gpt-4.1-mini', 'claude-3-5-sonnet-latest', 'deepseek-chat'],
+}
+
+function uniqueModels(models: string[]): string[] {
+  return [...new Set(models.filter((item) => item.trim()))]
+}
+
 function providerCategory(p: ProviderOption): 'standard' | 'gateway' | 'local' | 'custom' {
   if (p.name === 'custom') return 'custom'
   if (p.local) return 'local'
@@ -112,6 +134,11 @@ export default function ProviderSettingsPage() {
   }
 
   const selected = providers.find((provider) => provider.name === selectedProvider) || null
+  const modelOptions = useMemo(
+    () => uniqueModels([activeModel, ...(MODEL_PRESETS[selectedProvider || ''] || [])]),
+    [activeModel, selectedProvider],
+  )
+  const selectedModelChoice = modelOptions.includes(model) ? model : '__custom__'
 
   const groups = useMemo(() => ([
     { key: 'standard', title: t('providerGroupStandard') },
@@ -232,7 +259,25 @@ export default function ProviderSettingsPage() {
                 )}
 
                 <label className="block">
-                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('settingsDefaultModel')}</div>
+                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('modelSelect')}</div>
+                  <select
+                    value={selectedModelChoice}
+                    onChange={(e) => {
+                      if (e.target.value !== '__custom__') {
+                        setModel(e.target.value)
+                      }
+                    }}
+                    className="w-full rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                  >
+                    {modelOptions.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                    <option value="__custom__">{t('customModel')}</option>
+                  </select>
+                </label>
+
+                <label className="block">
+                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('exactModel')}</div>
                   <input
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
