@@ -33,6 +33,25 @@ function needsBaseUrl(p: ProviderOption): boolean {
   return category === 'gateway' || category === 'local' || category === 'custom'
 }
 
+function providerModel(provider: ProviderOption, currentModel = ''): string {
+  if (!currentModel || !modelMatchesProvider(currentModel, provider)) {
+    return provider.default_model || currentModel
+  }
+  return currentModel
+}
+
+function modelMatchesProvider(model: string, provider: ProviderOption): boolean {
+  const normalizedModel = model.toLowerCase().replace(/-/g, '_')
+  const modelPrefix = normalizedModel.includes('/') ? normalizedModel.split('/', 1)[0] : ''
+  if (modelPrefix && modelPrefix === provider.name) {
+    return true
+  }
+  return provider.keywords.some((keyword) => {
+    const normalizedKeyword = keyword.toLowerCase().replace(/-/g, '_')
+    return normalizedModel.includes(normalizedKeyword)
+  })
+}
+
 export default function ProviderSettingsPage() {
   const { t } = useI18n()
   const [providers, setProviders] = useState<ProviderOption[]>([])
@@ -73,8 +92,10 @@ export default function ProviderSettingsPage() {
         const initial = payload.active_provider && uiProviders.some((provider) => provider.name === payload.active_provider)
           ? payload.active_provider
           : 'custom'
+        const initialProvider = uiProviders.find((provider) => provider.name === initial)
         setSelectedProvider(initial)
-        setApiBase(uiProviders.find((provider) => provider.name === initial)?.api_base || '')
+        setApiBase(initialProvider?.api_base || '')
+        setModel(providerModel(initialProvider || uiProviders[0], payload.default_model))
       } catch (loadError) {
         if (!cancelled) {
           setError(loadError instanceof Error ? loadError.message : 'Failed to load settings.')
@@ -89,11 +110,15 @@ export default function ProviderSettingsPage() {
   }, [])
 
   function handleSelectProvider(name: string) {
+    const nextProvider = providers.find((provider) => provider.name === name)
     setSelectedProvider(name)
     setError('')
     setNotice('')
     setApiKey('')
-    setApiBase(providers.find((provider) => provider.name === name)?.api_base || '')
+    setApiBase(nextProvider?.api_base || '')
+    if (nextProvider) {
+      setModel(providerModel(nextProvider))
+    }
     setDiscoveredModels([])
   }
 
@@ -114,6 +139,7 @@ export default function ProviderSettingsPage() {
       setProviders(uiProviders)
       setActiveProvider(payload.active_provider)
       setActiveModel(payload.default_model)
+      setModel(payload.default_model)
       setNotice(t('saveSuccess'))
       setApiKey('')
     } catch (saveError) {

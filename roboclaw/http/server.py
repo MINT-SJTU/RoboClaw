@@ -20,7 +20,7 @@ from loguru import logger
 
 from roboclaw.channels.web import WebChannel
 from roboclaw.config.loader import get_config_path, load_config, load_runtime_config, save_config
-from roboclaw.providers.factory import build_provider
+from roboclaw.providers.factory import ProviderConfigurationError, build_provider
 from roboclaw.providers.registry import PROVIDERS, find_by_name
 from roboclaw.utils.helpers import sync_workspace_templates
 
@@ -45,6 +45,8 @@ def _provider_options(config: Any) -> list[dict[str, Any]]:
         options.append({
             "name": spec.name,
             "label": spec.label,
+            "keywords": list(spec.keywords),
+            "default_model": spec.default_model,
             "oauth": spec.is_oauth,
             "local": spec.is_local,
             "direct": spec.is_direct,
@@ -80,6 +82,8 @@ def _provider_status_payload(config: Any) -> dict[str, Any]:
         "custom_provider": custom_option or {
             "name": "custom",
             "label": "Custom",
+            "keywords": [],
+            "default_model": find_by_name("custom").default_model if find_by_name("custom") else "",
             "configured": False,
             "api_base": "",
             "has_api_key": False,
@@ -231,10 +235,19 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
 
     config.agents.defaults.provider = provider_name if provider_name != "auto" else "auto"
 
-    save_config(config, get_config_path())
+    try:
+        new_provider = build_provider(config)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "provider_configuration_error",
+                "message": str(exc),
+                "hint": exc.hint,
+            },
+        ) from exc
 
-    # Atomic provider swap
-    new_provider = build_provider(config)
+    save_config(config, get_config_path())
     runtime.swap_provider(new_provider, config)
 
     return {"status": "ok", **_provider_status_payload(config)}

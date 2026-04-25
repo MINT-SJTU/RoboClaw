@@ -39,6 +39,7 @@ def test_provider_status_and_save_roundtrip(tmp_path: Path) -> None:
     saved = save.json()
     assert saved["status"] == "ok"
     assert saved["custom_provider"]["configured"] is True
+    assert saved["custom_provider"]["default_model"] == "gpt-4o-mini"
     assert saved["default_provider"] == "custom"
     assert saved["custom_provider"]["has_api_key"] is True
     assert saved["custom_provider"]["masked_api_key"] == "已保存"
@@ -96,6 +97,38 @@ def test_provider_save_uses_explicit_model(tmp_path: Path, monkeypatch) -> None:
     assert save.status_code == 200
     saved = save.json()
     assert saved["default_model"] == "openai/gpt-4.1-mini"
+
+
+def test_provider_save_rejects_invalid_config_without_persisting(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.agents.defaults.provider = "openai"
+    config.agents.defaults.model = "gpt-4o-mini"
+    config.providers.openai.api_key = "sk-existing"
+    save_config(config, config_path)
+    set_config_path(config_path)
+
+    app = create_app(config_path=str(config_path), workspace=str(tmp_path / "workspace"))
+    client = TestClient(app)
+
+    save = client.post(
+        "/api/system/provider-config",
+        json={
+            "provider": "custom",
+            "model": "custom/local-model",
+            "api_base": "",
+            "api_key": "",
+        },
+    )
+
+    assert save.status_code == 400
+    assert save.json()["detail"]["code"] == "provider_configuration_error"
+
+    saved_config = Config.model_validate_json(config_path.read_text())
+    assert saved_config.agents.defaults.provider == "openai"
+    assert saved_config.agents.defaults.model == "gpt-4o-mini"
+    assert saved_config.providers.openai.api_key == "sk-existing"
+    assert saved_config.providers.custom.api_base is None
 
 
 def test_provider_models_discovers_from_payload(tmp_path: Path, monkeypatch) -> None:

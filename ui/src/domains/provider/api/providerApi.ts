@@ -1,6 +1,8 @@
 export interface ProviderOption {
   name: string
   label: string
+  keywords: string[]
+  default_model: string
   oauth: boolean
   local: boolean
   direct: boolean
@@ -34,6 +36,16 @@ export interface ProviderModelsResponse {
   error?: string
 }
 
+async function responseError(response: Response, fallback: string): Promise<Error> {
+  const data = await response.json().catch(() => null)
+  const detail = data?.detail
+  if (detail && typeof detail === 'object') {
+    const message = [detail.message, detail.hint].filter(Boolean).join(' ')
+    return new Error(message || fallback)
+  }
+  return new Error(typeof detail === 'string' ? detail : fallback)
+}
+
 export async function fetchProviderStatus(): Promise<ProviderStatusResponse> {
   const response = await fetch('/api/system/provider-status')
   if (!response.ok) {
@@ -51,8 +63,7 @@ export async function fetchProviderModels(payload: SaveProviderPayload): Promise
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    const data = await response.json().catch(() => null)
-    throw new Error(data?.detail || 'Failed to discover provider models.')
+    throw await responseError(response, 'Failed to discover provider models.')
   }
   return response.json()
 }
@@ -66,7 +77,7 @@ export async function saveProviderConfig(payload: SaveProviderPayload): Promise<
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    throw new Error('Failed to save provider configuration.')
+    throw await responseError(response, 'Failed to save provider configuration.')
   }
   return response.json()
 }
