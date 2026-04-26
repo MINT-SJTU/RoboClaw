@@ -49,9 +49,107 @@ function formatIssueLabel(checkName: string, locale: 'zh' | 'en'): string {
   return label ? label[locale] : checkName
 }
 
+function formatCheckLabel(checkName: string, locale: 'zh' | 'en'): string {
+  const labels: Record<string, { zh: string; en: string }> = {
+    'info.json': { zh: '信息文件', en: 'Info file' },
+    'episode identity': { zh: '回合索引', en: 'Episode identity' },
+    robot_type: { zh: '机器人类型', en: 'Robot type' },
+    fps: { zh: '数据帧率', en: 'Dataset FPS' },
+    features: { zh: '特征定义', en: 'Feature schema' },
+    parquet_data: { zh: 'Parquet 数据', en: 'Parquet data' },
+    videos: { zh: '视频文件', en: 'Video files' },
+    task_description: { zh: '任务描述', en: 'Task description' },
+    length: { zh: '回合时长', en: 'Episode duration' },
+    timestamps: { zh: '时间戳', en: 'Timestamps' },
+    monotonicity: { zh: '时间戳单调性', en: 'Timestamp monotonicity' },
+    interval_cv: { zh: '采样间隔 CV', en: 'Sampling interval CV' },
+    estimated_frequency: { zh: '估算采样频率', en: 'Estimated frequency' },
+    gap_ratio: { zh: '大间隔比例', en: 'Large gap ratio' },
+    frequency_consistency: { zh: '频率一致性', en: 'Frequency consistency' },
+    joint_series: { zh: '关节序列', en: 'Joint series' },
+    all_static_duration: { zh: '整体最长静止', en: 'All-joint static duration' },
+    key_static_duration: { zh: '关键关节最长静止', en: 'Key-joint static duration' },
+    max_velocity: { zh: '最大速度', en: 'Maximum velocity' },
+    duration: { zh: '动作时长', en: 'Action duration' },
+    nan_ratio: { zh: '缺失值比例', en: 'Missing value ratio' },
+    video_count: { zh: '视频数量', en: 'Video count' },
+    video_accessibility: { zh: '视频可访问性', en: 'Video accessibility' },
+    video_resolution: { zh: '视频分辨率', en: 'Video resolution' },
+    video_fps: { zh: '视频帧率', en: 'Video FPS' },
+    overexposure_ratio: { zh: '过曝比例', en: 'Overexposure ratio' },
+    underexposure_ratio: { zh: '欠曝比例', en: 'Underexposure ratio' },
+    abnormal_frame_ratio: { zh: '异常黑白帧比例', en: 'Abnormal black/white frame ratio' },
+    color_shift: { zh: '色彩偏移', en: 'Color shift' },
+    depth_streams: { zh: '深度流', en: 'Depth streams' },
+    depth_accessibility: { zh: '深度可访问性', en: 'Depth accessibility' },
+    depth_invalid_ratio: { zh: '深度无效像素比例', en: 'Invalid depth pixel ratio' },
+    depth_continuity: { zh: '深度连续性', en: 'Depth continuity' },
+    grasp_event_count: { zh: '抓放事件数', en: 'Grasp/place event count' },
+    gripper_motion_span: { zh: '夹爪运动幅度', en: 'Gripper motion span' },
+  }
+  return labels[checkName]?.[locale] ?? checkName
+}
+
 function formatIssueDetail(issue: Record<string, unknown>): string {
   const message = issue['message']
   return typeof message === 'string' && message.trim() ? message : ''
+}
+
+function formatValidatorLabel(name: string, locale: 'zh' | 'en'): string {
+  const labels: Record<string, { zh: string; en: string }> = {
+    metadata: { zh: '元数据', en: 'Metadata' },
+    timing: { zh: '时序', en: 'Timing' },
+    action: { zh: '动作连续性', en: 'Action continuity' },
+    visual: { zh: '视觉质量', en: 'Visual quality' },
+    depth: { zh: '深度', en: 'Depth' },
+    ee_trajectory: { zh: '末端轨迹', en: 'EE trajectory' },
+  }
+  return labels[name]?.[locale] ?? name
+}
+
+function formatQualityValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : Number(value.toFixed(6)).toString()
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function hasQualityValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).length > 0
+  }
+  return String(value).trim().length > 0
+}
+
+function groupQualityIssues(issues: Array<Record<string, unknown>>): Array<{
+  validator: string
+  checks: Array<Record<string, unknown>>
+}> {
+  const groups = new Map<string, Array<Record<string, unknown>>>()
+  issues.forEach((issue) => {
+    const operatorName = issue['operator_name']
+    const validator = typeof operatorName === 'string' && operatorName.trim()
+      ? operatorName
+      : 'unknown'
+    groups.set(validator, [...(groups.get(validator) || []), issue])
+  })
+  return Array.from(groups.entries()).map(([validator, checks]) => ({ validator, checks }))
 }
 
 function isFailingIssue(issue: Record<string, unknown>): boolean {
@@ -206,6 +304,113 @@ function PieChartCard({
   )
 }
 
+function QualityDetailInspector({
+  episode,
+  locale,
+}: {
+  episode: QualityEpisodeResult
+  locale: 'zh' | 'en'
+}) {
+  const copy = locale === 'zh'
+    ? {
+      title: '检测详情',
+      validatorSummary: '验证器汇总',
+      checks: '检查项',
+      actualValue: '实际检测值',
+      noDetails: '没有详细检查记录',
+    }
+    : {
+      title: 'Validation Details',
+      validatorSummary: 'Validator Summary',
+      checks: 'Checks',
+      actualValue: 'Measured Value',
+      noDetails: 'No detailed check records',
+    }
+  const issueGroups = groupQualityIssues(episode.issues || [])
+  const validatorEntries = Object.entries(episode.validators || {})
+
+  return (
+    <div className="quality-detail-inspector">
+      <div className="quality-detail-inspector__head">
+        <div>
+          <div className="quality-detail-inspector__eyebrow">{copy.title}</div>
+          <h4>Episode {episode.episode_index}</h4>
+        </div>
+        <div className="quality-detail-inspector__score">
+          <span>{episode.score.toFixed(1)}</span>
+          <span className={cn(episode.passed ? 'is-pass' : 'is-fail')}>
+            {episode.passed ? (locale === 'zh' ? '通过' : 'Passed') : (locale === 'zh' ? '未通过' : 'Failed')}
+          </span>
+        </div>
+      </div>
+
+      {validatorEntries.length > 0 && (
+        <div className="quality-detail-summary" aria-label={copy.validatorSummary}>
+          {validatorEntries.map(([name, validator]) => (
+            <div
+              key={name}
+              className={cn('quality-detail-summary__item', validator.passed ? 'is-pass' : 'is-fail')}
+            >
+              <span>{formatValidatorLabel(name, locale)}</span>
+              <strong>{validator.score.toFixed(1)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {issueGroups.length > 0 ? (
+        <div className="quality-detail-groups">
+          {issueGroups.map((group) => (
+            <section key={group.validator} className="quality-detail-group">
+              <div className="quality-detail-group__title">
+                <span>{formatValidatorLabel(group.validator, locale)}</span>
+                <span>{group.checks.length} {copy.checks}</span>
+              </div>
+              <div className="quality-detail-checks">
+                {group.checks.map((issue, index) => {
+                  const checkName = issue['check_name']
+                  const checkKey = typeof checkName === 'string' && checkName.trim()
+                    ? checkName
+                    : `check-${index}`
+                  const passed = issue['passed'] === true
+                  const detail = formatIssueDetail(issue)
+                  const value = issue['value']
+                  const hasValue = hasQualityValue(value)
+                  return (
+                    <div
+                      key={`${group.validator}-${checkKey}-${index}`}
+                      className={cn('quality-detail-check', passed ? 'is-pass' : 'is-fail')}
+                    >
+                      <div className="quality-detail-check__head">
+                        <span className={cn('quality-detail-check__status', passed ? 'is-pass' : 'is-fail')}>
+                          {passed ? (locale === 'zh' ? '通过' : 'Pass') : (locale === 'zh' ? '未通过' : 'Fail')}
+                        </span>
+                        <span className="quality-detail-check__name">
+                          {formatCheckLabel(checkKey, locale)}
+                        </span>
+                        <span className="quality-detail-check__raw">{checkKey}</span>
+                      </div>
+                      {detail && <div className="quality-detail-check__message">{detail}</div>}
+                      {hasValue && (
+                        <div className="quality-detail-value">
+                          <div className="quality-detail-value__label">{copy.actualValue}</div>
+                          <pre>{formatQualityValue(value)}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <div className="quality-detail-inspector__empty">{copy.noDetails}</div>
+      )}
+    </div>
+  )
+}
+
 export default function QualityValidationView() {
   const { t, locale } = useI18n()
   const {
@@ -244,6 +449,7 @@ export default function QualityValidationView() {
   const [reviewError, setReviewError] = useState('')
   const [runQualityError, setRunQualityError] = useState('')
   const [rightRailCollapsed, setRightRailCollapsed] = useState(false)
+  const [hoveredEpisodeIndex, setHoveredEpisodeIndex] = useState<number | null>(null)
   const [collapsedThresholdValidators, setCollapsedThresholdValidators] = useState<string[]>([
     'metadata',
     'timing',
@@ -291,6 +497,12 @@ export default function QualityValidationView() {
       return true
     })
   }, [episodes, failureOnly, issueType])
+  const detailEpisode = useMemo(() => {
+    if (hoveredEpisodeIndex === null) {
+      return null
+    }
+    return filteredEpisodes.find((episode) => episode.episode_index === hoveredEpisodeIndex) || null
+  }, [filteredEpisodes, hoveredEpisodeIndex])
   const displayedEpisodeCount = useMemo(() => {
     if (failureOnly || issueType) {
       return filteredEpisodes.length
@@ -537,7 +749,10 @@ export default function QualityValidationView() {
             </GlassPanel>
           )}
 
-          <GlassPanel className="quality-results-card">
+          <GlassPanel
+            className="quality-results-card"
+            onMouseLeave={() => setHoveredEpisodeIndex(null)}
+          >
             <div className="quality-results-card__head">
               <div>
                 <h3>{t('qualityResults')}</h3>
@@ -607,17 +822,26 @@ export default function QualityValidationView() {
                         }
                       })
                       .filter((item): item is { key: string; label: string; detail: string } => Boolean(item))
-	                    return (
-	                      <tr key={episode.episode_index}>
-	                        <td>
-                            <button
-                              type="button"
-                              className="quality-episode-link"
-                              onClick={() => void handleReviewEpisode(episode.episode_index)}
-                            >
-                              {episode.episode_index}
-                            </button>
-                          </td>
+                    return (
+                      <tr
+                        key={episode.episode_index}
+                        className={cn(
+                          'quality-result-row',
+                          detailEpisode?.episode_index === episode.episode_index && 'is-inspected',
+                        )}
+                        tabIndex={0}
+                        onMouseEnter={() => setHoveredEpisodeIndex(episode.episode_index)}
+                        onFocus={() => setHoveredEpisodeIndex(episode.episode_index)}
+                      >
+                        <td>
+                          <button
+                            type="button"
+                            className="quality-episode-link"
+                            onClick={() => void handleReviewEpisode(episode.episode_index)}
+                          >
+                            {episode.episode_index}
+                          </button>
+                        </td>
                         <td>{episode.score.toFixed(1)}</td>
                         <td className={cn(episode.passed ? 'is-pass' : 'is-fail')}>
                           {episode.passed ? t('passed') : t('failed')}
@@ -652,6 +876,10 @@ export default function QualityValidationView() {
                 </tbody>
               </table>
             </div>
+
+            {detailEpisode && (
+              <QualityDetailInspector episode={detailEpisode} locale={locale} />
+            )}
           </GlassPanel>
         </div>
 
