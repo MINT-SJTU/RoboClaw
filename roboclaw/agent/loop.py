@@ -137,7 +137,7 @@ class AgentLoop:
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         self.tools.register(AppTool(send_callback=self.bus.publish_outbound))
-        self.tools.register(PipelineTool())
+        self.tools.register(PipelineTool(send_callback=self.bus.publish_outbound))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
         if not self.restrict_to_workspace:
@@ -176,12 +176,12 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron", "app"):
+        for name in ("message", "spawn", "cron", "app", "pipeline"):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
                     if name == "message":
                         tool.set_context(channel, chat_id, message_id)
-                    elif name == "app":
+                    elif name in ("app", "pipeline"):
                         tool.set_context(channel, chat_id, message_id, metadata or {})
                     else:
                         tool.set_context(channel, chat_id)

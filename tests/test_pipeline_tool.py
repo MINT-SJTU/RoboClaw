@@ -31,6 +31,57 @@ def test_pipeline_tool_lists_datasets(monkeypatch) -> None:
     assert result["datasets"] == [{"id": "demo", "name": "demo"}]
 
 
+def test_pipeline_tool_prepare_remote_dataset_emits_frontend_event(monkeypatch) -> None:
+    from roboclaw.data import dataset_sessions
+
+    bus = MessageBus()
+    tool = PipelineTool(send_callback=bus.publish_outbound)
+    tool.set_context(
+        "web",
+        "chat-1",
+        metadata={"app_context": {"route": "/curation/datasets"}},
+    )
+
+    def fake_register_remote_dataset_session(dataset_id, *, include_videos=False, force=False):
+        assert dataset_id == "imstevenpmwork/thanos_picking_power_gem"
+        assert include_videos is True
+        assert force is False
+        return {
+            "dataset_id": dataset_id,
+            "dataset_name": "session:remote:thanos",
+            "display_name": dataset_id,
+            "local_path": "/tmp/thanos",
+            "summary": {"name": "session:remote:thanos"},
+        }
+
+    monkeypatch.setattr(
+        dataset_sessions,
+        "register_remote_dataset_session",
+        fake_register_remote_dataset_session,
+    )
+
+    result = json.loads(
+        asyncio.run(
+            tool.execute(
+                action="prepare_remote_dataset",
+                dataset="imstevenpmwork/thanos_picking_power_gem",
+                include_videos=True,
+            )
+        )
+    )
+    message = asyncio.run(bus.consume_outbound())
+
+    assert result["dataset_name"] == "session:remote:thanos"
+    assert result["event_sent"] is True
+    assert message.channel == "web"
+    assert message.chat_id == "chat-1"
+    app_event = message.metadata["app_event"]
+    assert app_event["type"] == "pipeline.dataset_prepared"
+    assert app_event["dataset_id"] == "imstevenpmwork/thanos_picking_power_gem"
+    assert app_event["dataset_name"] == "session:remote:thanos"
+    assert app_event["context"]["route"] == "/curation/datasets"
+
+
 def test_pipeline_tool_merges_quality_threshold_defaults(monkeypatch, tmp_path) -> None:
     from roboclaw.http.routes import curation as curation_routes
 

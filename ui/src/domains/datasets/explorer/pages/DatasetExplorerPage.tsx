@@ -1266,6 +1266,45 @@ export default function DatasetExplorerView() {
   }, [])
 
   useEffect(() => {
+    function handlePipelineEvent(event: Event): void {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail
+      if (!detail || detail.type !== 'pipeline.dataset_prepared') {
+        return
+      }
+      const sourceDataset =
+        typeof detail.source_dataset === 'string' && detail.source_dataset.trim()
+          ? detail.source_dataset.trim()
+          : typeof detail.dataset_id === 'string'
+            ? detail.dataset_id.trim()
+            : ''
+      if (!sourceDataset) {
+        return
+      }
+
+      const preparedName = typeof detail.dataset_name === 'string' ? detail.dataset_name : ''
+      const nextRef: ExplorerDatasetRef = { source: 'remote', dataset: sourceDataset }
+      requestedDatasetKeyRef.current = buildDatasetRequestKey(nextRef)
+      setSource('remote')
+      setDatasetIdInput(sourceDataset)
+      setRemoteDatasetSelected(sourceDataset)
+      setPrepareError('')
+      setPrepareStatus(
+        preparedName
+          ? `${t('preparedForQuality')}: ${preparedName}`
+          : `${t('preparedForQuality')}: ${sourceDataset}`,
+      )
+      void Promise.allSettled([
+        loadSummary(nextRef),
+        loadDashboard(nextRef),
+        loadEpisodePage(nextRef, 1, 50),
+      ])
+    }
+
+    window.addEventListener('roboclaw:pipeline-event', handlePipelineEvent)
+    return () => window.removeEventListener('roboclaw:pipeline-event', handlePipelineEvent)
+  }, [loadDashboard, loadEpisodePage, loadSummary, t])
+
+  useEffect(() => {
     if (source !== 'remote') {
       setDatasetSuggestions([])
       setSuggestionsLoading(false)

@@ -127,6 +127,42 @@ function navigateClient(route: string): void {
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
+function emitPipelineEvent(appEvent: Record<string, unknown>): void {
+  window.dispatchEvent(new CustomEvent('roboclaw:pipeline-event', { detail: appEvent }))
+}
+
+function syncPreparedDataset(appEvent: Record<string, unknown>): void {
+  const datasetName = typeof appEvent.dataset_name === 'string' ? appEvent.dataset_name : ''
+  if (!datasetName) {
+    return
+  }
+  emitPipelineEvent(appEvent)
+  void (async () => {
+    try {
+      const workflow = useWorkflow.getState()
+      await workflow.loadDatasets()
+      await workflow.selectDataset(datasetName)
+    } catch (error) {
+      console.warn('Failed to sync prepared dataset from AI event', error)
+    }
+  })()
+}
+
+function handleAppEvent(appEvent: any): boolean {
+  if (!appEvent || typeof appEvent !== 'object') {
+    return false
+  }
+  if (appEvent.type === 'app.navigate' && typeof appEvent.route === 'string') {
+    navigateClient(appEvent.route)
+    return true
+  }
+  if (appEvent.type === 'pipeline.dataset_prepared') {
+    syncPreparedDataset(appEvent)
+    return true
+  }
+  return false
+}
+
 export const useChatSocket = create<WebSocketStore>((set, get) => ({
   ws: null,
   connected: false,
@@ -181,8 +217,7 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
 
       if (data.type === 'chat.message') {
         const appEvent = data.metadata?.app_event
-        if (appEvent?.type === 'app.navigate' && typeof appEvent.route === 'string') {
-          navigateClient(appEvent.route)
+        if (handleAppEvent(appEvent)) {
           if (!String(data.content ?? '').trim()) {
             return
           }

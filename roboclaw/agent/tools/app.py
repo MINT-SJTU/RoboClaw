@@ -76,6 +76,8 @@ APP_PAGES: list[dict[str, Any]] = [
         "state_sources": ["/api/curation/datasets", "/api/explorer/summary"],
         "actions": [
             _action("pipeline.list_datasets", "列出 Pipeline 数据集", "pipeline", "list_datasets"),
+            _action("pipeline.prepare_remote_dataset", "准备远程数据集到 Pipeline", "pipeline", "prepare_remote_dataset", ["dataset"]),
+            _action("pipeline.load_remote_dataset", "加载远程数据集并同步前端", "pipeline", "load_remote_dataset", ["dataset"]),
             _action("pipeline.get_state", "读取当前数据集 Pipeline 状态", "pipeline", "get_state", ["dataset"]),
         ],
     },
