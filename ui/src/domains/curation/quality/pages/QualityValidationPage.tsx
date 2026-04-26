@@ -769,7 +769,7 @@ export default function QualityValidationView() {
   }
 
   return (
-    <div className="page-enter quality-view pipeline-page quality-validation-page">
+    <div className="page-enter quality-view pipeline-page pipeline-compact-shell quality-validation-page pipeline-compact-quality">
       {selectedDataset && datasetInfo ? (
         <div className="workflow-view__info-bar">
           <span>{datasetInfo.label}</span>
@@ -783,9 +783,9 @@ export default function QualityValidationView() {
         </GlassPanel>
       )}
 
-      <div className={cn('quality-validation-shell', rightRailCollapsed && 'is-rail-collapsed')}>
+      <div className={cn('quality-validation-shell', 'pipeline-compact-quality-shell', rightRailCollapsed && 'is-rail-collapsed')}>
         <div className="quality-validation-shell__main">
-          <div className="quality-validation-overview">
+          <div className="quality-validation-overview pipeline-compact-quality-overview">
             <GlassPanel className="quality-total-card">
               <div className="quality-total-card__eyebrow">{t('totalEpisodes')}</div>
               <div className="quality-total-card__value">{displayedEpisodeCount}</div>

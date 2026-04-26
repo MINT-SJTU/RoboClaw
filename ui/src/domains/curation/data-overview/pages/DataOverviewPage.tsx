@@ -1,19 +1,42 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ActionButton, GlassPanel, MetricCard } from '@/shared/ui'
+import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { ActionButton, GlassPanel } from '@/shared/ui'
 import { useI18n } from '@/i18n'
 import {
   useWorkflow,
   type AlignmentOverviewRow,
   type AlignmentOverviewSpan,
+  type PrototypeCluster,
 } from '@/domains/curation/store/useCurationStore'
 import { cn } from '@/shared/lib/cn'
 
-type ChartDimension =
-  | 'alignment_status'
-  | 'issue_types'
-  | 'score_bands'
-  | 'failed_validators'
-  | 'tasks'
+type ValidatorKey = 'metadata' | 'timing' | 'action' | 'visual' | 'depth' | 'ee_trajectory'
+type DelayMetric = 'dtw_start_delay_s' | 'dtw_end_delay_s' | 'duration_delta_s'
+
+const VALIDATOR_KEYS: ValidatorKey[] = [
+  'metadata',
+  'timing',
+  'action',
+  'visual',
+  'depth',
+  'ee_trajectory',
+]
+
+const MISSING_CHECKS = [
+  'info.json',
+  'episode identity',
+  'parquet_data',
+  'videos',
+  'task_description',
+  'robot_type',
+  'fps',
+  'features',
+] as const
+
+const DELAY_METRICS: Array<{ key: DelayMetric; zh: string; en: string }> = [
+  { key: 'dtw_start_delay_s', zh: '起点', en: 'Start' },
+  { key: 'dtw_end_delay_s', zh: '终点', en: 'End' },
+  { key: 'duration_delta_s', zh: '时长差', en: 'Duration' },
+]
 
 function formatIssueLabel(checkName: string, locale: 'zh' | 'en'): string {
   const labels: Record<string, { zh: string; en: string }> = {
@@ -266,57 +289,674 @@ function alignmentStatusKey(
   return 'alignmentNotStarted'
 }
 
-function collectCounts(values: string[]): Array<{ label: string; count: number }> {
-  const counts = new Map<string, number>()
-  values.forEach((value) => {
-    const normalized = String(value || '').trim()
-    if (!normalized) return
-    counts.set(normalized, (counts.get(normalized) || 0) + 1)
+function formatCompactNumber(value: number | string): string {
+  if (typeof value === 'string') return value
+  if (!Number.isFinite(value)) return '--'
+  if (Math.abs(value) >= 1000000) return `${Number((value / 1000000).toFixed(1))}m`
+  if (Math.abs(value) >= 1000) return `${Number((value / 1000).toFixed(1))}k`
+  return String(value)
+}
+
+function formatChartValue(value: number): string {
+  if (!Number.isFinite(value)) return '--'
+  if (Math.abs(value) >= 10) return value.toFixed(1)
+  if (Math.abs(value) >= 1) return value.toFixed(2)
+  return value.toFixed(3)
+}
+
+function getIssueForCheck(
+  row: AlignmentOverviewRow,
+  checkName: string,
+): Record<string, unknown> | undefined {
+  return (row.issues || []).find((issue) => issue['check_name'] === checkName)
+}
+
+function getIssuePassState(issue: Record<string, unknown> | undefined): boolean | null {
+  if (!issue) return null
+  if (issue['passed'] === true) return true
+  if (issue['passed'] === false) return false
+  return null
+}
+
+function rowSemanticSpans(row: AlignmentOverviewRow): AlignmentOverviewSpan[] {
+  const propagationSpans = row.propagation_spans || []
+  if (propagationSpans.length > 0) return propagationSpans
+  return row.annotation_spans || []
+}
+
+function spanEnd(span: AlignmentOverviewSpan): number {
+  if (typeof span.endTime === 'number' && Number.isFinite(span.endTime)) return span.endTime
+  if (typeof span.startTime === 'number' && Number.isFinite(span.startTime)) return span.startTime
+  return 0
+}
+
+function spanStart(span: AlignmentOverviewSpan): number {
+  return typeof span.startTime === 'number' && Number.isFinite(span.startTime) ? span.startTime : 0
+}
+
+function maxSpanEnd(rows: AlignmentOverviewRow[]): number {
+  return Math.max(
+    1,
+    ...rows.flatMap((row) => rowSemanticSpans(row).map((span) => spanEnd(span))),
+  )
+}
+
+function semanticLabel(span: AlignmentOverviewSpan, locale: 'zh' | 'en'): string {
+  const label = span.label || span.text || span.category
+  return label ? String(label) : (locale === 'zh' ? '未命名' : 'Untitled')
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function delayValuesForRow(row: AlignmentOverviewRow, metric: DelayMetric): number[] {
+  return (row.propagation_spans || [])
+    .map((span) => span[metric])
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+}
+
+function averageDelayForRow(row: AlignmentOverviewRow, metric: DelayMetric): number | null {
+  return average(delayValuesForRow(row, metric))
+}
+
+function collectDelayValues(rows: AlignmentOverviewRow[], metric: DelayMetric): number[] {
+  return rows.flatMap((row) => delayValuesForRow(row, metric))
+}
+
+function buildHistogram(values: number[], binCount = 8): Array<{ label: string; count: number }> {
+  if (values.length === 0) return []
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (min === max) {
+    return [{ label: formatChartValue(min), count: values.length }]
+  }
+  const size = (max - min) / binCount
+  const bins = Array.from({ length: binCount }, (_, index) => {
+    const from = min + index * size
+    const to = index === binCount - 1 ? max : from + size
+    return {
+      label: `${formatChartValue(from)}-${formatChartValue(to)}`,
+      count: 0,
+    }
   })
-  return Array.from(counts.entries())
-    .map(([label, count]) => ({ label, count }))
-    .sort((left, right) => right.count - left.count)
+  values.forEach((value) => {
+    const index = Math.min(Math.floor((value - min) / size), binCount - 1)
+    bins[index].count += 1
+  })
+  return bins
 }
 
-function scoreBandLabel(score: number): string {
-  if (score >= 95) return '95-100'
-  if (score >= 85) return '85-94'
-  if (score >= 70) return '70-84'
-  if (score >= 50) return '50-69'
-  return '0-49'
+function qualityColor(row: AlignmentOverviewRow): string {
+  return row.quality_passed ? '#064e3b' : '#c81e1e'
 }
 
-function DistributionChart({
+function validatorColor(score: number | undefined, failed: boolean): string {
+  if (typeof score !== 'number' || Number.isNaN(score)) return 'rgba(148, 163, 184, 0.34)'
+  if (failed) return '#c81e1e'
+  const alpha = Math.min(Math.max(score / 100, 0.25), 1)
+  return `rgba(6, 78, 59, ${alpha})`
+}
+
+function issueMatrixColor(state: boolean | null): string {
+  if (state === true) return '#064e3b'
+  if (state === false) return '#c81e1e'
+  return 'rgba(148, 163, 184, 0.38)'
+}
+
+function firstClusterEpisode(cluster: PrototypeCluster): number | null {
+  const member = cluster.members.find((item) => typeof item.episode_index === 'number')
+  return member?.episode_index ?? null
+}
+
+function PipelineChartPanel({
   title,
-  items,
+  subtitle,
+  className,
+  children,
 }: {
   title: string
-  items: Array<{ label: string; count: number }>
+  subtitle?: string
+  className?: string
+  children: ReactNode
 }) {
-  const maxValue = Math.max(...items.map((item) => item.count), 1)
+  return (
+    <section className={cn('pipeline-chart-card', className)}>
+      <div className="pipeline-chart-card__head">
+        <div>
+          <h4>{title}</h4>
+          {subtitle ? <p>{subtitle}</p> : null}
+        </div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function ChartEmpty({ label }: { label: string }) {
+  return <div className="pipeline-chart-empty">{label}</div>
+}
+
+function QualityTimelineChart({
+  rows,
+  emptyLabel,
+  onInspectEpisode,
+}: {
+  rows: AlignmentOverviewRow[]
+  emptyLabel: string
+  onInspectEpisode: (episodeIndex: number) => void
+}) {
+  const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
+  if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
+
+  const width = 680
+  const height = 220
+  const padX = 40
+  const padY = 28
+  const minEpisode = sortedRows[0].episode_index
+  const maxEpisode = sortedRows[sortedRows.length - 1].episode_index
+  const xFor = (episodeIndex: number) =>
+    maxEpisode === minEpisode
+      ? width / 2
+      : padX + ((episodeIndex - minEpisode) / (maxEpisode - minEpisode)) * (width - padX * 2)
+  const yFor = (score: number) =>
+    height - padY - (Math.max(0, Math.min(score, 100)) / 100) * (height - padY * 2)
+  const points = sortedRows.map((row) => ({
+    row,
+    x: xFor(row.episode_index),
+    y: yFor(row.quality_score),
+  }))
 
   return (
-    <GlassPanel className="quality-chart-card overview-chart-card">
-      <div className="quality-chart-card__title">{title}</div>
-      <div className="quality-chart-card__bars">
-        {items.length === 0 ? (
-          <div className="quality-chart-card__empty">No data</div>
-        ) : (
-          items.map((item) => (
-            <div key={item.label} className="quality-chart-card__row">
-              <div className="quality-chart-card__label">{item.label}</div>
-              <div className="quality-chart-card__track">
-                <div
-                  className="quality-chart-card__fill"
-                  style={{ width: `${(item.count / maxValue) * 100}%` }}
-                />
-              </div>
-              <div className="quality-chart-card__value">{item.count}</div>
+    <div className="quality-timeline-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Episode quality timeline">
+        {[0, 25, 50, 75, 100].map((tick) => (
+          <g key={tick}>
+            <line
+              x1={padX}
+              y1={yFor(tick)}
+              x2={width - padX}
+              y2={yFor(tick)}
+              className="pipeline-chart-gridline"
+            />
+            <text x={8} y={yFor(tick) + 4} className="pipeline-chart-axis-label">{tick}</text>
+          </g>
+        ))}
+        <polyline
+          points={points.map((point) => `${point.x},${point.y}`).join(' ')}
+          className="quality-timeline-chart__line"
+          fill="none"
+        />
+        {points.map((point) => (
+          <g
+            key={point.row.episode_index}
+            role="button"
+            tabIndex={0}
+            onMouseEnter={() => onInspectEpisode(point.row.episode_index)}
+            onFocus={() => onInspectEpisode(point.row.episode_index)}
+            onClick={() => onInspectEpisode(point.row.episode_index)}
+          >
+            <title>{`Episode ${point.row.episode_index}: ${point.row.quality_score.toFixed(1)}`}</title>
+            <circle
+              cx={point.x}
+              cy={point.y}
+              r={point.row.quality_passed ? 4.2 : 5.2}
+              fill={qualityColor(point.row)}
+              className="quality-timeline-chart__point"
+            />
+          </g>
+        ))}
+        <text x={padX} y={height - 4} className="pipeline-chart-axis-label">
+          {minEpisode}
+        </text>
+        <text x={width - padX} y={height - 4} textAnchor="end" className="pipeline-chart-axis-label">
+          {maxEpisode}
+        </text>
+      </svg>
+    </div>
+  )
+}
+
+function ValidatorHeatmap({
+  rows,
+  locale,
+  emptyLabel,
+  onInspectEpisode,
+}: {
+  rows: AlignmentOverviewRow[]
+  locale: 'zh' | 'en'
+  emptyLabel: string
+  onInspectEpisode: (episodeIndex: number) => void
+}) {
+  const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
+  if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
+  const gridStyle: CSSProperties = {
+    gridTemplateColumns: `112px repeat(${sortedRows.length}, minmax(24px, 1fr))`,
+  }
+
+  return (
+    <div className="validator-heatmap pipeline-matrix-scroll">
+      <div className="validator-heatmap__grid" style={gridStyle}>
+        <div className="validator-heatmap__corner">Episode</div>
+        {sortedRows.map((row) => (
+          <div key={`episode-${row.episode_index}`} className="validator-heatmap__episode">
+            {row.episode_index}
+          </div>
+        ))}
+        {VALIDATOR_KEYS.map((validator) => (
+          <Fragment key={validator}>
+            <div key={`${validator}-label`} className="validator-heatmap__label">
+              {formatValidatorLabel(validator, locale)}
             </div>
-          ))
-        )}
+            {sortedRows.map((row) => {
+              const score = row.validator_scores?.[validator]
+              const failed = row.failed_validators.includes(validator)
+              return (
+                <button
+                  key={`${validator}-${row.episode_index}`}
+                  type="button"
+                  className={cn('validator-heatmap__cell', failed && 'is-fail')}
+                  style={{ backgroundColor: validatorColor(score, failed) }}
+                  title={`Episode ${row.episode_index} · ${validator}: ${
+                    typeof score === 'number' ? score.toFixed(1) : 'missing'
+                  }`}
+                  onMouseEnter={() => onInspectEpisode(row.episode_index)}
+                  onFocus={() => onInspectEpisode(row.episode_index)}
+                  onClick={() => onInspectEpisode(row.episode_index)}
+                />
+              )
+            })}
+          </Fragment>
+        ))}
       </div>
-    </GlassPanel>
+    </div>
+  )
+}
+
+function MissingMatrix({
+  rows,
+  locale,
+  emptyLabel,
+  onInspectEpisode,
+}: {
+  rows: AlignmentOverviewRow[]
+  locale: 'zh' | 'en'
+  emptyLabel: string
+  onInspectEpisode: (episodeIndex: number) => void
+}) {
+  const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
+  if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
+  const gridStyle: CSSProperties = {
+    gridTemplateColumns: `94px repeat(${MISSING_CHECKS.length}, minmax(92px, 1fr))`,
+  }
+
+  return (
+    <div className="missing-matrix pipeline-matrix-scroll">
+      <div className="missing-matrix__grid" style={gridStyle}>
+        <div className="missing-matrix__corner">Episode</div>
+        {MISSING_CHECKS.map((check) => (
+          <div key={check} className="missing-matrix__head">{formatCheckLabel(check, locale)}</div>
+        ))}
+        {sortedRows.map((row) => (
+          <Fragment key={row.episode_index}>
+            <div key={`${row.episode_index}-episode`} className="missing-matrix__episode">
+              {row.episode_index}
+            </div>
+            {MISSING_CHECKS.map((check) => {
+              const issue = getIssueForCheck(row, check)
+              const state = getIssuePassState(issue)
+              return (
+                <button
+                  key={`${row.episode_index}-${check}`}
+                  type="button"
+                  className={cn(
+                    'missing-matrix__cell',
+                    state === true && 'is-pass',
+                    state === false && 'is-fail',
+                  )}
+                  style={{ backgroundColor: issueMatrixColor(state) }}
+                  title={`Episode ${row.episode_index} · ${formatCheckLabel(check, locale)}: ${
+                    state === null ? 'missing' : state ? 'passed' : 'failed'
+                  }`}
+                  onMouseEnter={() => onInspectEpisode(row.episode_index)}
+                  onFocus={() => onInspectEpisode(row.episode_index)}
+                  onClick={() => onInspectEpisode(row.episode_index)}
+                />
+              )
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DtwDelayHistogram({
+  rows,
+  locale,
+  emptyLabel,
+}: {
+  rows: AlignmentOverviewRow[]
+  locale: 'zh' | 'en'
+  emptyLabel: string
+}) {
+  const [metric, setMetric] = useState<DelayMetric>('dtw_start_delay_s')
+  const values = collectDelayValues(rows, metric)
+  const bins = buildHistogram(values)
+  const maxCount = Math.max(...bins.map((bin) => bin.count), 1)
+
+  return (
+    <div className="dtw-histogram">
+      <div className="pipeline-segmented-control" role="group" aria-label="DTW delay metric">
+        {DELAY_METRICS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={cn(metric === item.key && 'is-active')}
+            onClick={() => setMetric(item.key)}
+          >
+            {item[locale]}
+          </button>
+        ))}
+      </div>
+      {bins.length === 0 ? (
+        <ChartEmpty label={emptyLabel} />
+      ) : (
+        <div className="dtw-histogram__bars">
+          {bins.map((bin) => (
+            <div key={bin.label} className="dtw-histogram__row">
+              <span>{bin.label}s</span>
+              <div className="dtw-histogram__track">
+                <div className="dtw-histogram__fill" style={{ width: `${(bin.count / maxCount) * 100}%` }} />
+              </div>
+              <strong>{bin.count}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SemanticSpanTimeline({
+  rows,
+  locale,
+  emptyLabel,
+  onInspectEpisode,
+}: {
+  rows: AlignmentOverviewRow[]
+  locale: 'zh' | 'en'
+  emptyLabel: string
+  onInspectEpisode: (episodeIndex: number) => void
+}) {
+  const rowsWithSpans = [...rows]
+    .sort((left, right) => left.episode_index - right.episode_index)
+    .filter((row) => rowSemanticSpans(row).length > 0)
+  if (rowsWithSpans.length === 0) return <ChartEmpty label={emptyLabel} />
+  const maxEnd = maxSpanEnd(rowsWithSpans)
+
+  return (
+    <div className="semantic-timeline">
+      {rowsWithSpans.map((row) => (
+        <div key={row.episode_index} className="semantic-timeline__row">
+          <button
+            type="button"
+            className="semantic-timeline__episode"
+            onMouseEnter={() => onInspectEpisode(row.episode_index)}
+            onFocus={() => onInspectEpisode(row.episode_index)}
+            onClick={() => onInspectEpisode(row.episode_index)}
+          >
+            {row.episode_index}
+          </button>
+          <div className="semantic-timeline__track">
+            {rowSemanticSpans(row).map((span, index) => {
+              const start = Math.max(0, spanStart(span))
+              const end = Math.max(start + 0.05, spanEnd(span))
+              const left = Math.min((start / maxEnd) * 100, 98)
+              const width = Math.max(((end - start) / maxEnd) * 100, 3.5)
+              return (
+                <button
+                  key={`${span.id || semanticLabel(span, locale)}-${index}`}
+                  type="button"
+                  className={cn(
+                    'semantic-timeline__span',
+                    span.source === 'dtw_propagated' && 'is-propagated',
+                  )}
+                  style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
+                  title={`${semanticLabel(span, locale)} · ${formatTimeWindow(span, locale)}`}
+                  onMouseEnter={() => onInspectEpisode(row.episode_index)}
+                  onFocus={() => onInspectEpisode(row.episode_index)}
+                  onClick={() => onInspectEpisode(row.episode_index)}
+                >
+                  <span>{semanticLabel(span, locale)}</span>
+                  <em>{formatTimeWindow(span, locale)}</em>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SemanticLabelBars({
+  rows,
+  locale,
+  emptyLabel,
+}: {
+  rows: AlignmentOverviewRow[]
+  locale: 'zh' | 'en'
+  emptyLabel: string
+}) {
+  const items = Array.from(
+    rows
+      .flatMap((row) => rowSemanticSpans(row))
+      .reduce((counts, span) => {
+        const label = semanticLabel(span, locale)
+        counts.set(label, (counts.get(label) || 0) + 1)
+        return counts
+      }, new Map<string, number>()),
+  )
+    .map(([label, count]) => ({ label, count }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 12)
+  const maxCount = Math.max(...items.map((item) => item.count), 1)
+
+  if (items.length === 0) return <ChartEmpty label={emptyLabel} />
+  return (
+    <div className="semantic-label-bars">
+      {items.map((item) => (
+        <div key={item.label} className="semantic-label-bars__row">
+          <span>{item.label}</span>
+          <div className="semantic-label-bars__track">
+            <div style={{ width: `${(item.count / maxCount) * 100}%` }} />
+          </div>
+          <strong>{item.count}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function CoverageStackedBar({
+  rows,
+  locale,
+  emptyLabel,
+}: {
+  rows: AlignmentOverviewRow[]
+  locale: 'zh' | 'en'
+  emptyLabel: string
+}) {
+  if (rows.length === 0) return <ChartEmpty label={emptyLabel} />
+  const labels = locale === 'zh'
+    ? { notStarted: '未开始', annotated: '人工标注', propagated: '自动传播' }
+    : { notStarted: 'Not started', annotated: 'Manual', propagated: 'Propagated' }
+  const counts = rows.reduce(
+    (acc, row) => {
+      if (row.propagated_count > 0 || row.alignment_status === 'propagated') acc.propagated += 1
+      else if (row.annotation_count > 0 || row.alignment_status === 'annotated') acc.annotated += 1
+      else acc.notStarted += 1
+      return acc
+    },
+    { notStarted: 0, annotated: 0, propagated: 0 },
+  )
+  const total = Math.max(rows.length, 1)
+  const segments = [
+    { key: 'notStarted', label: labels.notStarted, value: counts.notStarted, className: 'is-empty' },
+    { key: 'annotated', label: labels.annotated, value: counts.annotated, className: 'is-manual' },
+    { key: 'propagated', label: labels.propagated, value: counts.propagated, className: 'is-propagated' },
+  ] as const
+
+  return (
+    <div className="coverage-bar">
+      <div className="coverage-bar__track">
+        {segments.map((segment) => (
+          <div
+            key={segment.key}
+            className={cn('coverage-bar__segment', segment.className)}
+            style={{ width: `${(segment.value / total) * 100}%` }}
+            title={`${segment.label}: ${segment.value}`}
+          />
+        ))}
+      </div>
+      <div className="coverage-bar__legend">
+        {segments.map((segment) => (
+          <div key={segment.key} className={cn('coverage-bar__legend-item', segment.className)}>
+            <span />
+            <strong>{segment.label}</strong>
+            <em>{segment.value}</em>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PrototypeClusterChart({
+  clusters,
+  emptyLabel,
+  onInspectEpisode,
+}: {
+  clusters: PrototypeCluster[]
+  emptyLabel: string
+  onInspectEpisode: (episodeIndex: number) => void
+}) {
+  if (clusters.length === 0) return <ChartEmpty label={emptyLabel} />
+  const maxMembers = Math.max(...clusters.map((cluster) => cluster.member_count), 1)
+
+  return (
+    <div className="prototype-cluster-chart">
+      {clusters.map((cluster) => {
+        const episodeIndex = firstClusterEpisode(cluster)
+        return (
+          <button
+            key={cluster.cluster_index}
+            type="button"
+            className="prototype-cluster-chart__row"
+            disabled={episodeIndex === null}
+            onMouseEnter={() => {
+              if (episodeIndex !== null) onInspectEpisode(episodeIndex)
+            }}
+            onFocus={() => {
+              if (episodeIndex !== null) onInspectEpisode(episodeIndex)
+            }}
+            onClick={() => {
+              if (episodeIndex !== null) onInspectEpisode(episodeIndex)
+            }}
+          >
+            <span className="prototype-cluster-chart__label">C{cluster.cluster_index}</span>
+            <span className="prototype-cluster-chart__track">
+              <span style={{ width: `${(cluster.member_count / maxMembers) * 100}%` }} />
+            </span>
+            <span className="prototype-cluster-chart__meta">
+              <strong>{cluster.member_count}</strong>
+              <em>{cluster.anchor_record_key || cluster.prototype_record_key}</em>
+              {typeof cluster.average_distance === 'number' && (
+                <em>avg {formatChartValue(cluster.average_distance)}</em>
+              )}
+              {typeof cluster.anchor_distance_to_barycenter === 'number' && (
+                <em>bary {formatChartValue(cluster.anchor_distance_to_barycenter)}</em>
+              )}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function QualityDtwScatter({
+  rows,
+  emptyLabel,
+  onInspectEpisode,
+}: {
+  rows: AlignmentOverviewRow[]
+  emptyLabel: string
+  onInspectEpisode: (episodeIndex: number) => void
+}) {
+  const points = rows
+    .map((row) => ({ row, delay: averageDelayForRow(row, 'dtw_start_delay_s') }))
+    .filter((point): point is { row: AlignmentOverviewRow; delay: number } => point.delay !== null)
+  if (points.length === 0) return <ChartEmpty label={emptyLabel} />
+
+  const width = 520
+  const height = 220
+  const padX = 38
+  const padY = 28
+  const minDelay = Math.min(...points.map((point) => point.delay), 0)
+  const maxDelay = Math.max(...points.map((point) => point.delay), 0)
+  const delayRange = maxDelay - minDelay || 1
+  const xFor = (score: number) => padX + (Math.max(0, Math.min(score, 100)) / 100) * (width - padX * 2)
+  const yFor = (delay: number) =>
+    height - padY - ((delay - minDelay) / delayRange) * (height - padY * 2)
+
+  return (
+    <div className="quality-dtw-scatter">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Quality score versus DTW delay">
+        <line x1={padX} y1={yFor(0)} x2={width - padX} y2={yFor(0)} className="quality-dtw-scatter__zero" />
+        {[0, 50, 100].map((tick) => (
+          <g key={tick}>
+            <line
+              x1={xFor(tick)}
+              y1={padY}
+              x2={xFor(tick)}
+              y2={height - padY}
+              className="pipeline-chart-gridline"
+            />
+            <text x={xFor(tick)} y={height - 4} textAnchor="middle" className="pipeline-chart-axis-label">
+              {tick}
+            </text>
+          </g>
+        ))}
+        <text x={8} y={yFor(maxDelay) + 4} className="pipeline-chart-axis-label">
+          {formatChartValue(maxDelay)}s
+        </text>
+        <text x={8} y={yFor(minDelay) + 4} className="pipeline-chart-axis-label">
+          {formatChartValue(minDelay)}s
+        </text>
+        {points.map((point) => (
+          <g
+            key={point.row.episode_index}
+            role="button"
+            tabIndex={0}
+            onMouseEnter={() => onInspectEpisode(point.row.episode_index)}
+            onFocus={() => onInspectEpisode(point.row.episode_index)}
+            onClick={() => onInspectEpisode(point.row.episode_index)}
+          >
+            <title>{`Episode ${point.row.episode_index}: score ${point.row.quality_score.toFixed(1)}, delay ${formatChartValue(point.delay)}s`}</title>
+            <circle
+              cx={xFor(point.row.quality_score)}
+              cy={yFor(point.delay)}
+              r={5}
+              fill={qualityColor(point.row)}
+              className="quality-dtw-scatter__point"
+            />
+          </g>
+        ))}
+      </svg>
+    </div>
   )
 }
 
@@ -585,14 +1225,15 @@ export default function DataOverviewPage() {
     selectedDataset,
     datasetInfo,
     alignmentOverview,
+    prototypeResults,
     loadAlignmentOverview,
+    loadPrototypeResults,
     selectDataset,
   } = useWorkflow()
   const [qualityFilter, setQualityFilter] = useState<'all' | 'passed' | 'failed'>('all')
   const [alignmentFilter, setAlignmentFilter] = useState<
     'all' | 'not_started' | 'annotated' | 'propagated'
   >('all')
-  const [chartDimension, setChartDimension] = useState<ChartDimension>('alignment_status')
   const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<number[]>([])
   const [inspectedEpisodeId, setInspectedEpisodeId] = useState<number | null>(null)
 
@@ -605,8 +1246,9 @@ export default function DataOverviewPage() {
   useEffect(() => {
     if (selectedDataset) {
       void loadAlignmentOverview()
+      void loadPrototypeResults()
     }
-  }, [selectedDataset, loadAlignmentOverview])
+  }, [selectedDataset, loadAlignmentOverview, loadPrototypeResults])
 
   const rows = alignmentOverview?.rows || []
   const filteredRows = useMemo(() => {
@@ -632,40 +1274,81 @@ export default function DataOverviewPage() {
     [filteredRows, inspectedEpisodeId],
   )
 
-  const chartItems = useMemo(() => {
-    if (chartDimension === 'alignment_status') {
-      return collectCounts(filteredRows.map((row) => t(alignmentStatusKey(row.alignment_status))))
-    }
-    if (chartDimension === 'issue_types') {
-      return collectCounts(
-        filteredRows.flatMap((row) =>
-          row.issues.flatMap((issue) => {
-            const checkName = issue['check_name']
-            return typeof checkName === 'string' ? [formatIssueLabel(checkName, locale)] : []
-          }),
-        ),
-      )
-    }
-    if (chartDimension === 'failed_validators') {
-      return collectCounts(filteredRows.flatMap((row) => row.failed_validators))
-    }
-    if (chartDimension === 'tasks') {
-      return collectCounts(filteredRows.map((row) => row.task || t('untitledTask')))
-    }
-    return collectCounts(filteredRows.map((row) => scoreBandLabel(row.quality_score)))
-  }, [chartDimension, filteredRows, locale, t])
-
-  const chartTitle = useMemo(() => {
-    if (chartDimension === 'alignment_status') return t('alignmentStatus')
-    if (chartDimension === 'issue_types') return t('issueDistribution')
-    if (chartDimension === 'failed_validators') return t('validatorDistribution')
-    if (chartDimension === 'tasks') return t('taskDistribution')
-    return t('scoreDistribution')
-  }, [chartDimension, t])
-
   const allVisibleSelected =
     filteredRows.length > 0
     && filteredRows.every((row) => selectedEpisodeIds.includes(row.episode_index))
+  const clusterCount = prototypeResults?.cluster_count ?? alignmentOverview?.summary.prototype_cluster_count ?? 0
+  const overviewCopy = locale === 'zh'
+    ? {
+      title: 'Pipeline 分析驾驶舱',
+      subtitle: '同屏查看质量、语义、DTW 和原型聚类结果',
+      showingRows: '当前结果',
+      total: '总数',
+      failed: '失败',
+      annotated: '已标注',
+      propagated: '已传播',
+      clusters: '聚类数',
+      toolbar: '筛选与导出',
+      qualitySection: '质量',
+      semanticSection: '语义 / DTW',
+      coverageSection: '覆盖 / 原型',
+      timeline: 'Episode 质量时间线',
+      timelineDesc: '连续低分区间会直接浮现',
+      validatorHeatmap: 'Validator × Episode 热力图',
+      validatorDesc: '红色为失败，深绿为高分通过',
+      missingMatrix: '缺失项矩阵',
+      missingDesc: '元数据、视频、任务描述等存在性',
+      dtwHistogram: 'DTW 延迟分布',
+      dtwDesc: '起点、终点和时长差可切换',
+      semanticTimeline: '语义片段时间轴',
+      semanticTimelineDesc: '每个 episode 的语义 span 区间',
+      labelBars: '语义标签分布',
+      labelBarsDesc: '优先统计 label，其次 text/category',
+      coverage: '人工标注 vs 自动传播',
+      coverageDesc: '自动传播优先于人工标注计数',
+      prototype: '原型聚类图',
+      prototypeDesc: '成员数、anchor 与距离摘要',
+      scatter: '质量分数 vs DTW 延迟',
+      scatterDesc: '定位低质量且延迟异常的 episode',
+      empty: '暂无可绘制数据',
+      tableTitle: '结果明细',
+      tableDesc: '悬浮或点击 episode 可查看质量、DTW 与语义详情',
+    }
+    : {
+      title: 'Pipeline Analytics Cockpit',
+      subtitle: 'Quality, semantics, DTW, and prototype clusters in one dense view',
+      showingRows: 'Current rows',
+      total: 'Total',
+      failed: 'Failed',
+      annotated: 'Annotated',
+      propagated: 'Propagated',
+      clusters: 'Clusters',
+      toolbar: 'Filters and export',
+      qualitySection: 'Quality',
+      semanticSection: 'Semantic / DTW',
+      coverageSection: 'Coverage / Prototype',
+      timeline: 'Episode Quality Timeline',
+      timelineDesc: 'Consecutive low-score ranges stand out',
+      validatorHeatmap: 'Validator × Episode Heatmap',
+      validatorDesc: 'Red means failed, darker green means higher passed score',
+      missingMatrix: 'Missing Item Matrix',
+      missingDesc: 'Metadata, videos, task description, and schema presence',
+      dtwHistogram: 'DTW Delay Distribution',
+      dtwDesc: 'Switch start, end, and duration delta',
+      semanticTimeline: 'Semantic Span Timeline',
+      semanticTimelineDesc: 'Semantic span windows per episode',
+      labelBars: 'Semantic Label Distribution',
+      labelBarsDesc: 'Counts label first, then text/category',
+      coverage: 'Manual Annotation vs Propagation',
+      coverageDesc: 'Propagation takes priority over manual annotation',
+      prototype: 'Prototype Cluster Chart',
+      prototypeDesc: 'Member count, anchor, and distance summary',
+      scatter: 'Quality Score vs DTW Delay',
+      scatterDesc: 'Find low-quality episodes with abnormal delay',
+      empty: 'No drawable data yet',
+      tableTitle: 'Result Details',
+      tableDesc: 'Hover or click an episode to inspect quality, DTW, and semantics',
+    }
 
   function toggleEpisodeSelection(episodeIndex: number) {
     setSelectedEpisodeIds((current) =>
@@ -724,7 +1407,7 @@ export default function DataOverviewPage() {
   }
 
   return (
-    <div className="page-enter quality-view pipeline-page">
+    <div className="page-enter quality-view pipeline-page pipeline-compact-shell pipeline-data-overview">
       {selectedDataset && datasetInfo ? (
         <div className="workflow-view__info-bar">
           <span>{datasetInfo.label}</span>
@@ -736,203 +1419,270 @@ export default function DataOverviewPage() {
         <GlassPanel className="quality-view__empty">{t('noWorkflowDataset')}</GlassPanel>
       )}
 
-      <div className="pipeline-three-column">
-        <div className="pipeline-three-column__left">
-          <div className="quality-kpis">
-            <MetricCard label={t('totalChecked')} value={alignmentOverview?.summary.total_checked ?? '--'} />
-            <MetricCard
-              label={t('perfectRatio')}
-              value={alignmentOverview ? `${alignmentOverview.summary.perfect_ratio.toFixed(1)}%` : '--'}
-              accent="sage"
-            />
-            <MetricCard label={t('selectedRows')} value={selectedEpisodeIds.length} accent="teal" />
-            <MetricCard label={t('manualReviewed')} value={alignmentOverview?.summary.annotated_count ?? '--'} accent="coral" />
-          </div>
+      <div className="pipeline-page-title">
+        <div>
+          <h2>{overviewCopy.title}</h2>
+          <p>{overviewCopy.subtitle}</p>
+        </div>
+        <span>{overviewCopy.showingRows}: {filteredRows.length} / {rows.length}</span>
+      </div>
 
-          <GlassPanel className="quality-results-card">
-            <div className="quality-results-card__head">
-              <div>
-                <h3>{t('overviewDashboard')}</h3>
-                <p>{t('overviewDashboardDesc')}</p>
-              </div>
-              <div className="quality-results-card__filters">
-                <span className="quality-sidebar__path">{t('chartDimension')}</span>
-                <select
-                  className="dataset-selector__select"
-                  value={chartDimension}
-                  onChange={(event) => setChartDimension(event.target.value as ChartDimension)}
-                >
-                  <option value="alignment_status">{t('alignmentStatus')}</option>
-                  <option value="issue_types">{t('issueDistribution')}</option>
-                  <option value="score_bands">{t('scoreDistribution')}</option>
-                  <option value="failed_validators">{t('validatorDistribution')}</option>
-                  <option value="tasks">{t('taskDistribution')}</option>
-                </select>
-              </div>
-            </div>
-            <DistributionChart title={chartTitle} items={chartItems.slice(0, 12)} />
-          </GlassPanel>
+      <div className="pipeline-metric-strip">
+        <div className="pipeline-mini-metric">
+          <span>{overviewCopy.total}</span>
+          <strong>{formatCompactNumber(alignmentOverview?.summary.total_checked ?? rows.length)}</strong>
+        </div>
+        <div className="pipeline-mini-metric is-fail">
+          <span>{overviewCopy.failed}</span>
+          <strong>{formatCompactNumber(alignmentOverview?.summary.failed_count ?? 0)}</strong>
+        </div>
+        <div className="pipeline-mini-metric">
+          <span>{overviewCopy.annotated}</span>
+          <strong>{formatCompactNumber(alignmentOverview?.summary.annotated_count ?? 0)}</strong>
+        </div>
+        <div className="pipeline-mini-metric">
+          <span>{overviewCopy.propagated}</span>
+          <strong>{formatCompactNumber(alignmentOverview?.summary.propagated_count ?? 0)}</strong>
+        </div>
+        <div className="pipeline-mini-metric">
+          <span>{overviewCopy.clusters}</span>
+          <strong>{formatCompactNumber(clusterCount)}</strong>
+        </div>
+      </div>
+
+      <div className="pipeline-toolbar" aria-label={overviewCopy.toolbar}>
+        <label>
+          <span>{t('qualityValidation')}</span>
+          <select
+            className="dataset-selector__select"
+            value={qualityFilter}
+            onChange={(event) => setQualityFilter(event.target.value as 'all' | 'passed' | 'failed')}
+          >
+            <option value="all">{t('allValidated')}</option>
+            <option value="passed">{t('passedEpisodes')}</option>
+            <option value="failed">{t('failedEpisodes')}</option>
+          </select>
+        </label>
+        <label>
+          <span>{t('textAlignment')}</span>
+          <select
+            className="dataset-selector__select"
+            value={alignmentFilter}
+            onChange={(event) =>
+              setAlignmentFilter(
+                event.target.value as 'all' | 'not_started' | 'annotated' | 'propagated',
+              )
+            }
+          >
+            <option value="all">{t('allAlignmentStates')}</option>
+            <option value="not_started">{t('alignmentNotStarted')}</option>
+            <option value="annotated">{t('alignmentAnnotated')}</option>
+            <option value="propagated">{t('alignmentPropagated')}</option>
+          </select>
+        </label>
+        <ActionButton variant="secondary" onClick={selectFilteredRows} disabled={!filteredRows.length}>
+          {t('selectFiltered')}
+        </ActionButton>
+        <ActionButton variant="secondary" onClick={clearSelection} disabled={!selectedEpisodeIds.length}>
+          {t('clearSelection')}
+        </ActionButton>
+        <ActionButton variant="secondary" onClick={exportCsv} disabled={!exportRows.length}>
+          {t('exportCsv')}
+        </ActionButton>
+        <ActionButton variant="secondary" onClick={exportJson} disabled={!exportRows.length}>
+          {t('exportJson')}
+        </ActionButton>
+        <div className="pipeline-toolbar__hint">
+          {visibleSelectedRows.length > 0 ? t('exportSelectedHint') : t('exportFilteredHint')}
+        </div>
+      </div>
+
+      <section className="pipeline-chart-section">
+        <div className="pipeline-chart-section__head">
+          <h3>{overviewCopy.qualitySection}</h3>
+        </div>
+        <div className="pipeline-chart-grid">
+          <PipelineChartPanel
+            title={overviewCopy.timeline}
+            subtitle={overviewCopy.timelineDesc}
+            className="pipeline-chart-card--wide"
+          >
+            <QualityTimelineChart
+              rows={filteredRows}
+              emptyLabel={overviewCopy.empty}
+              onInspectEpisode={setInspectedEpisodeId}
+            />
+          </PipelineChartPanel>
+          <PipelineChartPanel title={overviewCopy.validatorHeatmap} subtitle={overviewCopy.validatorDesc}>
+            <ValidatorHeatmap
+              rows={filteredRows}
+              locale={locale}
+              emptyLabel={overviewCopy.empty}
+              onInspectEpisode={setInspectedEpisodeId}
+            />
+          </PipelineChartPanel>
+          <PipelineChartPanel
+            title={overviewCopy.missingMatrix}
+            subtitle={overviewCopy.missingDesc}
+            className="pipeline-chart-card--wide"
+          >
+            <MissingMatrix
+              rows={filteredRows}
+              locale={locale}
+              emptyLabel={overviewCopy.empty}
+              onInspectEpisode={setInspectedEpisodeId}
+            />
+          </PipelineChartPanel>
+        </div>
+      </section>
+
+      <section className="pipeline-chart-section">
+        <div className="pipeline-chart-section__head">
+          <h3>{overviewCopy.semanticSection}</h3>
+        </div>
+        <div className="pipeline-chart-grid">
+          <PipelineChartPanel title={overviewCopy.dtwHistogram} subtitle={overviewCopy.dtwDesc}>
+            <DtwDelayHistogram rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
+          </PipelineChartPanel>
+          <PipelineChartPanel
+            title={overviewCopy.semanticTimeline}
+            subtitle={overviewCopy.semanticTimelineDesc}
+            className="pipeline-chart-card--wide"
+          >
+            <SemanticSpanTimeline
+              rows={filteredRows}
+              locale={locale}
+              emptyLabel={overviewCopy.empty}
+              onInspectEpisode={setInspectedEpisodeId}
+            />
+          </PipelineChartPanel>
+          <PipelineChartPanel title={overviewCopy.labelBars} subtitle={overviewCopy.labelBarsDesc}>
+            <SemanticLabelBars rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
+          </PipelineChartPanel>
+        </div>
+      </section>
+
+      <section className="pipeline-chart-section">
+        <div className="pipeline-chart-section__head">
+          <h3>{overviewCopy.coverageSection}</h3>
+        </div>
+        <div className="pipeline-chart-grid">
+          <PipelineChartPanel title={overviewCopy.coverage} subtitle={overviewCopy.coverageDesc}>
+            <CoverageStackedBar rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
+          </PipelineChartPanel>
+          <PipelineChartPanel title={overviewCopy.prototype} subtitle={overviewCopy.prototypeDesc}>
+            <PrototypeClusterChart
+              clusters={prototypeResults?.clusters || []}
+              emptyLabel={overviewCopy.empty}
+              onInspectEpisode={setInspectedEpisodeId}
+            />
+          </PipelineChartPanel>
+          <PipelineChartPanel title={overviewCopy.scatter} subtitle={overviewCopy.scatterDesc}>
+            <QualityDtwScatter
+              rows={filteredRows}
+              emptyLabel={overviewCopy.empty}
+              onInspectEpisode={setInspectedEpisodeId}
+            />
+          </PipelineChartPanel>
+        </div>
+      </section>
+
+      <GlassPanel className="quality-results-card pipeline-overview-table-card">
+        <div className="quality-results-card__head">
+          <div>
+            <h3>{overviewCopy.tableTitle}</h3>
+            <p>
+              {overviewCopy.tableDesc} · {filteredRows.length} / {rows.length} rows
+            </p>
+          </div>
+          <div className="quality-results-card__filters">
+            <span className="quality-sidebar__path">{t('selectedRows')}: {selectedEpisodeIds.length}</span>
+            <span className="quality-sidebar__path">{t('exportRows')}: {exportRows.length}</span>
+          </div>
         </div>
 
-        <div className="pipeline-three-column__center">
-          <GlassPanel className="quality-results-card">
-            <div className="quality-results-card__head">
-              <div>
-                <h3>{t('dataOverviewTable')}</h3>
-                <p>
-                  {filteredRows.length} / {rows.length} rows
-                </p>
-              </div>
-              <div className="quality-results-card__filters">
-                <select
-                  className="dataset-selector__select"
-                  value={qualityFilter}
-                  onChange={(event) => setQualityFilter(event.target.value as 'all' | 'passed' | 'failed')}
-                >
-                  <option value="all">{t('allValidated')}</option>
-                  <option value="passed">{t('passedEpisodes')}</option>
-                  <option value="failed">{t('failedEpisodes')}</option>
-                </select>
-                <select
-                  className="dataset-selector__select"
-                  value={alignmentFilter}
-                  onChange={(event) =>
-                    setAlignmentFilter(
-                      event.target.value as 'all' | 'not_started' | 'annotated' | 'propagated',
-                    )
-                  }
-                >
-                  <option value="all">{t('allAlignmentStates')}</option>
-                  <option value="not_started">{t('alignmentNotStarted')}</option>
-                  <option value="annotated">{t('alignmentAnnotated')}</option>
-                  <option value="propagated">{t('alignmentPropagated')}</option>
-                </select>
-                <ActionButton variant="secondary" onClick={selectFilteredRows} disabled={!filteredRows.length}>
-                  {t('selectFiltered')}
-                </ActionButton>
-                <ActionButton variant="secondary" onClick={clearSelection} disabled={!selectedEpisodeIds.length}>
-                  {t('clearSelection')}
-                </ActionButton>
-                <ActionButton variant="secondary" onClick={exportCsv} disabled={!exportRows.length}>
-                  {t('exportCsv')}
-                </ActionButton>
-                <ActionButton variant="secondary" onClick={exportJson} disabled={!exportRows.length}>
-                  {t('exportJson')}
-                </ActionButton>
-              </div>
-            </div>
-
-            <div className="quality-table-wrap quality-results-table-wrap">
-              <table className="quality-table">
-                <thead>
-                  <tr>
-                    <th className="quality-table__checkbox-cell">
+        <div className="quality-table-wrap quality-results-table-wrap">
+          <table className="quality-table">
+            <thead>
+              <tr>
+                <th className="quality-table__checkbox-cell">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    aria-label={t('selectFiltered')}
+                  />
+                </th>
+                <th>Episode</th>
+                <th>{t('taskDesc')}</th>
+                <th>{t('qualityValidation')}</th>
+                <th>{t('score')}</th>
+                <th>{t('validators')}</th>
+                <th>{t('textAlignment')}</th>
+                <th>{t('annotation')}</th>
+                <th>{t('runPropagation')}</th>
+                <th>{t('updatedAt')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((row) => {
+                const selected = selectedEpisodeIds.includes(row.episode_index)
+                return (
+                  <tr
+                    key={row.episode_index}
+                    className={cn(
+                      'quality-result-row',
+                      'overview-result-row',
+                      selected && 'quality-table__row--selected',
+                      inspectedEpisodeId === row.episode_index && 'is-inspected',
+                    )}
+                    tabIndex={0}
+                    onClick={() => setInspectedEpisodeId(row.episode_index)}
+                    onPointerEnter={() => setInspectedEpisodeId(row.episode_index)}
+                    onPointerLeave={() => clearInspectedEpisode(row.episode_index)}
+                    onMouseEnter={() => setInspectedEpisodeId(row.episode_index)}
+                    onMouseLeave={() => clearInspectedEpisode(row.episode_index)}
+                    onFocus={() => setInspectedEpisodeId(row.episode_index)}
+                    onBlur={(event) => {
+                      const nextTarget = event.relatedTarget as Node | null
+                      if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+                        clearInspectedEpisode(row.episode_index)
+                      }
+                    }}
+                  >
+                    <td className="quality-table__checkbox-cell">
                       <input
                         type="checkbox"
-                        checked={allVisibleSelected}
-                        onChange={toggleSelectAllVisible}
-                        aria-label={t('selectFiltered')}
+                        checked={selected}
+                        onChange={() => toggleEpisodeSelection(row.episode_index)}
+                        aria-label={`${t('selectedRows')} ${row.episode_index}`}
                       />
-                    </th>
-                    <th>Episode</th>
-                    <th>{t('taskDesc')}</th>
-                    <th>{t('qualityValidation')}</th>
-                    <th>{t('score')}</th>
-                    <th>{t('validators')}</th>
-                    <th>{t('textAlignment')}</th>
-                    <th>{t('annotation')}</th>
-                    <th>{t('runPropagation')}</th>
-                    <th>{t('updatedAt')}</th>
+                    </td>
+                    <td>{row.episode_index}</td>
+                    <td>{row.task || t('untitledTask')}</td>
+                    <td className={cn(row.quality_passed ? 'is-pass' : 'is-fail')}>
+                      {row.quality_passed ? t('passed') : t('failed')}
+                    </td>
+                    <td>{row.quality_score.toFixed(1)}</td>
+                    <td>{row.failed_validators.join(', ') || '-'}</td>
+                    <td>{t(alignmentStatusKey(row.alignment_status))}</td>
+                    <td>{row.annotation_count}</td>
+                    <td>{row.propagated_count}</td>
+                    <td>{row.updated_at || '-'}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row) => {
-                    const selected = selectedEpisodeIds.includes(row.episode_index)
-                    return (
-                      <tr
-                        key={row.episode_index}
-                        className={cn(
-                          'quality-result-row',
-                          'overview-result-row',
-                          selected && 'quality-table__row--selected',
-                          inspectedEpisodeId === row.episode_index && 'is-inspected',
-                        )}
-                        tabIndex={0}
-                        onClick={() => setInspectedEpisodeId(row.episode_index)}
-                        onPointerEnter={() => setInspectedEpisodeId(row.episode_index)}
-                        onPointerLeave={() => clearInspectedEpisode(row.episode_index)}
-                        onMouseEnter={() => setInspectedEpisodeId(row.episode_index)}
-                        onMouseLeave={() => clearInspectedEpisode(row.episode_index)}
-                        onFocus={() => setInspectedEpisodeId(row.episode_index)}
-                        onBlur={(event) => {
-                          const nextTarget = event.relatedTarget as Node | null
-                          if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-                            clearInspectedEpisode(row.episode_index)
-                          }
-                        }}
-                      >
-                        <td className="quality-table__checkbox-cell">
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => toggleEpisodeSelection(row.episode_index)}
-                            aria-label={`${t('selectedRows')} ${row.episode_index}`}
-                          />
-                        </td>
-                        <td>{row.episode_index}</td>
-                        <td>{row.task || t('untitledTask')}</td>
-                        <td className={cn(row.quality_passed ? 'is-pass' : 'is-fail')}>
-                          {row.quality_passed ? t('passed') : t('failed')}
-                        </td>
-                        <td>{row.quality_score.toFixed(1)}</td>
-                        <td>{row.failed_validators.join(', ') || '-'}</td>
-                        <td>{t(alignmentStatusKey(row.alignment_status))}</td>
-                        <td>{row.annotation_count}</td>
-                        <td>{row.propagated_count}</td>
-                        <td>{row.updated_at || '-'}</td>
-                      </tr>
-                    )
-                  })}
-                  {filteredRows.length === 0 && (
-                    <tr>
-                      <td colSpan={10} className="quality-table__empty">No results</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {inspectedRow && <OverviewRowDetailPopover row={inspectedRow} locale={locale} />}
-          </GlassPanel>
+                )
+              })}
+              {filteredRows.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="quality-table__empty">No results</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
+      </GlassPanel>
+      {inspectedRow && <OverviewRowDetailPopover row={inspectedRow} locale={locale} />}
 
-        <GlassPanel className="pipeline-three-column__sidebar quality-layout__sidebar">
-          <div className="quality-sidebar__section">
-            <h3>{t('exportSummary')}</h3>
-            <p>{t('dataOverviewSidebarDesc')}</p>
-          </div>
-
-          <div className="quality-sidebar__section">
-            <div className="quality-sidebar__path">{t('selectedRows')}: {selectedEpisodeIds.length}</div>
-            <div className="quality-sidebar__path">{t('exportRows')}: {exportRows.length}</div>
-            <div className="quality-sidebar__path">{t('passedEpisodes')}: {alignmentOverview?.summary.passed_count ?? 0}</div>
-            <div className="quality-sidebar__path">{t('failedEpisodes')}: {alignmentOverview?.summary.failed_count ?? 0}</div>
-            <div className="quality-sidebar__path">{t('runPropagation')}: {alignmentOverview?.summary.propagated_count ?? 0}</div>
-            <div className="quality-sidebar__path">{t('clusters')}: {alignmentOverview?.summary.prototype_cluster_count ?? 0}</div>
-          </div>
-
-          <div className="quality-sidebar__section">
-            <ActionButton variant="secondary" onClick={exportCsv} disabled={!exportRows.length} className="w-full justify-center">
-              {t('exportCsv')}
-            </ActionButton>
-            <ActionButton variant="secondary" onClick={exportJson} disabled={!exportRows.length} className="w-full justify-center">
-              {t('exportJson')}
-            </ActionButton>
-            <div className="quality-sidebar__path">
-              {visibleSelectedRows.length > 0 ? t('exportSelectedHint') : t('exportFilteredHint')}
-            </div>
-          </div>
-        </GlassPanel>
-      </div>
     </div>
   )
 }

@@ -59,7 +59,7 @@ export default function TextAlignmentView() {
   }).length
 
   return (
-    <div className="page-enter quality-view pipeline-page">
+    <div className="page-enter quality-view pipeline-page pipeline-compact-shell pipeline-compact-text-page">
       {selectedDataset && datasetInfo ? (
         <div className="workflow-view__info-bar">
           <span>{datasetInfo.label}</span>
@@ -73,8 +73,8 @@ export default function TextAlignmentView() {
         </GlassPanel>
       )}
 
-      <div className="text-alignment-workbench">
-        <GlassPanel className="text-alignment-control-card">
+      <div className="text-alignment-workbench pipeline-compact-text">
+        <GlassPanel className="text-alignment-control-card pipeline-toolbar-card">
           <div className="text-alignment-control-card__row">
             <div className="text-alignment-control-card__meta">
               <div className="text-alignment-control-card__title">{t('qualityValidation')}</div>
@@ -110,7 +110,7 @@ export default function TextAlignmentView() {
             </div>
           </div>
           {!qualityReady ? (
-            <div className="status-panel">{t('textAlignmentNeedsQuality')}</div>
+            <div className="status-panel pipeline-inline-status">{t('textAlignmentNeedsQuality')}</div>
           ) : null}
           <div className="text-alignment-control-card__footer">
             <div className="quality-sidebar__path">

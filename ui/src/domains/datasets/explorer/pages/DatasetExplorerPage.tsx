@@ -1515,7 +1515,7 @@ export default function DatasetExplorerView() {
   const datasetSummary = summary?.summary
 
   return (
-    <div className="page-enter quality-view">
+    <div className="page-enter quality-view pipeline-page pipeline-compact-shell pipeline-compact-datasets">
       <div className="quality-view__hero">
         <div>
           <h2 className="quality-view__title">{t('explorerTitle')}</h2>
@@ -1730,7 +1730,7 @@ export default function DatasetExplorerView() {
         <div className="quality-layout">
           <div className="quality-layout__main">
             {/* KPIs */}
-            <div className="quality-kpis">
+            <div className="quality-kpis pipeline-metric-strip">
               <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
               <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
               <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
