@@ -837,7 +837,12 @@ export default function QualityValidationView() {
                           <button
                             type="button"
                             className="quality-episode-link"
-                            onClick={() => void handleReviewEpisode(episode.episode_index)}
+                            onMouseEnter={() => setHoveredEpisodeIndex(episode.episode_index)}
+                            onFocus={() => setHoveredEpisodeIndex(episode.episode_index)}
+                            onClick={() => {
+                              setHoveredEpisodeIndex(episode.episode_index)
+                              void handleReviewEpisode(episode.episode_index)
+                            }}
                           >
                             {episode.episode_index}
                           </button>
