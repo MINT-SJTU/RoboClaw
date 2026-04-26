@@ -107,12 +107,7 @@ function formatValidatorLabel(name: string, locale: 'zh' | 'en'): string {
   return labels[name]?.[locale] ?? name
 }
 
-interface QualityValueRow {
-  key: string
-  value: string
-}
-
-function formatQualityScalar(value: unknown): string {
+function formatQualityScalar(value: unknown, locale: 'zh' | 'en'): string {
   if (value === null || value === undefined) {
     return ''
   }
@@ -120,7 +115,7 @@ function formatQualityScalar(value: unknown): string {
     return Number.isInteger(value) ? String(value) : Number(value.toFixed(6)).toString()
   }
   if (typeof value === 'boolean') {
-    return value ? 'true' : 'false'
+    return value ? (locale === 'zh' ? '是' : 'true') : (locale === 'zh' ? '否' : 'false')
   }
   if (typeof value === 'string') {
     return value
@@ -132,14 +127,17 @@ function isQualityRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function formatInlineQualityValue(value: unknown): string {
+function formatInlineQualityValue(value: unknown, locale: 'zh' | 'en'): string {
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      return 'empty'
+      return locale === 'zh' ? '空' : 'empty'
     }
-    return value.map(formatInlineQualityValue).filter(Boolean).join(', ')
+    if (value.length > 8) {
+      return locale === 'zh' ? `${value.length} 项` : `${value.length} items`
+    }
+    return value.map((item) => formatInlineQualityValue(item, locale)).filter(Boolean).join(', ')
   }
-  return formatQualityScalar(value)
+  return formatQualityScalar(value, locale)
 }
 
 function canFormatInlineQualityValue(value: unknown): boolean {
@@ -149,38 +147,71 @@ function canFormatInlineQualityValue(value: unknown): boolean {
   return !isQualityRecord(value)
 }
 
-function flattenQualityValue(value: unknown, prefix = ''): QualityValueRow[] {
+function formatQualityKey(key: string): string {
+  return key.replace(/_/g, ' ')
+}
+
+function formatQualityValueSummary(value: unknown, locale: 'zh' | 'en'): string {
   if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return [{ key: prefix || 'value', value: 'empty' }]
-    }
-    if (value.every(canFormatInlineQualityValue)) {
-      return [{ key: prefix || 'value', value: formatInlineQualityValue(value) }]
-    }
-    return value.flatMap((item, index) => (
-      flattenQualityValue(item, prefix ? `${prefix}.${index}` : String(index))
-    ))
+    return canFormatInlineQualityValue(value)
+      ? formatInlineQualityValue(value, locale)
+      : (locale === 'zh' ? `${value.length} 项` : `${value.length} items`)
   }
 
   if (isQualityRecord(value)) {
-    const entries = Object.entries(value)
-    if (entries.length === 0) {
-      return []
+    if (Object.keys(value).length === 0) {
+      return ''
     }
-    return entries.flatMap(([key, nestedValue]) => {
-      const nextKey = prefix ? `${prefix}.${key}` : key
-      if (Array.isArray(nestedValue)) {
-        return flattenQualityValue(nestedValue, nextKey)
+
+    const directValue = value['value']
+    if (directValue !== undefined) {
+      if (isQualityRecord(directValue)) {
+        return locale === 'zh' ? '存在' : 'present'
       }
-      if (isQualityRecord(nestedValue)) {
-        return flattenQualityValue(nestedValue, nextKey)
-      }
-      return [{ key: nextKey, value: formatQualityScalar(nestedValue) }]
-    })
+      return formatQualityValueSummary(directValue, locale)
+    }
+
+    const width = value['width']
+    const height = value['height']
+    if (typeof width === 'number' && typeof height === 'number') {
+      return `${width}x${height}`
+    }
+
+    const entries = Object.entries(value)
+      .filter(([, nestedValue]) => !isQualityRecord(nestedValue) && !Array.isArray(nestedValue))
+      .slice(0, 3)
+    if (entries.length > 0) {
+      return entries
+        .map(([key, nestedValue]) => `${formatQualityKey(key)}=${formatQualityScalar(nestedValue, locale)}`)
+        .join(', ')
+    }
+
+    return locale === 'zh' ? '存在' : 'present'
   }
 
-  const scalarValue = formatQualityScalar(value)
-  return scalarValue ? [{ key: prefix || 'value', value: scalarValue }] : []
+  return formatQualityScalar(value, locale)
+}
+
+function isPresenceDetail(detail: string): boolean {
+  return /(present|exists|found|missing)$/i.test(detail.trim())
+}
+
+function formatQualityCheckDetail(issue: Record<string, unknown>, locale: 'zh' | 'en'): string {
+  const detail = formatIssueDetail(issue)
+  const valueSummary = formatQualityValueSummary(issue['value'], locale)
+  if (!detail) {
+    return valueSummary
+  }
+  if (!valueSummary) {
+    return detail
+  }
+  if (isPresenceDetail(detail)) {
+    return valueSummary
+  }
+  if (detail.toLowerCase().includes(valueSummary.toLowerCase())) {
+    return detail
+  }
+  return detail
 }
 
 function groupQualityIssues(issues: Array<Record<string, unknown>>): Array<{
@@ -362,14 +393,12 @@ function QualityDetailInspector({
       title: '检测详情',
       validatorSummary: '验证器汇总',
       checks: '检查项',
-      actualValue: '实际检测值',
       noDetails: '没有详细检查记录',
     }
     : {
       title: 'Validation Details',
       validatorSummary: 'Validator Summary',
       checks: 'Checks',
-      actualValue: 'Measured Value',
       noDetails: 'No detailed check records',
     }
   const issueGroups = groupQualityIssues(episode.issues || [])
@@ -419,36 +448,22 @@ function QualityDetailInspector({
                     ? checkName
                     : `check-${index}`
                   const passed = issue['passed'] === true
-                  const detail = formatIssueDetail(issue)
-                  const valueRows = flattenQualityValue(issue['value'])
+                  const detail = formatQualityCheckDetail(issue, locale)
                   return (
                     <div
                       key={`${group.validator}-${checkKey}-${index}`}
+                      title={checkKey}
                       className={cn('quality-detail-check', passed ? 'is-pass' : 'is-fail')}
                     >
-                      <div className="quality-detail-check__head">
+                      <div className="quality-detail-check__line">
                         <span className={cn('quality-detail-check__status', passed ? 'is-pass' : 'is-fail')}>
-                          {passed ? (locale === 'zh' ? '通过' : 'Pass') : (locale === 'zh' ? '未通过' : 'Fail')}
+                          {passed ? '✓' : '×'}
                         </span>
                         <span className="quality-detail-check__name">
                           {formatCheckLabel(checkKey, locale)}
                         </span>
-                        <span className="quality-detail-check__raw">{checkKey}</span>
+                        {detail && <span className="quality-detail-check__message">: {detail}</span>}
                       </div>
-                      {detail && <div className="quality-detail-check__message">{detail}</div>}
-                      {valueRows.length > 0 && (
-                        <div className="quality-detail-value">
-                          <div className="quality-detail-value__label">{copy.actualValue}</div>
-                          <div className="quality-detail-value__grid">
-                            {valueRows.map((row) => (
-                              <div className="quality-detail-value__row" key={`${row.key}-${row.value}`}>
-                                <span>{row.key}</span>
-                                <strong>{row.value}</strong>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )
                 })}
