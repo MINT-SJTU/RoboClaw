@@ -107,7 +107,12 @@ function formatValidatorLabel(name: string, locale: 'zh' | 'en'): string {
   return labels[name]?.[locale] ?? name
 }
 
-function formatQualityValue(value: unknown): string {
+interface QualityValueRow {
+  key: string
+  value: string
+}
+
+function formatQualityScalar(value: unknown): string {
   if (value === null || value === undefined) {
     return ''
   }
@@ -120,21 +125,62 @@ function formatQualityValue(value: unknown): string {
   if (typeof value === 'string') {
     return value
   }
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
+  return String(value)
 }
 
-function hasQualityValue(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return false
+function isQualityRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function formatInlineQualityValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return 'empty'
+    }
+    return value.map(formatInlineQualityValue).filter(Boolean).join(', ')
   }
-  if (typeof value === 'object') {
-    return Object.keys(value as Record<string, unknown>).length > 0
+  return formatQualityScalar(value)
+}
+
+function canFormatInlineQualityValue(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.every(canFormatInlineQualityValue)
   }
-  return String(value).trim().length > 0
+  return !isQualityRecord(value)
+}
+
+function flattenQualityValue(value: unknown, prefix = ''): QualityValueRow[] {
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return [{ key: prefix || 'value', value: 'empty' }]
+    }
+    if (value.every(canFormatInlineQualityValue)) {
+      return [{ key: prefix || 'value', value: formatInlineQualityValue(value) }]
+    }
+    return value.flatMap((item, index) => (
+      flattenQualityValue(item, prefix ? `${prefix}.${index}` : String(index))
+    ))
+  }
+
+  if (isQualityRecord(value)) {
+    const entries = Object.entries(value)
+    if (entries.length === 0) {
+      return []
+    }
+    return entries.flatMap(([key, nestedValue]) => {
+      const nextKey = prefix ? `${prefix}.${key}` : key
+      if (Array.isArray(nestedValue)) {
+        return flattenQualityValue(nestedValue, nextKey)
+      }
+      if (isQualityRecord(nestedValue)) {
+        return flattenQualityValue(nestedValue, nextKey)
+      }
+      return [{ key: nextKey, value: formatQualityScalar(nestedValue) }]
+    })
+  }
+
+  const scalarValue = formatQualityScalar(value)
+  return scalarValue ? [{ key: prefix || 'value', value: scalarValue }] : []
 }
 
 function groupQualityIssues(issues: Array<Record<string, unknown>>): Array<{
@@ -374,8 +420,7 @@ function QualityDetailInspector({
                     : `check-${index}`
                   const passed = issue['passed'] === true
                   const detail = formatIssueDetail(issue)
-                  const value = issue['value']
-                  const hasValue = hasQualityValue(value)
+                  const valueRows = flattenQualityValue(issue['value'])
                   return (
                     <div
                       key={`${group.validator}-${checkKey}-${index}`}
@@ -391,10 +436,17 @@ function QualityDetailInspector({
                         <span className="quality-detail-check__raw">{checkKey}</span>
                       </div>
                       {detail && <div className="quality-detail-check__message">{detail}</div>}
-                      {hasValue && (
+                      {valueRows.length > 0 && (
                         <div className="quality-detail-value">
                           <div className="quality-detail-value__label">{copy.actualValue}</div>
-                          <pre>{formatQualityValue(value)}</pre>
+                          <div className="quality-detail-value__grid">
+                            {valueRows.map((row) => (
+                              <div className="quality-detail-value__row" key={`${row.key}-${row.value}`}>
+                                <span>{row.key}</span>
+                                <strong>{row.value}</strong>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>

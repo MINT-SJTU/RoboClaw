@@ -3173,7 +3173,7 @@ a {
 }
 
 .quality-detail-inspector__score .is-pass {
-  color: #0c8f43;
+  color: #064e3b;
 }
 
 .quality-detail-inspector__score .is-fail {
@@ -3203,16 +3203,26 @@ a {
 .quality-detail-summary__item.is-pass {
   border-color: rgba(12, 143, 67, 0.16);
   background: rgba(12, 143, 67, 0.07);
+  color: #064e3b;
 }
 
 .quality-detail-summary__item.is-fail {
   border-color: rgba(200, 30, 30, 0.16);
   background: rgba(200, 30, 30, 0.07);
+  color: #c81e1e;
 }
 
 .quality-detail-summary__item strong {
   color: var(--tx2);
   font-size: 11px;
+}
+
+.quality-detail-summary__item.is-pass strong {
+  color: #064e3b;
+}
+
+.quality-detail-summary__item.is-fail strong {
+  color: #c81e1e;
 }
 
 .quality-detail-groups {
@@ -3278,7 +3288,7 @@ a {
 
 .quality-detail-check__status.is-pass {
   background: rgba(12, 143, 67, 0.1);
-  color: #0c8f43;
+  color: #064e3b;
 }
 
 .quality-detail-check__status.is-fail {
@@ -3309,6 +3319,16 @@ a {
   line-height: 1.5;
 }
 
+.quality-detail-check.is-pass .quality-detail-check__name,
+.quality-detail-check.is-pass .quality-detail-check__message {
+  color: #064e3b;
+}
+
+.quality-detail-check.is-fail .quality-detail-check__name,
+.quality-detail-check.is-fail .quality-detail-check__message {
+  color: #c81e1e;
+}
+
 .quality-detail-value {
   margin-top: 8px;
 }
@@ -3320,19 +3340,51 @@ a {
   font-weight: 800;
 }
 
-.quality-detail-value pre {
+.quality-detail-value__grid {
+  display: grid;
   max-height: 180px;
+  overflow: auto;
   margin: 0;
   padding: 9px;
-  overflow: auto;
   border: 1px solid rgba(47, 111, 228, 0.08);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.78);
+  gap: 6px;
+}
+
+.quality-detail-value__row {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) minmax(80px, 1.25fr);
+  gap: 10px;
+  align-items: start;
   color: var(--tx);
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre-wrap;
+}
+
+.quality-detail-value__row span {
+  min-width: 0;
+  color: var(--tx2);
   word-break: break-word;
+}
+
+.quality-detail-value__row strong {
+  min-width: 0;
+  color: var(--tx);
+  font-weight: 800;
+  word-break: break-word;
+}
+
+.quality-detail-check.is-pass .quality-detail-value__label,
+.quality-detail-check.is-pass .quality-detail-value__row span,
+.quality-detail-check.is-pass .quality-detail-value__row strong {
+  color: #064e3b;
+}
+
+.quality-detail-check.is-fail .quality-detail-value__label,
+.quality-detail-check.is-fail .quality-detail-value__row span,
+.quality-detail-check.is-fail .quality-detail-value__row strong {
+  color: #c81e1e;
 }
 
 .quality-detail-inspector__empty {
