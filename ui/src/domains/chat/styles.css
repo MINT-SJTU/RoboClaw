@@ -32,7 +32,7 @@
   height: min(680px, calc(100vh - 84px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid rgba(112, 118, 128, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   border-radius: 22px;
   background:
     linear-gradient(142deg, rgba(176, 180, 188, 0.018), rgba(136, 142, 152, 0.01) 45%, rgba(92, 98, 108, 0.006)),
@@ -40,8 +40,11 @@
   box-shadow:
     0 18px 34px rgba(15, 23, 42, 0.028),
     0 7px 12px rgba(15, 23, 42, 0.014),
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.014);
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(15, 23, 42, 0.13),
+    inset 1px 0 0 rgba(255, 255, 255, 0.32),
+    inset -1px 0 0 rgba(15, 23, 42, 0.1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09);
   backdrop-filter: blur(10px) saturate(102%) contrast(100%);
   -webkit-backdrop-filter: blur(10px) saturate(102%) contrast(100%);
   padding: 13px;
@@ -58,6 +61,25 @@
   content: "";
   pointer-events: none;
   opacity: 0.08;
+}
+
+.chat-widget__surface::after {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.34), transparent 12%, transparent 88%, rgba(31, 41, 55, 0.16)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4), transparent 13%, transparent 86%, rgba(31, 41, 55, 0.14));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.26),
+    inset 14px 0 18px -15px rgba(255, 255, 255, 0.72),
+    inset -14px 0 20px -15px rgba(31, 41, 55, 0.34),
+    inset 0 14px 18px -15px rgba(255, 255, 255, 0.78),
+    inset 0 -14px 20px -15px rgba(31, 41, 55, 0.28);
+  content: "";
+  opacity: 0.88;
+  pointer-events: none;
 }
 
 .chat-widget__minimize {
