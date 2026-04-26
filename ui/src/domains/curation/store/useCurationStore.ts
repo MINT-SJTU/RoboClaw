@@ -14,12 +14,17 @@ interface QualityStage extends StageState {
 
 export type QualityFilterMode = 'passed' | 'failed' | 'all'
 
+interface PrototypeStage extends StageState {
+  quality_filter_mode?: string
+  selected_episode_indices?: number[]
+}
+
 export interface WorkflowState {
   version: number
   dataset: string
   stages: {
     quality_validation: QualityStage
-    prototype_discovery: StageState
+    prototype_discovery: PrototypeStage
     annotation: StageState & { annotated_episodes: number[] }
   }
 }
@@ -363,6 +368,10 @@ function normalizeQualityResults(payload: Partial<QualityResults> | null): Quali
   }
 }
 
+function normalizeQualityFilterMode(value: unknown): QualityFilterMode {
+  return value === 'failed' || value === 'all' ? value : 'passed'
+}
+
 function normalizePrototypeResults(payload: Partial<PrototypeResults> | null): PrototypeResults | null {
   if (!payload) return null
   return {
@@ -370,8 +379,7 @@ function normalizePrototypeResults(payload: Partial<PrototypeResults> | null): P
     entry_count: payload.entry_count ?? 0,
     cluster_count: payload.cluster_count ?? 0,
     anchor_record_keys: payload.anchor_record_keys ?? [],
-    quality_filter_mode:
-      typeof payload.quality_filter_mode === 'string' ? payload.quality_filter_mode : 'passed',
+    quality_filter_mode: normalizeQualityFilterMode(payload.quality_filter_mode),
     selected_episode_indices: payload.selected_episode_indices ?? [],
     clusters: payload.clusters ?? [],
   }
@@ -704,7 +712,12 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
         `/api/curation/prototype-results?dataset=${encodeURIComponent(selectedDataset)}`,
       ),
     )
-    set({ prototypeResults: results })
+    set({
+      prototypeResults: results,
+      ...(results?.quality_filter_mode
+        ? { alignmentQualityFilter: normalizeQualityFilterMode(results.quality_filter_mode) }
+        : {}),
+    })
     return results
   },
 
@@ -859,6 +872,9 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     set((current) => ({
       workflowState: state,
       selectedDatasetIsRemotePrepared: true,
+      alignmentQualityFilter: normalizeQualityFilterMode(
+        state.stages.prototype_discovery.quality_filter_mode || current.alignmentQualityFilter,
+      ),
       selectedValidators:
         ['running', 'paused', 'completed'].includes(qualityStatus) && savedQualityValidators.length > 0
           ? savedQualityValidators

@@ -8,7 +8,6 @@ export default function PrototypePanel() {
     prototypeRunning,
     prototypeResults,
     workflowState,
-    alignmentQualityFilter,
   } = useWorkflow()
 
   const pStage = workflowState?.stages.prototype_discovery
@@ -48,9 +47,9 @@ export default function PrototypePanel() {
               <span className="prototype-panel__stat-label">{t('qualityFilter')}</span>
               <span className="prototype-panel__summary-value">
                 {t(
-                  alignmentQualityFilter === 'all'
+                  prototypeResults.quality_filter_mode === 'all'
                     ? 'allValidated'
-                    : alignmentQualityFilter === 'failed'
+                    : prototypeResults.quality_filter_mode === 'failed'
                       ? 'failedEpisodes'
                       : 'passedEpisodes',
                 )}
