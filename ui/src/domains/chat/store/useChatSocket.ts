@@ -148,6 +148,25 @@ function syncPreparedDataset(appEvent: Record<string, unknown>): void {
   })()
 }
 
+function syncWorkflowEvent(appEvent: Record<string, unknown>): void {
+  emitPipelineEvent(appEvent)
+  void (async () => {
+    try {
+      const dataset = typeof appEvent.dataset === 'string' ? appEvent.dataset : ''
+      let workflow = useWorkflow.getState()
+      if (dataset && workflow.selectedDataset !== dataset) {
+        await workflow.loadDatasets()
+        await workflow.selectDataset(dataset)
+        workflow = useWorkflow.getState()
+      }
+      workflow.startPolling()
+      await workflow.refreshState()
+    } catch (error) {
+      console.warn('Failed to sync workflow state from AI event', error)
+    }
+  })()
+}
+
 function handleAppEvent(appEvent: any): boolean {
   if (!appEvent || typeof appEvent !== 'object') {
     return false
@@ -158,6 +177,13 @@ function handleAppEvent(appEvent: any): boolean {
   }
   if (appEvent.type === 'pipeline.dataset_prepared') {
     syncPreparedDataset(appEvent)
+    return true
+  }
+  if (
+    appEvent.type === 'pipeline.quality_run_started'
+    || appEvent.type === 'pipeline.quality_state_changed'
+  ) {
+    syncWorkflowEvent(appEvent)
     return true
   }
   return false

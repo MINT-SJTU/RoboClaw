@@ -183,14 +183,26 @@ class PipelineTool(Tool):
                     episode_indices,
                     thresholds,
                 )
-                return _json(result)
+                event_sent = await self._send_app_event({
+                    "type": "pipeline.quality_run_started",
+                    "dataset": dataset,
+                    "status": result.get("status"),
+                    "selected_validators": validators,
+                    "episode_indices": episode_indices or [],
+                })
+                return _json({**result, "event_sent": event_sent})
 
             if action == "pause_quality":
                 state = service.get_workflow_state(dataset_path)
                 if state["stages"]["quality_validation"].get("status") != "running":
                     return _json({"error": "Quality validation is not running"})
                 set_stage_pause_requested(dataset_path, "quality_validation", True)
-                return _json({"status": "pause_requested"})
+                event_sent = await self._send_app_event({
+                    "type": "pipeline.quality_state_changed",
+                    "dataset": dataset,
+                    "status": "pause_requested",
+                })
+                return _json({"status": "pause_requested", "event_sent": event_sent})
 
             if action == "resume_quality":
                 defaults = service.get_quality_defaults(dataset_path, dataset)
@@ -205,7 +217,15 @@ class PipelineTool(Tool):
                     episode_indices,
                     thresholds,
                 )
-                return _json(result)
+                event_sent = await self._send_app_event({
+                    "type": "pipeline.quality_run_started",
+                    "dataset": dataset,
+                    "status": result.get("status"),
+                    "selected_validators": selected_validators or defaults["selected_validators"],
+                    "episode_indices": episode_indices or [],
+                    "resumed": True,
+                })
+                return _json({**result, "event_sent": event_sent})
 
             if action == "run_prototype":
                 result = await service.start_prototype_run(

@@ -128,3 +128,55 @@ def test_pipeline_tool_merges_quality_threshold_defaults(monkeypatch, tmp_path) 
         "metadata_min_duration_s": 0.2,
         "visual_min_resolution_width": 640.0,
     }
+
+
+def test_pipeline_tool_run_quality_emits_frontend_event(monkeypatch, tmp_path) -> None:
+    from roboclaw.http.routes import curation as curation_routes
+
+    class FakeService:
+        def get_quality_defaults(self, dataset_path, dataset):
+            return {
+                "selected_validators": ["metadata", "visual"],
+                "threshold_overrides": {"metadata_min_duration_s": 1.0},
+            }
+
+        async def start_quality_run(
+            self,
+            dataset_path,
+            dataset,
+            selected_validators,
+            episode_indices,
+            threshold_overrides,
+        ):
+            return {"status": "started"}
+
+    monkeypatch.setattr(curation_routes, "resolve_dataset_path", lambda _dataset: tmp_path)
+    monkeypatch.setattr(curation_routes, "_service", FakeService())
+
+    bus = MessageBus()
+    tool = PipelineTool(send_callback=bus.publish_outbound)
+    tool.set_context(
+        "web",
+        "chat-1",
+        metadata={"app_context": {"route": "/curation/quality"}},
+    )
+
+    result = json.loads(
+        asyncio.run(
+            tool.execute(
+                action="run_quality",
+                dataset="session:remote:thanos",
+                episode_indices=[0, 1, 2],
+            )
+        )
+    )
+    message = asyncio.run(bus.consume_outbound())
+
+    assert result["status"] == "started"
+    assert result["event_sent"] is True
+    app_event = message.metadata["app_event"]
+    assert app_event["type"] == "pipeline.quality_run_started"
+    assert app_event["dataset"] == "session:remote:thanos"
+    assert app_event["episode_indices"] == [0, 1, 2]
+    assert app_event["selected_validators"] == ["metadata", "visual"]
+    assert app_event["context"]["route"] == "/curation/quality"
