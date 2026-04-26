@@ -62,7 +62,7 @@ def test_remote_session_downloads_into_remote_cache(monkeypatch, tmp_path: Path)
         return fake_download(dataset_id, relative_path, local_root=local_root)
 
     monkeypatch.setattr(curation_validators, "_download_remote_file", fake_download_with_record)
-    monkeypatch.setattr(curation_validators, "_read_parquet_rows", lambda _path: [])
+    monkeypatch.setattr(curation_validators, "_read_parquet_rows", lambda _path, **_kwargs: [])
 
     curation_validators.load_episode_data(dataset_path, 0)
 
@@ -105,7 +105,10 @@ def test_episode_meta_can_load_from_parquet_and_slice_shared_data_file(
     video_file.parent.mkdir(parents=True, exist_ok=True)
     video_file.write_bytes(b"video")
 
-    def fake_read_parquet(path: Path) -> list[dict]:
+    captured_filters: list[object] = []
+
+    def fake_read_parquet(path: Path, **kwargs) -> list[dict]:
+        captured_filters.append(kwargs.get("filters"))
         if path == meta_parquet:
             return [
                 {
@@ -130,7 +133,7 @@ def test_episode_meta_can_load_from_parquet_and_slice_shared_data_file(
             ]
         return []
 
-    monkeypatch.setattr(curation_validators, "_read_parquet_rows", fake_read_parquet)
+    monkeypatch.setattr(curation_validators, "read_parquet_rows", fake_read_parquet)
     monkeypatch.setattr(
         curation_validators,
         "read_session_metadata",
@@ -143,3 +146,4 @@ def test_episode_meta_can_load_from_parquet_and_slice_shared_data_file(
     assert payload["episode_meta"]["dataset_to_index"] == 3
     assert len(payload["rows"]) == 3
     assert all(row["episode_index"] == 0 for row in payload["rows"])
+    assert [("index", ">=", 0), ("index", "<", 3)] in captured_filters

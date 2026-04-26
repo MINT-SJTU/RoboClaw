@@ -32,7 +32,10 @@ def _sample_video_frames(video_path: Path, max_samples: int = 10) -> tuple[list[
     except Exception:
         pass
 
-    import cv2
+    try:
+        import cv2
+    except Exception:
+        return [], 0.0, 0, 0, 0
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         return [], 0.0, 0, 0, 0
@@ -55,6 +58,23 @@ def _sample_video_frames(video_path: Path, max_samples: int = 10) -> tuple[list[
             break
     cap.release()
     return frames, fps, width, height, frame_count
+
+
+def _video_metadata_from_feature(config: Any) -> tuple[float, int, int]:
+    if not isinstance(config, dict):
+        return 0.0, 0, 0
+
+    info = config.get("info")
+    info = info if isinstance(info, dict) else {}
+    fps = safe_float(info.get("video.fps")) or 0.0
+    width = int(safe_float(info.get("video.width")) or 0)
+    height = int(safe_float(info.get("video.height")) or 0)
+
+    shape = config.get("shape")
+    if isinstance(shape, list) and len(shape) >= 2:
+        height = height or int(safe_float(shape[0]) or 0)
+        width = width or int(safe_float(shape[1]) or 0)
+    return fps, width, height
 
 
 def _decode_image_like(value: Any) -> np.ndarray | None:
@@ -216,6 +236,13 @@ def validate_visual_assets(
     video_metrics: list[dict[str, float]] = []
     if sample:
         frames, fps, width, height, _frame_count = _sample_video_frames(sample[0])
+        if (fps <= 0 or width <= 0 or height <= 0) and visual_feature_keys:
+            meta_fps, meta_width, meta_height = _video_metadata_from_feature(
+                features.get(visual_feature_keys[0])
+            )
+            fps = fps or meta_fps
+            width = width or meta_width
+            height = height or meta_height
         sampled_frames = frames
         if width and height:
             issues.append(make_issue(

@@ -152,7 +152,7 @@ def load_episode_data(dataset_path: Path, episode_index: int) -> dict[str, Any]:
     parquet_path = dataset_path / parquet_relative_path
     remote_cache_root = _remote_cache_root(dataset_path)
     if parquet_path.exists():
-        rows = _read_parquet_rows(parquet_path)
+        rows = _read_episode_parquet_rows(parquet_path, episodes_meta, episode_index)
     else:
         remote_dataset_id = _resolve_remote_dataset_id(dataset_path, info)
         parquet_path = _download_remote_file(
@@ -160,8 +160,7 @@ def load_episode_data(dataset_path: Path, episode_index: int) -> dict[str, Any]:
             parquet_relative_path,
             local_root=remote_cache_root,
         )
-        rows = _read_parquet_rows(parquet_path)
-    rows = _filter_episode_rows(rows, episodes_meta, episode_index)
+        rows = _read_episode_parquet_rows(parquet_path, episodes_meta, episode_index)
 
     video_dir = dataset_path / "videos" / f"chunk-{chunk}" / f"episode_{episode_index:06d}"
     if video_dir.exists():
@@ -246,7 +245,7 @@ def _load_episode_meta_from_parquet(dataset_path: Path, episode_index: int) -> d
     if not episodes_root.exists():
         return {}
     for parquet_path in sorted(episodes_root.rglob("*.parquet")):
-        for entry in _read_parquet_rows(parquet_path):
+        for entry in _read_parquet_rows(parquet_path, filters=[("episode_index", "=", episode_index)]):
             if _safe_int(entry.get("episode_index")) == episode_index:
                 return entry
     return {}
@@ -335,10 +334,46 @@ def _resolve_data_relative_path(
     return Path("data") / f"chunk-{chunk_index:03d}" / f"episode_{episode_index:06d}.parquet"
 
 
-def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
+def _read_parquet_rows(
+    path: Path,
+    *,
+    filters: Any | None = None,
+    columns: list[str] | None = None,
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return read_parquet_rows(path)
+    return read_parquet_rows(path, filters=filters, columns=columns)
+
+
+def _read_episode_parquet_rows(
+    path: Path,
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+
+    filter_candidates: list[list[tuple[str, str, int]]] = []
+    start_index = _safe_int(episode_meta.get("dataset_from_index"))
+    end_index = _safe_int(episode_meta.get("dataset_to_index"))
+    if start_index is not None and end_index is not None and end_index >= start_index:
+        filter_candidates.append([
+            ("index", ">=", start_index),
+            ("index", "<", end_index),
+        ])
+    filter_candidates.append([("episode_index", "=", episode_index)])
+
+    for filters in filter_candidates:
+        try:
+            rows = read_parquet_rows(path, filters=filters)
+        except Exception:
+            logger.debug("Filtered parquet read failed for {}", path, exc_info=True)
+            continue
+        filtered = _filter_episode_rows(rows, episode_meta, episode_index)
+        if filtered:
+            return filtered
+
+    return _filter_episode_rows(_read_parquet_rows(path), episode_meta, episode_index)
 
 
 def _download_remote_file(
