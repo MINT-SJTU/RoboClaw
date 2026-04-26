@@ -8,6 +8,9 @@ import {
 import { useSessionStore } from '@/domains/session/store/useSessionStore'
 import { useHubTransferStore } from '@/domains/hub/store/useHubTransferStore'
 import { useRecoveryStore } from '@/domains/recovery/store/useRecoveryStore'
+import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
+import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
+import { useWorkflow } from '@/domains/curation/store/useCurationStore'
 
 export type { MessageRole, Message }
 
@@ -53,6 +56,75 @@ function resolveWebSocketUrl(sessionId: string): string {
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.searchParams.set('chat_id', sessionId)
   return url.toString()
+}
+
+function buildAppContext(): Record<string, unknown> {
+  const workflow = useWorkflow.getState()
+  const training = useTrainingStore.getState()
+  const session = useSessionStore.getState().session
+  const hardware = useHardwareStore.getState().hardwareStatus
+  const stageStatuses = workflow.workflowState
+    ? Object.fromEntries(
+      Object.entries(workflow.workflowState.stages).map(([name, stage]: [string, any]) => [
+        name,
+        stage?.status ?? 'unknown',
+      ]),
+    )
+    : null
+
+  return {
+    route: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
+    href: window.location.href,
+    selected_dataset: workflow.selectedDataset,
+    selected_dataset_label: workflow.datasetInfo?.label ?? null,
+    selected_dataset_prepared: workflow.selectedDatasetIsRemotePrepared,
+    workflow: stageStatuses,
+    quality: {
+      running: workflow.qualityRunning,
+      validators: workflow.selectedValidators,
+      defaults_loaded: Boolean(workflow.qualityDefaults),
+    },
+    training: {
+      current_job_id: training.currentTrainJobId,
+      loading: training.trainingLoading,
+      stop_loading: training.trainingStopLoading,
+    },
+    session: {
+      state: session.state,
+      dataset: session.dataset,
+      episode_phase: session.episode_phase,
+    },
+    hardware: hardware
+      ? {
+        ready: hardware.ready,
+        missing: hardware.missing,
+        arms: hardware.arms.map((arm) => ({
+          alias: arm.alias,
+          connected: arm.connected,
+          calibrated: arm.calibrated,
+        })),
+        cameras: hardware.cameras.map((camera) => ({
+          alias: camera.alias,
+          connected: camera.connected,
+        })),
+      }
+      : null,
+    client_timestamp: Date.now(),
+  }
+}
+
+function navigateClient(route: string): void {
+  if (!route.startsWith('/') || route.startsWith('//')) {
+    return
+  }
+  const target = `${route}`
+  if (`${window.location.pathname}${window.location.search}${window.location.hash}` === target) {
+    return
+  }
+  window.history.pushState(null, '', target)
+  window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
 export const useChatSocket = create<WebSocketStore>((set, get) => ({
@@ -108,6 +180,13 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
       }
 
       if (data.type === 'chat.message') {
+        const appEvent = data.metadata?.app_event
+        if (appEvent?.type === 'app.navigate' && typeof appEvent.route === 'string') {
+          navigateClient(appEvent.route)
+          if (!String(data.content ?? '').trim()) {
+            return
+          }
+        }
         get().addMessage({
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: data.role === 'user' ? 'user' : 'assistant',
@@ -167,7 +246,9 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
       JSON.stringify({
         type: 'chat.send',
         content,
-        metadata: {},
+        metadata: {
+          app_context: buildAppContext(),
+        },
       }),
     )
   },
