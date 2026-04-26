@@ -24,8 +24,6 @@ os.environ.setdefault("HF_HOME", str(_HF_HOME))
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 import httpx
-import pyarrow as pa
-import pyarrow.parquet as pq
 from huggingface_hub import HfApi, hf_hub_download
 from loguru import logger
 
@@ -55,6 +53,13 @@ _HF_CACHE_DIR = Path(
         _HF_HOME / "hub",
     )
 )
+
+
+def _pyarrow_modules() -> tuple[Any, Any]:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    return pa, pq
 
 
 def search_remote_datasets(query: str, limit: int = 8) -> list[dict[str, Any]]:
@@ -219,6 +224,7 @@ def _episode_data_columns(info: dict[str, Any]) -> list[str]:
 def _read_parquet_rows_from_bytes(raw: bytes, columns: list[str] | None = None) -> list[dict[str, Any]]:
     if not raw:
         return []
+    pa, pq = _pyarrow_modules()
     buffer = pa.BufferReader(raw)
     parquet_file = pq.ParquetFile(buffer)
     available_columns = parquet_file.schema_arrow.names
@@ -259,6 +265,7 @@ def _read_parquet_rows_from_file(
     *,
     episode_meta: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    pa, pq = _pyarrow_modules()
     parquet_file = pq.ParquetFile(path)
     valid_columns = _file_valid_columns(parquet_file, columns)
 

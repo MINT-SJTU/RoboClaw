@@ -18,7 +18,6 @@ from roboclaw.data.curation.features import (
     extract_state_names,
     resolve_timestamp,
 )
-from roboclaw.data.curation.validators import load_episode_data
 from roboclaw.data.dataset_sessions import (
     create_uploaded_directory_session,
     register_remote_dataset_session,
@@ -127,6 +126,12 @@ def _empty_joint_payload() -> dict[str, Any]:
         "sampled_points": 0,
         "total_points": 0,
     }
+
+
+def load_episode_data(dataset_path: Path, episode_index: int) -> dict[str, Any]:
+    from roboclaw.data.curation.validators import load_episode_data as _load_episode_data
+
+    return _load_episode_data(dataset_path, episode_index)
 
 
 def _build_local_episode_payload(

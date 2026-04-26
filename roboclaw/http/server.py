@@ -434,6 +434,9 @@ def create_app(
     if web_ch is not None:
         web_ch.register_routes(app)
     _register_system_routes(app, runtime)
+    from roboclaw.http.routes import register_data_routes
+
+    register_data_routes(app)
 
     # Dashboard routes
     if web_ch is not None and runtime.embodied_service is not None:
@@ -455,6 +458,7 @@ def create_app(
             web_ch,
             runtime.embodied_service,
             get_config=lambda: (web_cfg["host"], web_cfg["port"]),
+            include_data_routes=False,
         )
 
     # Serve built frontend in production (ui/dist/)

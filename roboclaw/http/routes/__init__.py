@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from fastapi import FastAPI
+from loguru import logger
 
-from roboclaw.embodied.service import EmbodiedService
+if TYPE_CHECKING:
+    from roboclaw.embodied.service import EmbodiedService
+
+_OPTIONAL_DATA_ROUTE_DEPENDENCIES = {"cv2", "numpy", "pandas", "pyarrow"}
 
 
 def register_all_routes(
@@ -14,6 +18,8 @@ def register_all_routes(
     web_channel: Any,
     service: EmbodiedService,
     get_config: Callable[[], tuple[str, int]],
+    *,
+    include_data_routes: bool = True,
 ) -> None:
     """Register every dashboard API group on *app*."""
     from roboclaw.http.routes.session import register_session_routes
@@ -46,7 +52,21 @@ def register_all_routes(
     register_infer_routes(app, service)
     register_hub_routes(app, service)
 
-    from roboclaw.http.routes.curation import register_curation_routes
+    if include_data_routes:
+        register_data_routes(app)
+
+
+def register_data_routes(app: FastAPI) -> None:
+    """Register dataset curation/explorer routes that do not require embodied service."""
     from roboclaw.http.routes.explorer import register_explorer_routes
-    register_curation_routes(app)
+
     register_explorer_routes(app)
+
+    try:
+        from roboclaw.http.routes.curation import register_curation_routes
+    except ModuleNotFoundError as exc:
+        if exc.name not in _OPTIONAL_DATA_ROUTE_DEPENDENCIES:
+            raise
+        logger.warning("Curation routes disabled; optional dependency missing: {}", exc)
+        return
+    register_curation_routes(app)
