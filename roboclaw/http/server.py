@@ -21,7 +21,7 @@ from loguru import logger
 
 from roboclaw.channels.web import WebChannel
 from roboclaw.config.loader import get_config_path, load_config, load_runtime_config, save_config
-from roboclaw.providers.factory import ProviderConfigurationError, build_provider
+from roboclaw.providers.factory import ProviderConfigurationError, build_provider, is_codex_api_base
 from roboclaw.providers.registry import PROVIDERS, find_by_name
 from roboclaw.utils.helpers import sync_workspace_templates
 
@@ -66,7 +66,11 @@ def _is_provider_configured(spec: Any, provider_config: Any) -> bool:
         return True
     if spec.name == "azure_openai":
         return bool(provider_config and provider_config.api_key and provider_config.api_base)
-    if spec.is_local or spec.name == "custom":
+    if spec.is_local:
+        return bool(provider_config and provider_config.api_base)
+    if spec.name == "custom":
+        if provider_config and is_codex_api_base(provider_config.api_base):
+            return bool(provider_config.api_base and provider_config.api_key)
         return bool(provider_config and provider_config.api_base)
     return bool(provider_config and provider_config.api_key)
 

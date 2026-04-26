@@ -6,8 +6,14 @@ import pytest
 
 from roboclaw.config.loader import load_config
 from roboclaw.config.schema import Config
+from roboclaw.providers.custom_codex_provider import CustomCodexProvider
 from roboclaw.providers.custom_provider import CustomProvider
-from roboclaw.providers.factory import ProviderConfigurationError, UnconfiguredProvider, build_provider
+from roboclaw.providers.factory import (
+    ProviderConfigurationError,
+    UnconfiguredProvider,
+    build_provider,
+    is_codex_api_base,
+)
 
 
 def test_build_provider_requires_configuration() -> None:
@@ -37,7 +43,7 @@ def test_build_provider_custom_requires_api_base() -> None:
         build_provider(config)
 
 
-def test_build_provider_allows_custom_gateway_codex_path() -> None:
+def test_build_provider_routes_codex_base_to_custom_codex_provider() -> None:
     config = Config()
     config.agents.defaults.provider = "custom"
     config.agents.defaults.model = "gpt-5.2"
@@ -46,7 +52,37 @@ def test_build_provider_allows_custom_gateway_codex_path() -> None:
 
     provider = build_provider(config)
 
-    assert isinstance(provider, CustomProvider)
+    assert isinstance(provider, CustomCodexProvider)
+    assert not isinstance(provider, CustomProvider)
+    assert provider.api_base == "https://right.codes/codex/v1"
+    assert provider.api_key == "sk-test"
+    assert provider.default_model == "gpt-5.2"
+
+
+def test_build_provider_custom_codex_requires_api_key() -> None:
+    config = Config()
+    config.agents.defaults.provider = "custom"
+    config.agents.defaults.model = "gpt-5.2"
+    config.providers.custom.api_base = "https://right.codes/codex/v1"
+
+    with pytest.raises(ProviderConfigurationError, match="requires an API key"):
+        build_provider(config)
+
+
+@pytest.mark.parametrize(
+    "api_base, expected",
+    [
+        ("https://right.codes/codex/v1", True),
+        ("https://example.com/codex", True),
+        ("https://example.com/codex/", True),
+        ("https://example.com/v1", False),
+        ("https://example.com/api/v1", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_codex_api_base(api_base, expected) -> None:
+    assert is_codex_api_base(api_base) is expected
 
 
 def test_load_config_preserves_custom_gateway_codex_path(tmp_path) -> None:

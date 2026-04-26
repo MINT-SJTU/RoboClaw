@@ -316,6 +316,42 @@ def _map_finish_reason(status: str | None) -> str:
 
 
 def _friendly_error(status_code: int, raw: str) -> str:
+    message = _extract_error_message(raw)
+    if status_code in {401, 403}:
+        return (
+            f"Provider refused the request ({status_code}): {message}. "
+            "This usually means the API key/account is not allowed to access "
+            "the selected Codex channel or model. Enable that channel/model in "
+            "token management, or choose a model allowed by this token."
+        )
     if status_code == 429:
         return "ChatGPT usage quota exceeded or rate limit triggered. Please try again later."
-    return f"HTTP {status_code}: {raw}"
+    return f"HTTP {status_code}: {message}"
+
+
+def _extract_error_message(raw: str) -> str:
+    """Extract a compact provider error message from JSON or plain text."""
+    text = raw.strip()
+    if not text:
+        return "empty error response"
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, str):
+            return error
+        if isinstance(error, dict):
+            for key in ("message", "detail", "error"):
+                value = error.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        detail = payload.get("detail")
+        if isinstance(detail, str):
+            return detail
+        message = payload.get("message")
+        if isinstance(message, str):
+            return message
+    return text

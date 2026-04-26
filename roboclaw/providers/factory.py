@@ -18,6 +18,14 @@ class ProviderConfigurationError(RuntimeError):
         self.hint = hint
 
 
+def is_codex_api_base(api_base: str | None) -> bool:
+    """Detect Codex Responses API endpoints (e.g. .../codex/v1)."""
+    if not api_base:
+        return False
+    normalized = api_base.rstrip("/").lower()
+    return normalized.endswith("/codex") or "/codex/" in normalized
+
+
 def build_provider(config: Config) -> LLMProvider:
     """Create the active provider from config or raise ProviderConfigurationError."""
     stub_module = os.environ.get("ROBOCLAW_STUB_LLM")
@@ -38,13 +46,27 @@ def build_provider(config: Config) -> LLMProvider:
                 "Custom provider requires api_base.",
                 "Set the global base URL in the Web Settings page or in providers.custom.api_base.",
             )
-        from roboclaw.providers.custom_provider import CustomProvider
-        provider = CustomProvider(
-            api_key=provider_config.api_key if provider_config else "no-key",
-            api_base=provider_config.api_base,
-            default_model=model,
-            extra_headers=provider_config.extra_headers if provider_config else None,
-        )
+        if is_codex_api_base(provider_config.api_base):
+            if not provider_config.api_key:
+                raise ProviderConfigurationError(
+                    "Custom Codex provider requires an API key.",
+                    "Paste a token that is allowed to access the selected Codex channel/model.",
+                )
+            from roboclaw.providers.custom_codex_provider import CustomCodexProvider
+            provider = CustomCodexProvider(
+                api_key=provider_config.api_key,
+                api_base=provider_config.api_base,
+                default_model=model,
+                extra_headers=provider_config.extra_headers,
+            )
+        else:
+            from roboclaw.providers.custom_provider import CustomProvider
+            provider = CustomProvider(
+                api_key=provider_config.api_key or "no-key",
+                api_base=provider_config.api_base,
+                default_model=model,
+                extra_headers=provider_config.extra_headers,
+            )
     elif provider_name == "azure_openai":
         if not provider_config or not provider_config.api_key or not provider_config.api_base:
             raise ProviderConfigurationError(
