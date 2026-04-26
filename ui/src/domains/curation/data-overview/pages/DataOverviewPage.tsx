@@ -532,12 +532,18 @@ function ValidatorHeatmap({
   const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
   if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
   const gridStyle: CSSProperties = {
-    gridTemplateColumns: `112px repeat(${sortedRows.length}, minmax(24px, 1fr))`,
+    gridTemplateColumns: `128px repeat(${sortedRows.length}, 28px)`,
   }
 
   return (
-    <div className="validator-heatmap pipeline-matrix-scroll">
-      <div className="validator-heatmap__grid" style={gridStyle}>
+    <div className="validator-heatmap pipeline-matrix-shell">
+      <div className="pipeline-matrix-legend">
+        <span><i className="is-pass" />{locale === 'zh' ? '通过/高分' : 'Passed / high'}</span>
+        <span><i className="is-fail" />{locale === 'zh' ? '失败' : 'Failed'}</span>
+        <span><i className="is-missing" />{locale === 'zh' ? '缺失' : 'Missing'}</span>
+      </div>
+      <div className="pipeline-matrix-scroll">
+        <div className="validator-heatmap__grid pipeline-matrix-grid" style={gridStyle}>
         <div className="validator-heatmap__corner">Episode</div>
         {sortedRows.map((row) => (
           <div key={`episode-${row.episode_index}`} className="validator-heatmap__episode">
@@ -569,6 +575,7 @@ function ValidatorHeatmap({
             })}
           </Fragment>
         ))}
+        </div>
       </div>
     </div>
   )
@@ -588,12 +595,18 @@ function MissingMatrix({
   const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
   if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
   const gridStyle: CSSProperties = {
-    gridTemplateColumns: `94px repeat(${MISSING_CHECKS.length}, minmax(92px, 1fr))`,
+    gridTemplateColumns: `104px repeat(${MISSING_CHECKS.length}, 116px)`,
   }
 
   return (
-    <div className="missing-matrix pipeline-matrix-scroll">
-      <div className="missing-matrix__grid" style={gridStyle}>
+    <div className="missing-matrix pipeline-matrix-shell">
+      <div className="pipeline-matrix-legend">
+        <span><i className="is-pass" />{locale === 'zh' ? '存在/通过' : 'Present / passed'}</span>
+        <span><i className="is-fail" />{locale === 'zh' ? '缺失/失败' : 'Missing / failed'}</span>
+        <span><i className="is-missing" />{locale === 'zh' ? '未记录' : 'Not recorded'}</span>
+      </div>
+      <div className="pipeline-matrix-scroll pipeline-matrix-scroll--tall">
+        <div className="missing-matrix__grid pipeline-matrix-grid" style={gridStyle}>
         <div className="missing-matrix__corner">Episode</div>
         {MISSING_CHECKS.map((check) => (
           <div key={check} className="missing-matrix__head">{formatCheckLabel(check, locale)}</div>
@@ -627,6 +640,7 @@ function MissingMatrix({
             })}
           </Fragment>
         ))}
+        </div>
       </div>
     </div>
   )
@@ -1514,7 +1528,7 @@ export default function DataOverviewPage() {
           <PipelineChartPanel
             title={overviewCopy.timeline}
             subtitle={overviewCopy.timelineDesc}
-            className="pipeline-chart-card--wide"
+            className="pipeline-chart-card--full"
           >
             <QualityTimelineChart
               rows={filteredRows}
@@ -1522,7 +1536,11 @@ export default function DataOverviewPage() {
               onInspectEpisode={setInspectedEpisodeId}
             />
           </PipelineChartPanel>
-          <PipelineChartPanel title={overviewCopy.validatorHeatmap} subtitle={overviewCopy.validatorDesc}>
+          <PipelineChartPanel
+            title={overviewCopy.validatorHeatmap}
+            subtitle={overviewCopy.validatorDesc}
+            className="pipeline-chart-card--matrix"
+          >
             <ValidatorHeatmap
               rows={filteredRows}
               locale={locale}
@@ -1533,7 +1551,7 @@ export default function DataOverviewPage() {
           <PipelineChartPanel
             title={overviewCopy.missingMatrix}
             subtitle={overviewCopy.missingDesc}
-            className="pipeline-chart-card--wide"
+            className="pipeline-chart-card--matrix"
           >
             <MissingMatrix
               rows={filteredRows}
