@@ -18,7 +18,7 @@ export default function ChatPanel({
   const compact = variant === 'widget'
   const [input, setInput] = useState('')
   const [providerConfigured, setProviderConfigured] = useState(true)
-  const [widgetCollapsed, setWidgetCollapsed] = useState(false)
+  const [widgetCollapsed, setWidgetCollapsed] = useState(compact)
   const { messages, sendMessage, connected, sessionId } = useChatSocket()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { t } = useI18n()
