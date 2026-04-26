@@ -20,6 +20,7 @@ function formatIssueLabel(checkName: string, locale: 'zh' | 'en'): string {
     features: { zh: '特征定义缺失', en: 'Missing feature schema' },
     parquet_data: { zh: 'Parquet 数据缺失', en: 'Missing parquet data' },
     videos: { zh: '视频文件缺失', en: 'Missing video files' },
+    task_description: { zh: '任务描述缺失', en: 'Missing task description' },
     length: { zh: '回合时长异常', en: 'Episode duration issue' },
     timestamps: { zh: '时间戳不足', en: 'Insufficient timestamps' },
     monotonicity: { zh: '时间戳不单调', en: 'Timestamp monotonicity issue' },

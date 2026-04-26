@@ -20,6 +20,7 @@ from roboclaw.agent.tools.cron import CronTool
 from roboclaw.agent.skills import BUILTIN_SKILLS_DIR
 from roboclaw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from roboclaw.agent.tools.message import MessageTool
+from roboclaw.agent.tools.pipeline import PipelineTool
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.agent.tools.shell import ExecTool
 from roboclaw.agent.tools.spawn import SpawnTool
@@ -134,6 +135,7 @@ class AgentLoop:
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(PipelineTool())
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
         if not self.restrict_to_workspace:

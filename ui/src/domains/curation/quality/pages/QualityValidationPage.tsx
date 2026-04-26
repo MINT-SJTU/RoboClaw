@@ -16,6 +16,7 @@ function formatIssueLabel(checkName: string, locale: 'zh' | 'en'): string {
     features: { zh: '特征定义缺失', en: 'Missing feature schema' },
     parquet_data: { zh: 'Parquet 数据缺失', en: 'Missing parquet data' },
     videos: { zh: '视频文件缺失', en: 'Missing video files' },
+    task_description: { zh: '任务描述缺失', en: 'Missing task description' },
     length: { zh: '回合时长异常', en: 'Episode duration issue' },
     timestamps: { zh: '时间戳不足', en: 'Insufficient timestamps' },
     monotonicity: { zh: '时间戳不单调', en: 'Timestamp monotonicity issue' },
@@ -215,6 +216,8 @@ export default function QualityValidationView() {
     runQualityValidation,
     pauseQualityValidation,
     resumeQualityValidation,
+    qualityRunning,
+    qualityDefaults,
     qualityResults,
     workflowState,
     deleteQualityResults,
@@ -260,7 +263,7 @@ export default function QualityValidationView() {
   }, [selectedDataset, datasetInfo, selectDataset])
 
   const qStage = workflowState?.stages.quality_validation
-  const isRunning = qStage?.status === 'running'
+  const isRunning = qualityRunning || qStage?.status === 'running'
   const isPaused = qStage?.status === 'paused'
   const controlsLocked = isRunning || isPaused
   const datasetIsWorkflowReady = Boolean(workflowState) || selectedDatasetIsRemotePrepared
@@ -408,10 +411,18 @@ export default function QualityValidationView() {
     }
   }
 
-  const thresholdGroups = [
+  const thresholdGroups: Array<{
+    validator: string
+    fields: Array<{ key: string; label: string; step: number; kind?: 'boolean' }>
+  }> = [
     {
       validator: 'metadata',
       fields: [
+        { key: 'metadata_require_info_json', label: '检查 meta/info.json', step: 1, kind: 'boolean' },
+        { key: 'metadata_require_episode_metadata', label: '检查 episode 元数据', step: 1, kind: 'boolean' },
+        { key: 'metadata_require_data_files', label: '检查数据文件缺失', step: 1, kind: 'boolean' },
+        { key: 'metadata_require_videos', label: '检查视频文件缺失', step: 1, kind: 'boolean' },
+        { key: 'metadata_require_task_description', label: '检查任务描述', step: 1, kind: 'boolean' },
         { key: 'metadata_min_duration_s', label: '最小时长 (s)', step: 0.1 },
       ],
     },
@@ -670,6 +681,18 @@ export default function QualityValidationView() {
               <div className="quality-sidebar__section">
                 <h3>{t('qualityValidation')}</h3>
                 <p>{t('qualityOverview')}</p>
+                {qualityDefaults && (
+                  <div className="quality-sidebar__path">
+                    自动默认值:
+                    {' '}
+                    {qualityDefaults.profile.fps > 0 ? `${qualityDefaults.profile.fps} fps` : 'fps --'}
+                    {qualityDefaults.profile.video_resolution
+                      ? ` · ${qualityDefaults.profile.video_resolution.width}x${qualityDefaults.profile.video_resolution.height}`
+                      : ''}
+                    {' · '}
+                    {qualityDefaults.checks.task_descriptions_present ? '任务描述存在' : '任务描述缺失'}
+                  </div>
+                )}
               </div>
 
               <div className="quality-sidebar__section">
@@ -712,20 +735,34 @@ export default function QualityValidationView() {
                           <div className="quality-threshold-group__body">
                             {group.fields.length > 0 ? (
                               <div className="quality-threshold-list">
-                                {group.fields.map((field) => (
-                                  <label key={field.key} className="quality-threshold-field">
-                                    <span>{field.label}</span>
-                                    <input
-                                      type="number"
-                                      step={field.step}
-                                      value={qualityThresholds[field.key]}
-                                      disabled={!enabled || controlsLocked}
-                                      onChange={(event) =>
-                                        setQualityThreshold(field.key, Number(event.target.value))
-                                      }
-                                    />
-                                  </label>
-                                ))}
+                                {group.fields.map((field) => {
+                                  const value = qualityThresholds[field.key] ?? 0
+                                  return (
+                                    <label key={field.key} className="quality-threshold-field">
+                                      <span>{field.label}</span>
+                                      {field.kind === 'boolean' ? (
+                                        <input
+                                          type="checkbox"
+                                          checked={value >= 0.5}
+                                          disabled={!enabled || controlsLocked}
+                                          onChange={(event) =>
+                                            setQualityThreshold(field.key, event.target.checked ? 1 : 0)
+                                          }
+                                        />
+                                      ) : (
+                                        <input
+                                          type="number"
+                                          step={field.step}
+                                          value={value}
+                                          disabled={!enabled || controlsLocked}
+                                          onChange={(event) =>
+                                            setQualityThreshold(field.key, Number(event.target.value))
+                                          }
+                                        />
+                                      )}
+                                    </label>
+                                  )
+                                })}
                               </div>
                             ) : (
                               <div className="quality-threshold-empty">

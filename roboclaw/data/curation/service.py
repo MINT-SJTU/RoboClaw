@@ -18,6 +18,7 @@ from .exports import (
 from .features import resolve_timestamp
 from .propagation import propagate_annotation_spans
 from .prototypes import discover_grouped_prototypes
+from .quality_defaults import build_quality_defaults
 from .serializers import (
     build_workspace_payload,
     coerce_int,
@@ -358,6 +359,9 @@ class CurationService:
         payload["working_parquet_path"] = str(workflow_quality_parquet_path(dataset_path))
         payload["published_parquet_path"] = str(dataset_quality_parquet_path(dataset_path))
         return payload
+
+    def get_quality_defaults(self, dataset_path: Path, dataset_name: str | None = None) -> dict[str, Any]:
+        return build_quality_defaults(dataset_path, dataset_name)
 
     def get_prototype_results(self, dataset_path: Path) -> dict[str, Any]:
         return serialize_prototype_results(load_prototype_results(dataset_path))

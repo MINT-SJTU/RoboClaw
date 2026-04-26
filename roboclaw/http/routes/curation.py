@@ -308,6 +308,12 @@ def register_curation_routes(app: FastAPI) -> None:
         dataset_path = _ensure_dataset_workspace(dataset)
         return _service.get_quality_results(dataset_path)
 
+    @app.get("/api/curation/quality-defaults")
+    async def workflow_quality_defaults(dataset: str) -> dict[str, Any]:
+        """Get dataset-aware default validators and thresholds for quality validation."""
+        dataset_path = _ensure_dataset_workspace(dataset)
+        return _service.get_quality_defaults(dataset_path, dataset)
+
     @app.delete("/api/curation/quality-results")
     async def workflow_delete_quality_results(dataset: str) -> dict[str, Any]:
         """Delete the persisted quality-validation results for a dataset."""

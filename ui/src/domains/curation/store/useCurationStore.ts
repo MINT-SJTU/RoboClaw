@@ -44,6 +44,23 @@ export interface QualityResults {
   published_parquet_path?: string
 }
 
+export interface QualityDefaults {
+  dataset: string
+  selected_validators: string[]
+  threshold_overrides: Record<string, number>
+  profile: {
+    fps: number
+    median_episode_duration_s: number
+    video_resolution?: { width: number; height: number } | null
+    visual_streams: string[]
+    depth_streams: string[]
+    has_action: boolean
+    has_state: boolean
+    has_gripper: boolean
+  }
+  checks: Record<string, boolean>
+}
+
 export interface PrototypeClusterMember {
   record_key: string
   episode_index: number | null
@@ -245,6 +262,7 @@ interface WorkflowStore {
   selectedValidators: string[]
   alignmentQualityFilter: QualityFilterMode
   qualityThresholds: Record<string, number>
+  qualityDefaults: QualityDefaults | null
   qualityResults: QualityResults | null
   qualityRunning: boolean
   prototypeResults: PrototypeResults | null
@@ -269,6 +287,7 @@ interface WorkflowStore {
   toggleValidator: (name: string) => void
   setAlignmentQualityFilter: (mode: QualityFilterMode) => void
   setQualityThreshold: (key: string, value: number) => void
+  loadQualityDefaults: () => Promise<QualityDefaults | null>
   runQualityValidation: () => Promise<void>
   pauseQualityValidation: () => Promise<void>
   resumeQualityValidation: () => Promise<void>
@@ -379,9 +398,14 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
   selectedDataset: getStoredDataset(),
   datasetInfo: null,
   workflowState: null,
-  selectedValidators: ['metadata', 'timing', 'action', 'visual', 'depth', 'ee_trajectory'],
+  selectedValidators: ['metadata', 'timing', 'action', 'visual', 'ee_trajectory'],
   alignmentQualityFilter: 'passed',
   qualityThresholds: {
+    metadata_require_info_json: 1.0,
+    metadata_require_episode_metadata: 1.0,
+    metadata_require_data_files: 1.0,
+    metadata_require_videos: 1.0,
+    metadata_require_task_description: 1.0,
     metadata_min_duration_s: 1.0,
     timing_min_monotonicity: 0.99,
     timing_max_interval_cv: 0.05,
@@ -412,6 +436,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     ee_min_event_count: 1.0,
     ee_min_gripper_span: 0.05,
   },
+  qualityDefaults: null,
   qualityResults: null,
   qualityRunning: false,
   prototypeResults: null,
@@ -438,6 +463,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       selectedDataset: datasetId,
       datasetInfo: null,
       workflowState: null,
+      qualityDefaults: null,
       qualityResults: null,
       prototypeResults: null,
       propagationResults: null,
@@ -448,6 +474,11 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       `/api/curation/datasets/${encodeURIComponent(datasetId)}`,
     )
     set({ datasetInfo: info })
+    try {
+      await get().loadQualityDefaults()
+    } catch (error) {
+      console.warn('Failed to load quality defaults', error)
+    }
     try {
       await get().refreshState()
       set({ selectedDatasetIsRemotePrepared: true })
@@ -547,6 +578,26 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
         [key]: value,
       },
     }))
+  },
+
+  loadQualityDefaults: async () => {
+    const { selectedDataset } = get()
+    if (!selectedDataset) return null
+    const defaults = await fetchJson<QualityDefaults>(
+      `/api/curation/quality-defaults?dataset=${encodeURIComponent(selectedDataset)}`,
+    )
+    set((state) => ({
+      qualityDefaults: defaults,
+      selectedValidators:
+        defaults.selected_validators.length > 0
+          ? defaults.selected_validators
+          : state.selectedValidators,
+      qualityThresholds: {
+        ...state.qualityThresholds,
+        ...defaults.threshold_overrides,
+      },
+    }))
+    return defaults
   },
 
   runQualityValidation: async () => {
@@ -802,16 +853,18 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     const state = await fetchJson<WorkflowState>(
       `/api/curation/state?dataset=${encodeURIComponent(selectedDataset)}`,
     )
+    const qualityStatus = state.stages.quality_validation.status
+    const savedQualityValidators = state.stages.quality_validation.selected_validators
+
     set((current) => ({
       workflowState: state,
       selectedDatasetIsRemotePrepared: true,
       selectedValidators:
-        state.stages.quality_validation.selected_validators.length > 0
-          ? state.stages.quality_validation.selected_validators
+        ['running', 'paused', 'completed'].includes(qualityStatus) && savedQualityValidators.length > 0
+          ? savedQualityValidators
           : current.selectedValidators,
     }))
 
-    const qualityStatus = state.stages.quality_validation.status
     const prototypeStatus = state.stages.prototype_discovery.status
     const annotationStatus = state.stages.annotation.status
 
