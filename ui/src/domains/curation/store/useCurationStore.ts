@@ -109,6 +109,8 @@ export interface PropagationResultItem {
   episode_index: number
   spans: PropagationSpan[]
   prototype_score?: number
+  alignment_method?: string
+  source_episode_index?: number | null
 }
 
 export interface PropagationResults {
@@ -226,6 +228,9 @@ export interface AlignmentOverviewRow {
   episode_index: number
   record_key: string
   task: string
+  task_source?: string | null
+  task_is_supplemental?: boolean
+  semantic_task_text?: string | null
   quality_passed: boolean
   quality_score: number
   quality_status: 'passed' | 'failed'

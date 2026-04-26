@@ -523,9 +523,15 @@ def test_alignment_overview_combines_quality_and_alignment_results(
     assert payload["distribution"]["issue_types"][0]["label"] == "timing"
     rows = {row["episode_index"]: row for row in payload["rows"]}
     assert rows[0]["alignment_status"] == "annotated"
+    assert rows[0]["task"] == "pick object"
+    assert rows[0]["semantic_task_text"] == "pick object"
+    assert rows[0]["task_source"] == "semantic_supplement"
+    assert rows[0]["task_is_supplemental"] is True
     assert rows[0]["annotation_spans"][0]["label"] == "Pick"
     assert rows[1]["alignment_status"] == "propagated"
     assert rows[1]["quality_status"] == "failed"
+    assert rows[1]["task"] == "Pick"
+    assert rows[1]["task_is_supplemental"] is True
     assert rows[1]["propagation_source_episode_index"] == 0
     assert rows[1]["propagation_alignment_method"] == "dtw"
     assert rows[1]["propagation_spans"][0]["label"] == "Pick"

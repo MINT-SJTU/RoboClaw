@@ -5,12 +5,14 @@ import {
   useWorkflow,
   type AlignmentOverviewRow,
   type AlignmentOverviewSpan,
+  type PropagationResults,
   type PrototypeCluster,
 } from '@/domains/curation/store/useCurationStore'
 import { cn } from '@/shared/lib/cn'
 
 type ValidatorKey = 'metadata' | 'timing' | 'action' | 'visual' | 'depth' | 'ee_trajectory'
 type DelayMetric = 'dtw_start_delay_s' | 'dtw_end_delay_s' | 'duration_delta_s'
+type MissingMatrixState = 'pass' | 'fail' | 'supplemented' | null
 
 const VALIDATOR_KEYS: ValidatorKey[] = [
   'metadata',
@@ -268,6 +270,161 @@ function formatSpanTitle(span: AlignmentOverviewSpan, locale: 'zh' | 'en'): stri
   return title ? String(title) : (locale === 'zh' ? '未命名片段' : 'Untitled span')
 }
 
+function coerceOverviewNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Number(value.toFixed(4))
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? Number(parsed.toFixed(4)) : null
+  }
+  return null
+}
+
+function subtractOverviewNumber(left: number | null | undefined, right: number | null | undefined): number | null {
+  if (typeof left !== 'number' || typeof right !== 'number') return null
+  return Number((left - right).toFixed(4))
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function spanTaskText(span: AlignmentOverviewSpan): string {
+  return stringOrNull(span.text) || stringOrNull(span.label) || stringOrNull(span.category) || ''
+}
+
+function semanticTaskTextFromSpans(spans: AlignmentOverviewSpan[]): string {
+  for (const span of spans) {
+    const text = spanTaskText(span)
+    if (text) return text
+  }
+  return ''
+}
+
+function semanticTaskTextForRow(row: AlignmentOverviewRow): string {
+  return (
+    stringOrNull(row.semantic_task_text)
+    || semanticTaskTextFromSpans(row.propagation_spans || [])
+    || semanticTaskTextFromSpans(row.annotation_spans || [])
+    || ''
+  )
+}
+
+function taskInfoForRow(row: AlignmentOverviewRow): { text: string; supplemental: boolean } {
+  const task = stringOrNull(row.task) || semanticTaskTextForRow(row)
+  const supplemental = Boolean(
+    task
+    && (row.task_is_supplemental || row.task_source === 'semantic_supplement' || !stringOrNull(row.task)),
+  )
+  return { text: task, supplemental }
+}
+
+function hasSemanticTaskSupplement(row: AlignmentOverviewRow): boolean {
+  return taskInfoForRow(row).supplemental
+}
+
+function normalizeOverviewSpan(
+  span: Record<string, unknown>,
+  sourceSpan?: AlignmentOverviewSpan | null,
+): AlignmentOverviewSpan {
+  const startTime = coerceOverviewNumber(span.startTime)
+  const endTime = coerceOverviewNumber(span.endTime)
+  const sourceStartTime = sourceSpan ? coerceOverviewNumber(sourceSpan.startTime) : coerceOverviewNumber(span.source_start_time)
+  const sourceEndTime = sourceSpan ? coerceOverviewNumber(sourceSpan.endTime) : coerceOverviewNumber(span.source_end_time)
+  const durationDelta =
+    startTime !== null && endTime !== null && sourceStartTime !== null && sourceEndTime !== null
+      ? Number(((endTime - startTime) - (sourceEndTime - sourceStartTime)).toFixed(4))
+      : coerceOverviewNumber(span.duration_delta_s)
+  return {
+    id: stringOrNull(span.id),
+    label: stringOrNull(span.label),
+    text: stringOrNull(span.text),
+    category: stringOrNull(span.category),
+    startTime,
+    endTime,
+    source: stringOrNull(span.source),
+    target_record_key: stringOrNull(span.target_record_key),
+    prototype_score: coerceOverviewNumber(span.prototype_score),
+    source_start_time: sourceStartTime,
+    source_end_time: sourceEndTime,
+    dtw_start_delay_s: coerceOverviewNumber(span.dtw_start_delay_s) ?? subtractOverviewNumber(startTime, sourceStartTime),
+    dtw_end_delay_s: coerceOverviewNumber(span.dtw_end_delay_s) ?? subtractOverviewNumber(endTime, sourceEndTime),
+    duration_delta_s: durationDelta,
+  }
+}
+
+function sourceSpanForFallback(
+  span: Record<string, unknown>,
+  index: number,
+  sourceSpans: AlignmentOverviewSpan[],
+): AlignmentOverviewSpan | null {
+  const spanId = stringOrNull(span.id)
+  if (spanId) {
+    const matched = sourceSpans.find((sourceSpan) => String(sourceSpan.id || '') === spanId)
+    if (matched) return matched
+  }
+  return sourceSpans[index] || null
+}
+
+function inferAlignmentMethodFromSpans(spans: AlignmentOverviewSpan[]): string {
+  if (spans.some((span) => span.source === 'dtw_propagated')) return 'dtw'
+  if (spans.some((span) => span.source === 'duration_scaled')) return 'scale'
+  return ''
+}
+
+function enrichRowTask(row: AlignmentOverviewRow): AlignmentOverviewRow {
+  const semanticTask = semanticTaskTextForRow(row)
+  const existingTask = stringOrNull(row.task)
+  return {
+    ...row,
+    task: existingTask || semanticTask || '',
+    semantic_task_text: semanticTask || row.semantic_task_text || '',
+    task_is_supplemental: Boolean(row.task_is_supplemental || (!existingTask && semanticTask)),
+    task_source: row.task_source || (existingTask ? 'dataset' : semanticTask ? 'semantic_supplement' : ''),
+  }
+}
+
+function augmentRowsWithPropagationFallback(
+  rows: AlignmentOverviewRow[],
+  propagationResults: PropagationResults | null,
+  sourceAnnotationSpans: AlignmentOverviewSpan[],
+): AlignmentOverviewRow[] {
+  if (!propagationResults) return rows.map(enrichRowTask)
+
+  const propagatedByEpisode = new Map(
+    propagationResults.propagated.map((item) => [item.episode_index, item]),
+  )
+  return rows.map((row) => {
+    const item = propagatedByEpisode.get(row.episode_index)
+    const existingAnnotationSpans = row.annotation_spans || []
+    const annotationSpans =
+      row.episode_index === propagationResults.source_episode_index && existingAnnotationSpans.length === 0
+        ? sourceAnnotationSpans
+        : existingAnnotationSpans
+    const existingPropagationSpans = row.propagation_spans || []
+    const propagationSpans =
+      existingPropagationSpans.length === 0 && item?.spans?.length
+        ? item.spans.map((span, index) =>
+          normalizeOverviewSpan(
+            span as Record<string, unknown>,
+            sourceSpanForFallback(span as Record<string, unknown>, index, sourceAnnotationSpans),
+          ),
+        )
+        : existingPropagationSpans
+    const sourceEpisodeIndex = row.propagation_source_episode_index ?? item?.source_episode_index ?? propagationResults.source_episode_index
+    const enriched: AlignmentOverviewRow = {
+      ...row,
+      annotation_spans: annotationSpans,
+      propagation_spans: propagationSpans,
+      propagation_source_episode_index: sourceEpisodeIndex,
+      propagation_alignment_method:
+        row.propagation_alignment_method || item?.alignment_method || inferAlignmentMethodFromSpans(propagationSpans),
+      propagated_count: row.propagated_count || propagationSpans.length,
+      prototype_score: row.prototype_score ?? item?.prototype_score ?? null,
+    }
+    return enrichRowTask(enriched)
+  })
+}
+
 function formatAlignmentMethod(method: string | null | undefined, locale: 'zh' | 'en'): string {
   if (method === 'dtw') return 'DTW'
   if (method === 'scale') return locale === 'zh' ? '时长缩放' : 'Duration scale'
@@ -316,6 +473,23 @@ function getIssuePassState(issue: Record<string, unknown> | undefined): boolean 
   if (issue['passed'] === true) return true
   if (issue['passed'] === false) return false
   return null
+}
+
+function getMissingMatrixState(row: AlignmentOverviewRow, checkName: string): MissingMatrixState {
+  const state = getIssuePassState(getIssueForCheck(row, checkName))
+  if (checkName === 'task_description' && state === false && hasSemanticTaskSupplement(row)) {
+    return 'supplemented'
+  }
+  if (state === true) return 'pass'
+  if (state === false) return 'fail'
+  return null
+}
+
+function formatMissingMatrixState(state: MissingMatrixState, locale: 'zh' | 'en'): string {
+  if (state === 'pass') return locale === 'zh' ? '通过' : 'passed'
+  if (state === 'fail') return locale === 'zh' ? '缺失' : 'missing'
+  if (state === 'supplemented') return locale === 'zh' ? '语义补充*' : 'semantic supplement*'
+  return locale === 'zh' ? '未记录' : 'not recorded'
 }
 
 function rowSemanticSpans(row: AlignmentOverviewRow): AlignmentOverviewSpan[] {
@@ -399,9 +573,10 @@ function validatorColor(score: number | undefined, failed: boolean): string {
   return `rgba(6, 78, 59, ${alpha})`
 }
 
-function issueMatrixColor(state: boolean | null): string {
-  if (state === true) return '#064e3b'
-  if (state === false) return '#c81e1e'
+function issueMatrixColor(state: MissingMatrixState): string {
+  if (state === 'pass') return '#064e3b'
+  if (state === 'fail') return '#c81e1e'
+  if (state === 'supplemented') return '#1d4ed8'
   return 'rgba(148, 163, 184, 0.38)'
 }
 
@@ -603,6 +778,7 @@ function MissingMatrix({
       <div className="pipeline-matrix-legend">
         <span><i className="is-pass" />{locale === 'zh' ? '存在/通过' : 'Present / passed'}</span>
         <span><i className="is-fail" />{locale === 'zh' ? '缺失/失败' : 'Missing / failed'}</span>
+        <span><i className="is-supplemented" />{locale === 'zh' ? '语义补充*' : 'Semantic supplement*'}</span>
         <span><i className="is-missing" />{locale === 'zh' ? '未记录' : 'Not recorded'}</span>
       </div>
       <div className="pipeline-matrix-scroll pipeline-matrix-scroll--tall">
@@ -617,20 +793,20 @@ function MissingMatrix({
               {row.episode_index}
             </div>
             {MISSING_CHECKS.map((check) => {
-              const issue = getIssueForCheck(row, check)
-              const state = getIssuePassState(issue)
+              const state = getMissingMatrixState(row, check)
               return (
                 <button
                   key={`${row.episode_index}-${check}`}
                   type="button"
                   className={cn(
                     'missing-matrix__cell',
-                    state === true && 'is-pass',
-                    state === false && 'is-fail',
+                    state === 'pass' && 'is-pass',
+                    state === 'fail' && 'is-fail',
+                    state === 'supplemented' && 'is-supplemented',
                   )}
                   style={{ backgroundColor: issueMatrixColor(state) }}
                   title={`Episode ${row.episode_index} · ${formatCheckLabel(check, locale)}: ${
-                    state === null ? 'missing' : state ? 'passed' : 'failed'
+                    formatMissingMatrixState(state, locale)
                   }`}
                   onMouseEnter={() => onInspectEpisode(row.episode_index)}
                   onFocus={() => onInspectEpisode(row.episode_index)}
@@ -974,6 +1150,75 @@ function QualityDtwScatter({
   )
 }
 
+function taskTextWithMarker(row: AlignmentOverviewRow): string {
+  const taskInfo = taskInfoForRow(row)
+  if (!taskInfo.text) return ''
+  return `${taskInfo.text}${taskInfo.supplemental ? '*' : ''}`
+}
+
+function TaskDescriptionCell({
+  row,
+  locale,
+  emptyLabel,
+}: {
+  row: AlignmentOverviewRow
+  locale: 'zh' | 'en'
+  emptyLabel: string
+}) {
+  const taskInfo = taskInfoForRow(row)
+  if (!taskInfo.text) {
+    return <span className="overview-task-cell overview-task-cell--empty">{emptyLabel}</span>
+  }
+  return (
+    <span className={cn('overview-task-cell', taskInfo.supplemental && 'is-supplemented')}>
+      <strong>
+        {taskInfo.text}
+        {taskInfo.supplemental && <sup>*</sup>}
+      </strong>
+      <em>
+        {taskInfo.supplemental
+          ? (locale === 'zh' ? '语义对齐补充' : 'Semantic supplement')
+          : (locale === 'zh' ? '原始任务字段' : 'Dataset task field')}
+      </em>
+    </span>
+  )
+}
+
+function DtwDelayCell({ row, locale }: { row: AlignmentOverviewRow; locale: 'zh' | 'en' }) {
+  const startDelay = averageDelayForRow(row, 'dtw_start_delay_s')
+  const endDelay = averageDelayForRow(row, 'dtw_end_delay_s')
+  const durationDelta = averageDelayForRow(row, 'duration_delta_s')
+  if (startDelay === null && endDelay === null && durationDelta === null) {
+    return <span className="overview-data-cell overview-data-cell--empty">-</span>
+  }
+  return (
+    <span className="overview-data-cell overview-dtw-cell">
+      <strong>{formatSignedSeconds(startDelay, locale)}</strong>
+      <em>
+        {formatAlignmentMethod(row.propagation_alignment_method, locale)}
+        {endDelay !== null && ` · ${locale === 'zh' ? '终点' : 'end'} ${formatSignedSeconds(endDelay, locale)}`}
+        {durationDelta !== null && ` · Δ ${formatSignedSeconds(durationDelta, locale)}`}
+      </em>
+    </span>
+  )
+}
+
+function SemanticTextCell({ row, locale }: { row: AlignmentOverviewRow; locale: 'zh' | 'en' }) {
+  const spans = rowSemanticSpans(row)
+  const firstSpan = spans[0]
+  const text = semanticTaskTextForRow(row)
+  if (!text) return <span className="overview-data-cell overview-data-cell--empty">-</span>
+  return (
+    <span className="overview-data-cell overview-semantic-cell">
+      <strong>{text}</strong>
+      <em>
+        {firstSpan ? `${formatSpanSource(firstSpan.source, locale)} · ${formatTimeWindow(firstSpan, locale)}` : ''}
+        {spans.length > 1 && ` · +${spans.length - 1}`}
+      </em>
+    </span>
+  )
+}
+
 function buildExportRows(
   rows: AlignmentOverviewRow[],
   locale: 'zh' | 'en',
@@ -982,7 +1227,9 @@ function buildExportRows(
   return rows.map((row) => ({
     episode_index: row.episode_index,
     record_key: row.record_key,
-    task: row.task || '',
+    task: taskTextWithMarker(row),
+    task_source: row.task_source || '',
+    semantic_task_text: semanticTaskTextForRow(row),
     quality_status: row.quality_passed ? t('passed') : t('failed'),
     quality_score: Number(row.quality_score.toFixed(1)),
     failed_validators: row.failed_validators.join(', '),
@@ -996,6 +1243,9 @@ function buildExportRows(
     alignment_status: t(alignmentStatusKey(row.alignment_status)),
     annotation_count: row.annotation_count,
     propagated_count: row.propagated_count,
+    dtw_start_delay_s: averageDelayForRow(row, 'dtw_start_delay_s') ?? '',
+    dtw_end_delay_s: averageDelayForRow(row, 'dtw_end_delay_s') ?? '',
+    duration_delta_s: averageDelayForRow(row, 'duration_delta_s') ?? '',
     prototype_score:
       typeof row.prototype_score === 'number' ? Number(row.prototype_score.toFixed(4)) : '',
     updated_at: row.updated_at || '',
@@ -1053,6 +1303,9 @@ function OverviewRowDetailPopover({
       endDelay: '终点延迟',
       durationDelta: '时长差',
       confidence: '置信度',
+      taskDescription: '任务描述',
+      semanticSupplement: '语义对齐补充',
+      datasetTask: '原始任务字段',
       status: '状态',
       annotationCount: '标注数',
       propagatedCount: '传播数',
@@ -1079,6 +1332,9 @@ function OverviewRowDetailPopover({
       endDelay: 'End delay',
       durationDelta: 'Duration delta',
       confidence: 'Confidence',
+      taskDescription: 'Task description',
+      semanticSupplement: 'Semantic supplement',
+      datasetTask: 'Dataset task field',
       status: 'Status',
       annotationCount: 'Annotations',
       propagatedCount: 'Propagated',
@@ -1089,6 +1345,7 @@ function OverviewRowDetailPopover({
   const propagationSpans = row.propagation_spans || []
   const annotationSpans = row.annotation_spans || []
   const semanticSpans = propagationSpans.length > 0 ? propagationSpans : annotationSpans
+  const taskInfo = taskInfoForRow(row)
 
   return (
     <div className="quality-detail-inspector overview-row-detail-popover" role="status">
@@ -1210,6 +1467,21 @@ function OverviewRowDetailPopover({
           <div className="overview-detail-section__title">{copy.semantic}</div>
           <div className="overview-detail-lines">
             <div className="overview-detail-line">
+              <strong>{copy.taskDescription}</strong>
+              <span className={cn(taskInfo.supplemental && 'is-supplemented')}>
+                {taskInfo.text ? (
+                  <>
+                    {taskInfo.text}
+                    {taskInfo.supplemental ? '*' : ''}
+                    {' · '}
+                    {taskInfo.supplemental ? copy.semanticSupplement : copy.datasetTask}
+                  </>
+                ) : (
+                  locale === 'zh' ? '未填写任务' : 'Untitled task'
+                )}
+              </span>
+            </div>
+            <div className="overview-detail-line">
               <strong>{copy.status}</strong>
               <span>{locale === 'zh'
                 ? (row.alignment_status === 'propagated' ? '已自动传播' : row.alignment_status === 'annotated' ? '已人工标注' : '未开始对齐')
@@ -1252,8 +1524,10 @@ export default function DataOverviewPage() {
     selectedDataset,
     datasetInfo,
     alignmentOverview,
+    propagationResults,
     prototypeResults,
     loadAlignmentOverview,
+    loadPropagationResults,
     loadPrototypeResults,
     selectDataset,
   } = useWorkflow()
@@ -1263,6 +1537,7 @@ export default function DataOverviewPage() {
   >('all')
   const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<number[]>([])
   const [inspectedEpisodeId, setInspectedEpisodeId] = useState<number | null>(null)
+  const [propagationSourceSpans, setPropagationSourceSpans] = useState<AlignmentOverviewSpan[]>([])
 
   useEffect(() => {
     if (selectedDataset && !datasetInfo) {
@@ -1273,11 +1548,40 @@ export default function DataOverviewPage() {
   useEffect(() => {
     if (selectedDataset) {
       void loadAlignmentOverview()
+      void loadPropagationResults()
       void loadPrototypeResults()
     }
-  }, [selectedDataset, loadAlignmentOverview, loadPrototypeResults])
+  }, [selectedDataset, loadAlignmentOverview, loadPropagationResults, loadPrototypeResults])
 
-  const rows = alignmentOverview?.rows || []
+  useEffect(() => {
+    const sourceEpisodeIndex = propagationResults?.source_episode_index
+    if (!selectedDataset || sourceEpisodeIndex === null || sourceEpisodeIndex === undefined) {
+      setPropagationSourceSpans([])
+      return
+    }
+    let cancelled = false
+    void fetch(
+      `/api/curation/annotations?dataset=${encodeURIComponent(selectedDataset)}&episode_index=${sourceEpisodeIndex}`,
+    )
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { annotations?: Array<Record<string, unknown>> } | null) => {
+        if (cancelled) return
+        const annotations = Array.isArray(payload?.annotations) ? payload.annotations : []
+        setPropagationSourceSpans(annotations.map((span) => normalizeOverviewSpan(span)))
+      })
+      .catch(() => {
+        if (!cancelled) setPropagationSourceSpans([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDataset, propagationResults?.source_episode_index])
+
+  const rawRows = alignmentOverview?.rows || []
+  const rows = useMemo(
+    () => augmentRowsWithPropagationFallback(rawRows, propagationResults, propagationSourceSpans),
+    [rawRows, propagationResults, propagationSourceSpans],
+  )
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       if (qualityFilter === 'passed' && !row.quality_passed) return false
@@ -1340,6 +1644,9 @@ export default function DataOverviewPage() {
       empty: '暂无可绘制数据',
       tableTitle: '结果明细',
       tableDesc: '悬浮或点击 episode 可查看质量、DTW 与语义详情',
+      semanticTextColumn: '语义文本',
+      dtwColumn: 'DTW 延迟',
+      supplementLegend: '* 表示由语义对齐文本补充的任务描述',
     }
     : {
       title: 'Pipeline Analytics Cockpit',
@@ -1375,6 +1682,9 @@ export default function DataOverviewPage() {
       empty: 'No drawable data yet',
       tableTitle: 'Result Details',
       tableDesc: 'Hover or click an episode to inspect quality, DTW, and semantics',
+      semanticTextColumn: 'Semantic Text',
+      dtwColumn: 'DTW Delay',
+      supplementLegend: '* marks task descriptions supplemented from semantic alignment text',
     }
 
   function toggleEpisodeSelection(episodeIndex: number) {
@@ -1623,6 +1933,7 @@ export default function DataOverviewPage() {
             </p>
           </div>
           <div className="quality-results-card__filters">
+            <span className="quality-sidebar__path">{overviewCopy.supplementLegend}</span>
             <span className="quality-sidebar__path">{t('selectedRows')}: {selectedEpisodeIds.length}</span>
             <span className="quality-sidebar__path">{t('exportRows')}: {exportRows.length}</span>
           </div>
@@ -1646,6 +1957,8 @@ export default function DataOverviewPage() {
                 <th>{t('score')}</th>
                 <th>{t('validators')}</th>
                 <th>{t('textAlignment')}</th>
+                <th>{overviewCopy.semanticTextColumn}</th>
+                <th>{overviewCopy.dtwColumn}</th>
                 <th>{t('annotation')}</th>
                 <th>{t('runPropagation')}</th>
                 <th>{t('updatedAt')}</th>
@@ -1678,13 +1991,17 @@ export default function DataOverviewPage() {
                       />
                     </td>
                     <td>{row.episode_index}</td>
-                    <td>{row.task || t('untitledTask')}</td>
+                    <td>
+                      <TaskDescriptionCell row={row} locale={locale} emptyLabel={t('untitledTask')} />
+                    </td>
                     <td className={cn(row.quality_passed ? 'is-pass' : 'is-fail')}>
                       {row.quality_passed ? t('passed') : t('failed')}
                     </td>
                     <td>{row.quality_score.toFixed(1)}</td>
                     <td>{row.failed_validators.join(', ') || '-'}</td>
                     <td>{t(alignmentStatusKey(row.alignment_status))}</td>
+                    <td><SemanticTextCell row={row} locale={locale} /></td>
+                    <td><DtwDelayCell row={row} locale={locale} /></td>
                     <td>{row.annotation_count}</td>
                     <td>{row.propagated_count}</td>
                     <td>{row.updated_at || '-'}</td>
@@ -1693,7 +2010,7 @@ export default function DataOverviewPage() {
               })}
               {filteredRows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="quality-table__empty">No results</td>
+                  <td colSpan={12} className="quality-table__empty">No results</td>
                 </tr>
               )}
             </tbody>

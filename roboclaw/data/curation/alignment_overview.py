@@ -73,9 +73,13 @@ def _build_annotation_lookup(dataset_path: Path) -> dict[int, dict[str, Any]]:
         if episode_index is None:
             continue
         spans = payload.get("annotations", []) or []
+        task_context = payload.get("task_context", {}) or {}
+        if not isinstance(task_context, dict):
+            task_context = {}
         annotated_lookup[episode_index] = {
             "annotation_count": len(spans),
             "annotation_spans": _simplify_spans(spans),
+            "task_context": task_context,
             "updated_at": payload.get("updated_at") or payload.get("created_at") or "",
             "has_manual_annotation": len(spans) > 0,
         }
@@ -239,10 +243,23 @@ def _build_alignment_row(
         alignment_status = "annotated"
 
     validators = episode.get("validators", {}) or {}
+    annotation_spans = annotation_meta.get("annotation_spans", [])
+    propagation_spans = propagation_meta.get("spans", [])
+    original_task = _episode_task_text(episode)
+    semantic_task = (
+        _semantic_task_text(propagation_spans)
+        or _semantic_task_text(annotation_spans)
+        or _task_context_text(annotation_meta.get("task_context"))
+    )
+    task_is_supplemental = not original_task and bool(semantic_task)
+    task = original_task or semantic_task or ""
     return {
         "episode_index": episode_index,
         "record_key": str(episode_index),
-        "task": "",
+        "task": task,
+        "task_source": "dataset" if original_task else "semantic_supplement" if semantic_task else "",
+        "task_is_supplemental": task_is_supplemental,
+        "semantic_task_text": semantic_task or "",
         "quality_passed": bool(episode.get("passed", False)),
         "quality_score": float(episode.get("score", 0.0) or 0.0),
         "quality_status": "passed" if episode.get("passed") else "failed",
@@ -260,13 +277,53 @@ def _build_alignment_row(
         "alignment_status": alignment_status,
         "annotation_count": annotation_count,
         "propagated_count": propagated_count,
-        "annotation_spans": annotation_meta.get("annotation_spans", []),
+        "annotation_spans": annotation_spans,
         "propagation_source_episode_index": propagation_meta.get("source_episode_index"),
         "propagation_alignment_method": propagation_meta.get("alignment_method", ""),
-        "propagation_spans": propagation_meta.get("spans", []),
+        "propagation_spans": propagation_spans,
         "prototype_score": propagation_meta.get("prototype_score"),
         "updated_at": annotation_meta.get("updated_at", ""),
     }
+
+
+def _episode_task_text(episode: dict[str, Any]) -> str:
+    return _first_text(
+        episode.get("task"),
+        episode.get("task_label"),
+        episode.get("task_value"),
+        episode.get("instruction"),
+        episode.get("language_instruction"),
+        episode.get("language_instruction_2"),
+        episode.get("language_instruction_3"),
+    )
+
+
+def _task_context_text(task_context: Any) -> str:
+    if not isinstance(task_context, dict):
+        return ""
+    return _first_text(
+        task_context.get("text"),
+        task_context.get("label"),
+        task_context.get("instruction"),
+        task_context.get("language_instruction"),
+    )
+
+
+def _semantic_task_text(spans: list[dict[str, Any]]) -> str:
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        text = _first_text(span.get("text"), span.get("label"), span.get("category"))
+        if text:
+            return text
+    return ""
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _build_summary(

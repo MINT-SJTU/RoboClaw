@@ -3068,6 +3068,58 @@ a {
   cursor: help;
 }
 
+.overview-task-cell,
+.overview-data-cell {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 240px;
+  vertical-align: top;
+}
+
+.overview-task-cell strong,
+.overview-data-cell strong {
+  min-width: 0;
+  color: var(--tx);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-task-cell em,
+.overview-data-cell em {
+  min-width: 0;
+  color: var(--tx2);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-task-cell sup {
+  margin-left: 2px;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.overview-task-cell.is-supplemented strong,
+.overview-detail-line .is-supplemented {
+  color: #1d4ed8;
+}
+
+.overview-task-cell--empty,
+.overview-data-cell--empty {
+  color: var(--tx2);
+  font-size: 12px;
+}
+
 .overview-status-pill {
   display: inline-flex;
   align-items: center;
@@ -3799,6 +3851,10 @@ a {
 
 .pipeline-matrix-legend i.is-fail {
   background: #c81e1e;
+}
+
+.pipeline-matrix-legend i.is-supplemented {
+  background: #1d4ed8;
 }
 
 .pipeline-matrix-legend i.is-missing {
