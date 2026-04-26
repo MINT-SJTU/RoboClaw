@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
 import {
   listExplorerDatasets,
@@ -1163,6 +1164,7 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
 
 export default function DatasetExplorerView() {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const { prepareRemoteDatasetForWorkflow, createLocalDirectorySession } = useWorkflow()
   const {
     summary,
@@ -1190,11 +1192,13 @@ export default function DatasetExplorerView() {
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(-1)
   const [prepareStatus, setPrepareStatus] = useState('')
   const [prepareError, setPrepareError] = useState('')
+  const [preparingForQuality, setPreparingForQuality] = useState(false)
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
   const localDirectoryInputRef = useRef<HTMLInputElement | null>(null)
   const blurTimerRef = useRef<number | null>(null)
   const suggestionRequestRef = useRef(0)
   const requestedDatasetKeyRef = useRef('')
+  const preparingForQualityRef = useRef(false)
   const currentDataset = summary?.dataset || dashboard?.dataset || episodePage?.dataset || ''
 
   const datasetRef: ExplorerDatasetRef =
@@ -1417,16 +1421,23 @@ export default function DatasetExplorerView() {
   }
 
   async function handlePrepareRemote(): Promise<void> {
+    if (preparingForQualityRef.current) return
     const datasetId = datasetIdInput.trim()
     if (!datasetId) return
-    setPrepareStatus('')
+    preparingForQualityRef.current = true
+    setPreparingForQuality(true)
+    setPrepareStatus(t('preparingForQuality'))
     setPrepareError('')
     try {
       setRemoteDatasetSelected(datasetId)
       const payload = await prepareRemoteDatasetForWorkflow(datasetId, false)
-      setPrepareStatus(`${t('importDataset')}: ${payload.dataset_name}`)
+      setPrepareStatus(`${t('preparedForQuality')}: ${payload.dataset_name}`)
+      navigate('/curation/quality')
     } catch (error) {
       setPrepareError(error instanceof Error ? error.message : t('qualityRunFailed'))
+    } finally {
+      preparingForQualityRef.current = false
+      setPreparingForQuality(false)
     }
   }
 
@@ -1622,11 +1633,12 @@ export default function DatasetExplorerView() {
             variant="secondary"
             onClick={() => void handleLoad()}
             disabled={
-              source === 'remote'
+              preparingForQuality
+              || (source === 'remote'
                 ? !datasetIdInput.trim()
                 : source === 'local'
                   ? !localDatasetInput.trim()
-                  : !localDatasetPathInput.trim()
+                  : !localDatasetPathInput.trim())
             }
             className="dataset-workbench__import-btn"
           >
@@ -1638,10 +1650,10 @@ export default function DatasetExplorerView() {
               type="button"
               variant="secondary"
               onClick={() => void handlePrepareRemote()}
-              disabled={!datasetIdInput.trim()}
+              disabled={!datasetIdInput.trim() || preparingForQuality}
               className="dataset-workbench__import-btn"
             >
-              {t('prepareForQuality')}
+              {preparingForQuality ? t('preparingForQuality') : t('prepareForQuality')}
             </ActionButton>
           )}
         </div>
