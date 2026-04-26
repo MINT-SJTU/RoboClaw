@@ -18,8 +18,8 @@ export default function AppHeader() {
 
   const pageTitle = useMemo(() => {
     if (location.pathname.startsWith('/control')) return t('controlCenter')
-    if (location.pathname.startsWith('/datasets/explorer')) return t('datasetExplorer')
-    if (location.pathname.startsWith('/datasets')) return t('datasetsNav')
+    if (location.pathname.startsWith('/datasets')) return t('datasetReader')
+    if (location.pathname.startsWith('/curation/datasets')) return t('datasetReader')
     if (location.pathname.startsWith('/curation/data-overview')) return t('dataOverview')
     if (location.pathname.startsWith('/curation/text-alignment')) return t('textAlignment')
     if (location.pathname.startsWith('/curation/quality')) return t('qualityWorkbench')
