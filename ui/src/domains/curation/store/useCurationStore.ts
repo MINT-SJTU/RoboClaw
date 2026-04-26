@@ -235,8 +235,29 @@ export interface AlignmentOverviewRow {
   alignment_status: 'not_started' | 'annotated' | 'propagated'
   annotation_count: number
   propagated_count: number
+  annotation_spans?: AlignmentOverviewSpan[]
+  propagation_source_episode_index?: number | null
+  propagation_alignment_method?: string | null
+  propagation_spans?: AlignmentOverviewSpan[]
   prototype_score?: number | null
   updated_at?: string
+}
+
+export interface AlignmentOverviewSpan {
+  id?: string | null
+  label?: string | null
+  text?: string | null
+  category?: string | null
+  startTime?: number | null
+  endTime?: number | null
+  source?: string | null
+  target_record_key?: string | null
+  prototype_score?: number | null
+  source_start_time?: number | null
+  source_end_time?: number | null
+  dtw_start_delay_s?: number | null
+  dtw_end_delay_s?: number | null
+  duration_delta_s?: number | null
 }
 
 export interface AlignmentOverview {

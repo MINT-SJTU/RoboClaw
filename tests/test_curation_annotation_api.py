@@ -496,7 +496,16 @@ def test_alignment_overview_combines_quality_and_alignment_results(
                 {
                     "episode_index": 1,
                     "prototype_score": 0.88,
-                    "spans": [{"label": "Pick", "startTime": 0.1, "endTime": 0.4}],
+                    "alignment_method": "dtw",
+                    "spans": [
+                        {
+                            "id": "ann-1",
+                            "label": "Pick",
+                            "startTime": 0.1,
+                            "endTime": 0.4,
+                            "source": "dtw_propagated",
+                        }
+                    ],
                 }
             ],
         },
@@ -514,8 +523,14 @@ def test_alignment_overview_combines_quality_and_alignment_results(
     assert payload["distribution"]["issue_types"][0]["label"] == "timing"
     rows = {row["episode_index"]: row for row in payload["rows"]}
     assert rows[0]["alignment_status"] == "annotated"
+    assert rows[0]["annotation_spans"][0]["label"] == "Pick"
     assert rows[1]["alignment_status"] == "propagated"
     assert rows[1]["quality_status"] == "failed"
+    assert rows[1]["propagation_source_episode_index"] == 0
+    assert rows[1]["propagation_alignment_method"] == "dtw"
+    assert rows[1]["propagation_spans"][0]["label"] == "Pick"
+    assert rows[1]["propagation_spans"][0]["dtw_start_delay_s"] == 0.1
+    assert rows[1]["propagation_spans"][0]["duration_delta_s"] == -0.2
 
 
 def test_quality_batch_can_pause_and_resume(
