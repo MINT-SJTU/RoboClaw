@@ -60,3 +60,13 @@ def test_app_tool_navigation_emits_web_event() -> None:
     assert message.chat_id == "chat-1"
     assert message.metadata["app_event"]["type"] == "app.navigate"
     assert message.metadata["app_event"]["route"] == "/training"
+
+
+def test_app_tool_data_overview_exposes_episode_workspace_action() -> None:
+    result = json.loads(
+        asyncio.run(AppTool().execute(action="list_page_actions", page="curation_data_overview"))
+    )
+
+    action_ids = {item["id"] for item in result["actions"]}
+    assert "pipeline.get_alignment_overview" in action_ids
+    assert "pipeline.get_episode_workspace" in action_ids

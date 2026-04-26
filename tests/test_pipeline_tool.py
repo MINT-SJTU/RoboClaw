@@ -180,3 +180,64 @@ def test_pipeline_tool_run_quality_emits_frontend_event(monkeypatch, tmp_path) -
     assert app_event["episode_indices"] == [0, 1, 2]
     assert app_event["selected_validators"] == ["metadata", "visual"]
     assert app_event["context"]["route"] == "/curation/quality"
+
+
+def test_pipeline_tool_get_alignment_overview(monkeypatch, tmp_path) -> None:
+    from roboclaw.http.routes import curation as curation_routes
+
+    class FakeService:
+        def get_alignment_overview(self, dataset_path):
+            assert dataset_path == tmp_path
+            return {"summary": {"total_checked": 2}, "rows": [{"episode_index": 0}]}
+
+    monkeypatch.setattr(curation_routes, "resolve_dataset_path", lambda _dataset: tmp_path)
+    monkeypatch.setattr(curation_routes, "_service", FakeService())
+
+    result = json.loads(
+        asyncio.run(PipelineTool().execute(action="get_alignment_overview", dataset="demo"))
+    )
+
+    assert result["summary"]["total_checked"] == 2
+    assert result["rows"][0]["episode_index"] == 0
+
+
+def test_pipeline_tool_get_episode_workspace(monkeypatch, tmp_path) -> None:
+    from roboclaw.http.routes import curation as curation_routes
+
+    class FakeService:
+        def get_workspace_payload(self, dataset, dataset_path, episode_index):
+            assert dataset == "demo"
+            assert dataset_path == tmp_path
+            assert episode_index == 7
+            return {
+                "episode_index": 7,
+                "videos": [{"url": "/api/curation/video/demo.mp4", "stream": "front"}],
+                "joint_trajectory": {
+                    "time_values": [0.0, 0.1],
+                    "frame_values": [0, 3],
+                    "joint_trajectories": [
+                        {
+                            "joint_name": "shoulder",
+                            "action_values": [0.1, 0.2],
+                            "state_values": [0.0, 0.15],
+                        }
+                    ],
+                },
+            }
+
+    monkeypatch.setattr(curation_routes, "resolve_dataset_path", lambda _dataset: tmp_path)
+    monkeypatch.setattr(curation_routes, "_service", FakeService())
+
+    result = json.loads(
+        asyncio.run(
+            PipelineTool().execute(
+                action="get_episode_workspace",
+                dataset="demo",
+                episode_index=7,
+            )
+        )
+    )
+
+    assert result["episode_index"] == 7
+    assert result["videos"][0]["stream"] == "front"
+    assert result["joint_trajectory"]["joint_trajectories"][0]["joint_name"] == "shoulder"

@@ -49,6 +49,8 @@ class PipelineTool(Tool):
                         "get_state",
                         "get_quality_defaults",
                         "get_quality_results",
+                        "get_alignment_overview",
+                        "get_episode_workspace",
                         "run_quality",
                         "pause_quality",
                         "resume_quality",
@@ -83,6 +85,11 @@ class PipelineTool(Tool):
                     "type": "array",
                     "items": {"type": "integer"},
                     "description": "Optional episode indices to run.",
+                },
+                "episode_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Episode index for inspecting video, joint trajectory, annotations, and quality context.",
                 },
                 "cluster_count": {
                     "type": "integer",
@@ -119,6 +126,7 @@ class PipelineTool(Tool):
         episode_indices: list[int] | None = None,
         include_videos: bool = False,
         force: bool = False,
+        episode_index: int | None = None,
         cluster_count: int | None = None,
         candidate_limit: int = 50,
         quality_filter_mode: str = "passed",
@@ -168,6 +176,14 @@ class PipelineTool(Tool):
 
             if action == "get_quality_results":
                 return _json(service.get_quality_results(dataset_path))
+
+            if action == "get_alignment_overview":
+                return _json(service.get_alignment_overview(dataset_path))
+
+            if action == "get_episode_workspace":
+                if episode_index is None:
+                    return _json({"error": "episode_index is required"})
+                return _json(service.get_workspace_payload(dataset, dataset_path, episode_index))
 
             if action == "run_quality":
                 defaults = service.get_quality_defaults(dataset_path, dataset)

@@ -117,11 +117,19 @@ APP_PAGES: list[dict[str, Any]] = [
     {
         "id": "curation_data_overview",
         "route": "/curation/data-overview",
-        "name": "数据概览",
-        "description": "Quality and alignment overview for checked episodes, export, and publish status.",
-        "state_sources": ["/api/curation/alignment-overview", "/api/curation/quality-results"],
+        "name": "数据总览",
+        "description": "Quality, DTW, semantic alignment, episode video, and joint-angle overview for checked episodes.",
+        "state_sources": [
+            "/api/curation/alignment-overview",
+            "/api/curation/quality-results",
+            "/api/curation/annotation-workspace",
+            "/api/curation/propagation-results",
+            "/api/curation/prototype-results",
+        ],
         "actions": [
+            _action("pipeline.get_alignment_overview", "读取数据总览结果", "pipeline", "get_alignment_overview", ["dataset"]),
             _action("pipeline.get_quality_results", "读取质量结果", "pipeline", "get_quality_results", ["dataset"]),
+            _action("pipeline.get_episode_workspace", "读取 episode 视频与关节角度", "pipeline", "get_episode_workspace", ["dataset", "episode_index"]),
             _action("pipeline.get_state", "读取 Pipeline 状态", "pipeline", "get_state", ["dataset"]),
         ],
     },
