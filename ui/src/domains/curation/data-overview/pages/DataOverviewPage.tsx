@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { ActionButton, GlassPanel } from '@/shared/ui'
 import { useI18n } from '@/i18n'
 import {
@@ -13,6 +13,14 @@ import { cn } from '@/shared/lib/cn'
 type ValidatorKey = 'metadata' | 'timing' | 'action' | 'visual' | 'depth' | 'ee_trajectory'
 type DelayMetric = 'dtw_start_delay_s' | 'dtw_end_delay_s' | 'duration_delta_s'
 type MissingMatrixState = 'pass' | 'fail' | 'supplemented' | null
+type EpisodeInspectHandlers = {
+  onPreviewEpisode: (episodeIndex: number) => void
+  onCommitEpisode: (episodeIndex: number) => void
+  onLeaveEpisode: () => void
+}
+
+const INSPECT_PREVIEW_DELAY_MS = 260
+const INSPECT_CLOSE_DELAY_MS = 220
 
 const VALIDATOR_KEYS: ValidatorKey[] = [
   'metadata',
@@ -616,12 +624,13 @@ function ChartEmpty({ label }: { label: string }) {
 function QualityTimelineChart({
   rows,
   emptyLabel,
-  onInspectEpisode,
+  inspectHandlers,
 }: {
   rows: AlignmentOverviewRow[]
   emptyLabel: string
-  onInspectEpisode: (episodeIndex: number) => void
+  inspectHandlers: EpisodeInspectHandlers
 }) {
+  const { onPreviewEpisode, onCommitEpisode, onLeaveEpisode } = inspectHandlers
   const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
   if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
 
@@ -666,11 +675,14 @@ function QualityTimelineChart({
         {points.map((point) => (
           <g
             key={point.row.episode_index}
+            data-overview-inspect-trigger="true"
             role="button"
             tabIndex={0}
-            onMouseEnter={() => onInspectEpisode(point.row.episode_index)}
-            onFocus={() => onInspectEpisode(point.row.episode_index)}
-            onClick={() => onInspectEpisode(point.row.episode_index)}
+            onMouseEnter={() => onPreviewEpisode(point.row.episode_index)}
+            onMouseLeave={onLeaveEpisode}
+            onFocus={() => onPreviewEpisode(point.row.episode_index)}
+            onBlur={onLeaveEpisode}
+            onClick={() => onCommitEpisode(point.row.episode_index)}
           >
             <title>{`Episode ${point.row.episode_index}: ${point.row.quality_score.toFixed(1)}`}</title>
             <circle
@@ -697,13 +709,14 @@ function ValidatorHeatmap({
   rows,
   locale,
   emptyLabel,
-  onInspectEpisode,
+  inspectHandlers,
 }: {
   rows: AlignmentOverviewRow[]
   locale: 'zh' | 'en'
   emptyLabel: string
-  onInspectEpisode: (episodeIndex: number) => void
+  inspectHandlers: EpisodeInspectHandlers
 }) {
+  const { onPreviewEpisode, onCommitEpisode, onLeaveEpisode } = inspectHandlers
   const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
   if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
   const gridStyle: CSSProperties = {
@@ -737,14 +750,17 @@ function ValidatorHeatmap({
                 <button
                   key={`${validator}-${row.episode_index}`}
                   type="button"
+                  data-overview-inspect-trigger="true"
                   className={cn('validator-heatmap__cell', failed && 'is-fail')}
                   style={{ backgroundColor: validatorColor(score, failed) }}
                   title={`Episode ${row.episode_index} · ${validator}: ${
                     typeof score === 'number' ? score.toFixed(1) : 'missing'
                   }`}
-                  onMouseEnter={() => onInspectEpisode(row.episode_index)}
-                  onFocus={() => onInspectEpisode(row.episode_index)}
-                  onClick={() => onInspectEpisode(row.episode_index)}
+                  onMouseEnter={() => onPreviewEpisode(row.episode_index)}
+                  onMouseLeave={onLeaveEpisode}
+                  onFocus={() => onPreviewEpisode(row.episode_index)}
+                  onBlur={onLeaveEpisode}
+                  onClick={() => onCommitEpisode(row.episode_index)}
                 />
               )
             })}
@@ -760,13 +776,14 @@ function MissingMatrix({
   rows,
   locale,
   emptyLabel,
-  onInspectEpisode,
+  inspectHandlers,
 }: {
   rows: AlignmentOverviewRow[]
   locale: 'zh' | 'en'
   emptyLabel: string
-  onInspectEpisode: (episodeIndex: number) => void
+  inspectHandlers: EpisodeInspectHandlers
 }) {
+  const { onPreviewEpisode, onCommitEpisode, onLeaveEpisode } = inspectHandlers
   const sortedRows = [...rows].sort((left, right) => left.episode_index - right.episode_index)
   if (sortedRows.length === 0) return <ChartEmpty label={emptyLabel} />
   const gridStyle: CSSProperties = {
@@ -798,6 +815,7 @@ function MissingMatrix({
                 <button
                   key={`${row.episode_index}-${check}`}
                   type="button"
+                  data-overview-inspect-trigger="true"
                   className={cn(
                     'missing-matrix__cell',
                     state === 'pass' && 'is-pass',
@@ -808,9 +826,11 @@ function MissingMatrix({
                   title={`Episode ${row.episode_index} · ${formatCheckLabel(check, locale)}: ${
                     formatMissingMatrixState(state, locale)
                   }`}
-                  onMouseEnter={() => onInspectEpisode(row.episode_index)}
-                  onFocus={() => onInspectEpisode(row.episode_index)}
-                  onClick={() => onInspectEpisode(row.episode_index)}
+                  onMouseEnter={() => onPreviewEpisode(row.episode_index)}
+                  onMouseLeave={onLeaveEpisode}
+                  onFocus={() => onPreviewEpisode(row.episode_index)}
+                  onBlur={onLeaveEpisode}
+                  onClick={() => onCommitEpisode(row.episode_index)}
                 />
               )
             })}
@@ -873,13 +893,14 @@ function SemanticSpanTimeline({
   rows,
   locale,
   emptyLabel,
-  onInspectEpisode,
+  inspectHandlers,
 }: {
   rows: AlignmentOverviewRow[]
   locale: 'zh' | 'en'
   emptyLabel: string
-  onInspectEpisode: (episodeIndex: number) => void
+  inspectHandlers: EpisodeInspectHandlers
 }) {
+  const { onPreviewEpisode, onCommitEpisode, onLeaveEpisode } = inspectHandlers
   const rowsWithSpans = [...rows]
     .sort((left, right) => left.episode_index - right.episode_index)
     .filter((row) => rowSemanticSpans(row).length > 0)
@@ -892,10 +913,13 @@ function SemanticSpanTimeline({
         <div key={row.episode_index} className="semantic-timeline__row">
           <button
             type="button"
+            data-overview-inspect-trigger="true"
             className="semantic-timeline__episode"
-            onMouseEnter={() => onInspectEpisode(row.episode_index)}
-            onFocus={() => onInspectEpisode(row.episode_index)}
-            onClick={() => onInspectEpisode(row.episode_index)}
+            onMouseEnter={() => onPreviewEpisode(row.episode_index)}
+            onMouseLeave={onLeaveEpisode}
+            onFocus={() => onPreviewEpisode(row.episode_index)}
+            onBlur={onLeaveEpisode}
+            onClick={() => onCommitEpisode(row.episode_index)}
           >
             {row.episode_index}
           </button>
@@ -909,15 +933,18 @@ function SemanticSpanTimeline({
                 <button
                   key={`${span.id || semanticLabel(span, locale)}-${index}`}
                   type="button"
+                  data-overview-inspect-trigger="true"
                   className={cn(
                     'semantic-timeline__span',
                     span.source === 'dtw_propagated' && 'is-propagated',
                   )}
                   style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
                   title={`${semanticLabel(span, locale)} · ${formatTimeWindow(span, locale)}`}
-                  onMouseEnter={() => onInspectEpisode(row.episode_index)}
-                  onFocus={() => onInspectEpisode(row.episode_index)}
-                  onClick={() => onInspectEpisode(row.episode_index)}
+                  onMouseEnter={() => onPreviewEpisode(row.episode_index)}
+                  onMouseLeave={onLeaveEpisode}
+                  onFocus={() => onPreviewEpisode(row.episode_index)}
+                  onBlur={onLeaveEpisode}
+                  onClick={() => onCommitEpisode(row.episode_index)}
                 >
                   <span>{semanticLabel(span, locale)}</span>
                   <em>{formatTimeWindow(span, locale)}</em>
@@ -1027,12 +1054,13 @@ function CoverageStackedBar({
 function PrototypeClusterChart({
   clusters,
   emptyLabel,
-  onInspectEpisode,
+  inspectHandlers,
 }: {
   clusters: PrototypeCluster[]
   emptyLabel: string
-  onInspectEpisode: (episodeIndex: number) => void
+  inspectHandlers: EpisodeInspectHandlers
 }) {
+  const { onPreviewEpisode, onCommitEpisode, onLeaveEpisode } = inspectHandlers
   if (clusters.length === 0) return <ChartEmpty label={emptyLabel} />
   const maxMembers = Math.max(...clusters.map((cluster) => cluster.member_count), 1)
 
@@ -1044,16 +1072,19 @@ function PrototypeClusterChart({
           <button
             key={cluster.cluster_index}
             type="button"
+            data-overview-inspect-trigger="true"
             className="prototype-cluster-chart__row"
             disabled={episodeIndex === null}
             onMouseEnter={() => {
-              if (episodeIndex !== null) onInspectEpisode(episodeIndex)
+              if (episodeIndex !== null) onPreviewEpisode(episodeIndex)
             }}
+            onMouseLeave={onLeaveEpisode}
             onFocus={() => {
-              if (episodeIndex !== null) onInspectEpisode(episodeIndex)
+              if (episodeIndex !== null) onPreviewEpisode(episodeIndex)
             }}
+            onBlur={onLeaveEpisode}
             onClick={() => {
-              if (episodeIndex !== null) onInspectEpisode(episodeIndex)
+              if (episodeIndex !== null) onCommitEpisode(episodeIndex)
             }}
           >
             <span className="prototype-cluster-chart__label">C{cluster.cluster_index}</span>
@@ -1080,12 +1111,13 @@ function PrototypeClusterChart({
 function QualityDtwScatter({
   rows,
   emptyLabel,
-  onInspectEpisode,
+  inspectHandlers,
 }: {
   rows: AlignmentOverviewRow[]
   emptyLabel: string
-  onInspectEpisode: (episodeIndex: number) => void
+  inspectHandlers: EpisodeInspectHandlers
 }) {
+  const { onPreviewEpisode, onCommitEpisode, onLeaveEpisode } = inspectHandlers
   const points = rows
     .map((row) => ({ row, delay: averageDelayForRow(row, 'dtw_start_delay_s') }))
     .filter((point): point is { row: AlignmentOverviewRow; delay: number } => point.delay !== null)
@@ -1129,11 +1161,14 @@ function QualityDtwScatter({
         {points.map((point) => (
           <g
             key={point.row.episode_index}
+            data-overview-inspect-trigger="true"
             role="button"
             tabIndex={0}
-            onMouseEnter={() => onInspectEpisode(point.row.episode_index)}
-            onFocus={() => onInspectEpisode(point.row.episode_index)}
-            onClick={() => onInspectEpisode(point.row.episode_index)}
+            onMouseEnter={() => onPreviewEpisode(point.row.episode_index)}
+            onMouseLeave={onLeaveEpisode}
+            onFocus={() => onPreviewEpisode(point.row.episode_index)}
+            onBlur={onLeaveEpisode}
+            onClick={() => onCommitEpisode(point.row.episode_index)}
           >
             <title>{`Episode ${point.row.episode_index}: score ${point.row.quality_score.toFixed(1)}, delay ${formatChartValue(point.delay)}s`}</title>
             <circle
@@ -1276,10 +1311,14 @@ function OverviewRowDetailPopover({
   row,
   locale,
   onClose,
+  onInspectorEnter,
+  onInspectorLeave,
 }: {
   row: AlignmentOverviewRow
   locale: 'zh' | 'en'
   onClose: () => void
+  onInspectorEnter: () => void
+  onInspectorLeave: () => void
 }) {
   const copy = locale === 'zh'
     ? {
@@ -1348,7 +1387,12 @@ function OverviewRowDetailPopover({
   const taskInfo = taskInfoForRow(row)
 
   return (
-    <div className="quality-detail-inspector overview-row-detail-popover" role="status">
+    <div
+      className="quality-detail-inspector overview-row-detail-popover"
+      role="status"
+      onPointerEnter={onInspectorEnter}
+      onPointerLeave={onInspectorLeave}
+    >
       <div className="quality-detail-inspector__head">
         <div>
           <div className="quality-detail-inspector__eyebrow">{copy.title}</div>
@@ -1538,6 +1582,91 @@ export default function DataOverviewPage() {
   const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<number[]>([])
   const [inspectedEpisodeId, setInspectedEpisodeId] = useState<number | null>(null)
   const [propagationSourceSpans, setPropagationSourceSpans] = useState<AlignmentOverviewSpan[]>([])
+  const inspectOpenTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+  const inspectCloseTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+
+  const clearInspectOpenTimer = useCallback(() => {
+    if (inspectOpenTimerRef.current) {
+      window.clearTimeout(inspectOpenTimerRef.current)
+      inspectOpenTimerRef.current = null
+    }
+  }, [])
+
+  const clearInspectCloseTimer = useCallback(() => {
+    if (inspectCloseTimerRef.current) {
+      window.clearTimeout(inspectCloseTimerRef.current)
+      inspectCloseTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      clearInspectOpenTimer()
+      clearInspectCloseTimer()
+    }
+  }, [clearInspectOpenTimer, clearInspectCloseTimer])
+
+  const closeInspector = useCallback(() => {
+    clearInspectOpenTimer()
+    clearInspectCloseTimer()
+    setInspectedEpisodeId(null)
+  }, [clearInspectOpenTimer, clearInspectCloseTimer])
+
+  const cancelInspectorClose = useCallback(() => {
+    clearInspectCloseTimer()
+  }, [clearInspectCloseTimer])
+
+  const previewInspectEpisode = useCallback((episodeIndex: number) => {
+    clearInspectOpenTimer()
+    clearInspectCloseTimer()
+    inspectOpenTimerRef.current = window.setTimeout(() => {
+      setInspectedEpisodeId(episodeIndex)
+      inspectOpenTimerRef.current = null
+    }, INSPECT_PREVIEW_DELAY_MS)
+  }, [clearInspectOpenTimer, clearInspectCloseTimer])
+
+  const commitInspectEpisode = useCallback((episodeIndex: number) => {
+    clearInspectOpenTimer()
+    clearInspectCloseTimer()
+    setInspectedEpisodeId(episodeIndex)
+  }, [clearInspectOpenTimer, clearInspectCloseTimer])
+
+  const scheduleInspectorClose = useCallback(() => {
+    clearInspectOpenTimer()
+    clearInspectCloseTimer()
+    inspectCloseTimerRef.current = window.setTimeout(() => {
+      setInspectedEpisodeId(null)
+      inspectCloseTimerRef.current = null
+    }, INSPECT_CLOSE_DELAY_MS)
+  }, [clearInspectOpenTimer, clearInspectCloseTimer])
+
+  const inspectHandlers = useMemo<EpisodeInspectHandlers>(() => ({
+    onPreviewEpisode: previewInspectEpisode,
+    onCommitEpisode: commitInspectEpisode,
+    onLeaveEpisode: scheduleInspectorClose,
+  }), [previewInspectEpisode, commitInspectEpisode, scheduleInspectorClose])
+
+  useEffect(() => {
+    if (inspectedEpisodeId === null) return undefined
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (
+        target.closest('.overview-row-detail-popover')
+        || target.closest('[data-overview-inspect-trigger="true"]')
+      ) {
+        cancelInspectorClose()
+        return
+      }
+      scheduleInspectorClose()
+    }
+
+    document.addEventListener('pointermove', handlePointerMove)
+    return () => {
+      document.removeEventListener('pointermove', handlePointerMove)
+    }
+  }, [inspectedEpisodeId, cancelInspectorClose, scheduleInspectorClose])
 
   useEffect(() => {
     if (selectedDataset && !datasetInfo) {
@@ -1843,7 +1972,7 @@ export default function DataOverviewPage() {
             <QualityTimelineChart
               rows={filteredRows}
               emptyLabel={overviewCopy.empty}
-              onInspectEpisode={setInspectedEpisodeId}
+              inspectHandlers={inspectHandlers}
             />
           </PipelineChartPanel>
           <PipelineChartPanel
@@ -1855,7 +1984,7 @@ export default function DataOverviewPage() {
               rows={filteredRows}
               locale={locale}
               emptyLabel={overviewCopy.empty}
-              onInspectEpisode={setInspectedEpisodeId}
+              inspectHandlers={inspectHandlers}
             />
           </PipelineChartPanel>
           <PipelineChartPanel
@@ -1867,7 +1996,7 @@ export default function DataOverviewPage() {
               rows={filteredRows}
               locale={locale}
               emptyLabel={overviewCopy.empty}
-              onInspectEpisode={setInspectedEpisodeId}
+              inspectHandlers={inspectHandlers}
             />
           </PipelineChartPanel>
         </div>
@@ -1890,7 +2019,7 @@ export default function DataOverviewPage() {
               rows={filteredRows}
               locale={locale}
               emptyLabel={overviewCopy.empty}
-              onInspectEpisode={setInspectedEpisodeId}
+              inspectHandlers={inspectHandlers}
             />
           </PipelineChartPanel>
           <PipelineChartPanel title={overviewCopy.labelBars} subtitle={overviewCopy.labelBarsDesc}>
@@ -1911,14 +2040,14 @@ export default function DataOverviewPage() {
             <PrototypeClusterChart
               clusters={prototypeResults?.clusters || []}
               emptyLabel={overviewCopy.empty}
-              onInspectEpisode={setInspectedEpisodeId}
+              inspectHandlers={inspectHandlers}
             />
           </PipelineChartPanel>
           <PipelineChartPanel title={overviewCopy.scatter} subtitle={overviewCopy.scatterDesc}>
             <QualityDtwScatter
               rows={filteredRows}
               emptyLabel={overviewCopy.empty}
-              onInspectEpisode={setInspectedEpisodeId}
+              inspectHandlers={inspectHandlers}
             />
           </PipelineChartPanel>
         </div>
@@ -1970,6 +2099,7 @@ export default function DataOverviewPage() {
                 return (
                   <tr
                     key={row.episode_index}
+                    data-overview-inspect-trigger="true"
                     className={cn(
                       'quality-result-row',
                       'overview-result-row',
@@ -1977,16 +2107,18 @@ export default function DataOverviewPage() {
                       inspectedEpisodeId === row.episode_index && 'is-inspected',
                     )}
                     tabIndex={0}
-                    onClick={() => setInspectedEpisodeId(row.episode_index)}
-                    onPointerEnter={() => setInspectedEpisodeId(row.episode_index)}
-                    onMouseEnter={() => setInspectedEpisodeId(row.episode_index)}
-                    onFocus={() => setInspectedEpisodeId(row.episode_index)}
+                    onClick={() => commitInspectEpisode(row.episode_index)}
+                    onPointerEnter={() => previewInspectEpisode(row.episode_index)}
+                    onPointerLeave={scheduleInspectorClose}
+                    onFocus={() => previewInspectEpisode(row.episode_index)}
+                    onBlur={scheduleInspectorClose}
                   >
                     <td className="quality-table__checkbox-cell">
                       <input
                         type="checkbox"
                         checked={selected}
                         onChange={() => toggleEpisodeSelection(row.episode_index)}
+                        onClick={(event) => event.stopPropagation()}
                         aria-label={`${t('selectedRows')} ${row.episode_index}`}
                       />
                     </td>
@@ -2021,7 +2153,9 @@ export default function DataOverviewPage() {
         <OverviewRowDetailPopover
           row={inspectedRow}
           locale={locale}
-          onClose={() => setInspectedEpisodeId(null)}
+          onClose={closeInspector}
+          onInspectorEnter={cancelInspectorClose}
+          onInspectorLeave={scheduleInspectorClose}
         />
       )}
 
