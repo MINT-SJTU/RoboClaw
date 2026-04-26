@@ -10,11 +10,26 @@
   pointer-events: none;
 }
 
+.chat-widget:has(.chat-widget__surface) {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  flex-direction: row;
+  justify-content: center;
+  padding: clamp(24px, 5vw, 56px);
+}
+
 .chat-widget__surface {
   position: relative;
   pointer-events: auto;
   display: flex;
-  width: min(430px, calc(100vw - 48px));
+  width: min(760px, calc(100vw - 56px));
+  height: min(680px, calc(100vh - 84px));
   flex-direction: column;
   overflow: hidden;
   border: 1px solid rgba(112, 118, 128, 0.045);
@@ -132,8 +147,8 @@
   position: relative;
   isolation: isolate;
   display: flex;
-  min-height: 118px;
-  max-height: min(265px, calc(100vh - 176px));
+  min-height: 0;
+  flex: 1;
   flex-direction: column;
   overflow: hidden auto;
   border: 0;
@@ -788,8 +803,13 @@
     bottom: max(16px, env(safe-area-inset-bottom));
   }
 
+  .chat-widget:has(.chat-widget__surface) {
+    padding: max(12px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
+  }
+
   .chat-widget__surface {
     width: calc(100vw - 24px);
+    height: calc(100vh - 32px);
   }
 
   .chat-composer {
@@ -797,8 +817,6 @@
   }
 
   .chat-widget__conversation {
-    min-height: 104px;
-    max-height: min(240px, calc(100vh - 154px));
     border-radius: 16px;
     padding: 10px;
   }
