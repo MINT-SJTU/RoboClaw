@@ -109,7 +109,10 @@ class WebRuntime:
 
         # Hardware monitor + EmbodiedService (only if web channel available)
         if web_ch is not None:
-            rt._build_embodied(web_ch)
+            try:
+                rt._build_embodied(web_ch)
+            except ModuleNotFoundError as exc:
+                logger.warning("Embodied dashboard disabled; optional dependency missing: {}", exc)
 
         return rt
 

@@ -134,6 +134,57 @@ def test_provider_save_rejects_invalid_config_without_persisting(tmp_path: Path)
     assert saved_config.providers.custom.api_base is None
 
 
+def test_provider_status_treats_oauth_provider_as_configured(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.agents.defaults.provider = "openai_codex"
+    config.agents.defaults.model = "openai-codex/gpt-5.1-codex"
+    save_config(config, config_path)
+    set_config_path(config_path)
+
+    app = create_app(config_path=str(config_path), workspace=str(tmp_path / "workspace"))
+    client = TestClient(app)
+
+    status = client.get("/api/system/provider-status")
+
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["active_provider"] == "openai_codex"
+    assert payload["active_provider_configured"] is True
+
+
+def test_provider_save_rejects_codex_base_for_custom_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.agents.defaults.provider = "openai"
+    config.agents.defaults.model = "gpt-4o-mini"
+    config.providers.openai.api_key = "sk-existing"
+    save_config(config, config_path)
+    set_config_path(config_path)
+
+    app = create_app(config_path=str(config_path), workspace=str(tmp_path / "workspace"))
+    client = TestClient(app)
+
+    save = client.post(
+        "/api/system/provider-config",
+        json={
+            "provider": "custom",
+            "model": "gpt-5.2",
+            "api_base": "https://right.codes/codex/v1",
+            "api_key": "sk-test",
+        },
+    )
+
+    assert save.status_code == 400
+    detail = save.json()["detail"]
+    assert detail["code"] == "provider_configuration_error"
+    assert "Codex endpoint" in detail["message"]
+
+    saved_config = Config.model_validate_json(config_path.read_text())
+    assert saved_config.agents.defaults.provider == "openai"
+    assert saved_config.providers.custom.api_base is None
+
+
 def test_provider_models_discovers_from_payload(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "config.json"
     save_config(Config(), config_path)
@@ -213,3 +264,31 @@ def test_provider_test_returns_provider_permission_error(tmp_path: Path, monkeyp
     assert payload["ok"] is False
     assert payload["finish_reason"] == "error"
     assert "API Key 不允许访问该渠道" in payload["error"]
+
+
+def test_provider_test_rejects_codex_base_for_custom_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.agents.defaults.provider = "custom"
+    config.agents.defaults.model = "gpt-4o-mini"
+    config.providers.custom.api_base = "http://127.0.0.1:8000/v1"
+    config.providers.custom.api_key = "sk-existing"
+    save_config(config, config_path)
+    set_config_path(config_path)
+
+    app = create_app(config_path=str(config_path), workspace=str(tmp_path / "workspace"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/system/provider-test",
+        json={
+            "provider": "custom",
+            "model": "gpt-5.2",
+            "api_base": "https://right.codes/codex/v1",
+            "api_key": "sk-test",
+            "input": "测试输入",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Codex endpoint" in response.json()["detail"]["message"]

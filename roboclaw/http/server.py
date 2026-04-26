@@ -21,7 +21,7 @@ from loguru import logger
 
 from roboclaw.channels.web import WebChannel
 from roboclaw.config.loader import get_config_path, load_config, load_runtime_config, save_config
-from roboclaw.providers.factory import ProviderConfigurationError, build_provider
+from roboclaw.providers.factory import ProviderConfigurationError, build_provider, is_codex_api_base
 from roboclaw.providers.registry import PROVIDERS, find_by_name
 from roboclaw.utils.helpers import sync_workspace_templates
 
@@ -63,7 +63,7 @@ def _provider_options(config: Any) -> list[dict[str, Any]]:
 
 def _is_provider_configured(spec: Any, provider_config: Any) -> bool:
     if spec.is_oauth:
-        return False
+        return True
     if spec.name == "azure_openai":
         return bool(provider_config and provider_config.api_key and provider_config.api_base)
     if spec.is_local or spec.name == "custom":
@@ -226,6 +226,7 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
     provider_name, section = _resolve_provider_section(config, payload)
     _apply_credential_payload(payload, section)
     _apply_extra_headers(payload, section)
+    _validate_provider_payload(provider_name, section)
     config.agents.defaults.provider = provider_name
     await _resolve_default_model(config, payload, section, allow_discovery=True)
 
@@ -280,6 +281,7 @@ async def _handle_provider_test(payload: dict[str, Any]) -> dict[str, Any]:
     provider_name, section = _resolve_provider_section(config, payload)
     _apply_credential_payload(payload, section)
     _apply_extra_headers(payload, section)
+    _validate_provider_payload(provider_name, section)
     config.agents.defaults.provider = provider_name
     await _resolve_default_model(config, payload, section, allow_discovery=False)
 
@@ -312,6 +314,8 @@ async def _handle_provider_test(payload: dict[str, Any]) -> dict[str, Any]:
 def _resolve_provider_section(config: Any, payload: dict[str, Any]) -> tuple[str, Any]:
     """Resolve the providers.<name> section from payload, raising 400 if unknown."""
     provider_name = str(payload.get("provider") or config.agents.defaults.provider or "custom")
+    if provider_name == "auto":
+        provider_name = "custom"
     section = getattr(config.providers, provider_name, None)
     if section is None:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
@@ -328,6 +332,22 @@ def _apply_credential_payload(payload: dict[str, Any], section: Any) -> None:
     api_base = payload.get("api_base")
     if isinstance(api_base, str):
         section.api_base = api_base.strip() or None
+
+
+def _validate_provider_payload(provider_name: str, section: Any) -> None:
+    """Reject endpoint/provider combinations that are known to route incorrectly."""
+    if provider_name == "custom" and is_codex_api_base(section.api_base):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "provider_configuration_error",
+                "message": "Custom provider cannot use a Codex endpoint.",
+                "hint": (
+                    "Select OpenAI Codex as the provider and run `roboclaw provider login openai-codex`, "
+                    "or use a Chat Completions API base for Custom."
+                ),
+            },
+        )
 
 
 async def _resolve_default_model(
@@ -347,6 +367,12 @@ async def _resolve_default_model(
 
     provider_name = config.agents.defaults.provider
     spec = find_by_name(provider_name) if provider_name else None
+    if provider_name == "custom" and allow_discovery and section.api_base:
+        discovered = await _discover_custom_model(section.api_base, section.api_key or None)
+        if discovered:
+            config.agents.defaults.model = discovered
+            return
+
     if spec and spec.default_model:
         config.agents.defaults.model = spec.default_model
         return
@@ -424,7 +450,7 @@ def create_app(
     _register_system_routes(app, runtime)
 
     # Dashboard routes
-    if web_ch is not None:
+    if web_ch is not None and runtime.embodied_service is not None:
         from roboclaw.http.routes import register_all_routes
 
         app.state.hardware_monitor = runtime.hw_monitor
@@ -447,11 +473,12 @@ def create_app(
 
     # Serve built frontend in production (ui/dist/)
     ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
-    if ui_dist.is_dir():
+    ui_assets = ui_dist / "assets"
+    if (ui_dist / "index.html").is_file() and ui_assets.is_dir():
         from starlette.staticfiles import StaticFiles
         from starlette.responses import FileResponse
 
-        app.mount("/assets", StaticFiles(directory=str(ui_dist / "assets")), name="ui-assets")
+        app.mount("/assets", StaticFiles(directory=str(ui_assets)), name="ui-assets")
 
         @app.get("/{full_path:path}")
         async def _spa_fallback(full_path: str):

@@ -14,6 +14,7 @@ const UI_PROVIDERS = [
   'zhipu', 'moonshot', 'minimax',
   'openrouter', 'aihubmix', 'siliconflow', 'volcengine',
   'ollama', 'vllm',
+  'openai_codex', 'github_copilot',
   'custom',
 ]
 
@@ -25,13 +26,27 @@ function providerCategory(p: ProviderOption): 'standard' | 'gateway' | 'local' |
 }
 
 function needsApiKey(p: ProviderOption): boolean {
+  if (p.oauth) return false
   const category = providerCategory(p)
   return category === 'standard' || category === 'gateway' || category === 'custom'
 }
 
 function needsBaseUrl(p: ProviderOption): boolean {
+  if (p.oauth) return false
   const category = providerCategory(p)
   return category === 'gateway' || category === 'local' || category === 'custom'
+}
+
+function canDiscoverModels(p: ProviderOption): boolean {
+  return !p.oauth
+}
+
+function canUseProviderTest(p: ProviderOption): boolean {
+  return !p.oauth
+}
+
+function canUseExtraHeaders(p: ProviderOption): boolean {
+  return !p.oauth
 }
 
 function providerModel(provider: ProviderOption, currentModel = ''): string {
@@ -408,14 +423,16 @@ export default function ProviderSettingsPage() {
                 </label>
 
                 <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={handleDiscoverModels}
-                    disabled={discoveringModels}
-                    className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {discoveringModels ? t('discoveringModels') : t('discoverModels')}
-                  </button>
+                  {canDiscoverModels(selected) && (
+                    <button
+                      type="button"
+                      onClick={handleDiscoverModels}
+                      disabled={discoveringModels}
+                      className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {discoveringModels ? t('discoveringModels') : t('discoverModels')}
+                    </button>
+                  )}
 
                   {selectableModels.length > 0 && (
                     <div className="rounded-xl border border-bd/50 bg-white/70 p-2">
@@ -451,37 +468,41 @@ export default function ProviderSettingsPage() {
                   </label>
                 )}
 
-                <label className="block">
-                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('extraHeaders')}</div>
-                  <textarea
-                    value={extraHeadersText}
-                    onChange={(e) => setExtraHeadersText(e.target.value)}
-                    spellCheck={false}
-                    className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 font-mono text-xs text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
-                    placeholder='{"APP-Code":"ROBOCLAW"}'
-                  />
-                  <div className="mt-1 text-2xs text-tx3">{t('extraHeadersHint')}</div>
-                </label>
-
-                <div className="space-y-2 rounded-xl border border-bd/50 bg-white/70 p-3">
+                {canUseExtraHeaders(selected) && (
                   <label className="block">
-                    <div className="mb-1.5 text-xs font-medium text-tx2">{t('providerTestInput')}</div>
+                    <div className="mb-1.5 text-xs font-medium text-tx2">{t('extraHeaders')}</div>
                     <textarea
-                      value={testInput}
-                      onChange={(e) => setTestInput(e.target.value)}
-                      className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
-                      placeholder={t('providerTestPlaceholder')}
+                      value={extraHeadersText}
+                      onChange={(e) => setExtraHeadersText(e.target.value)}
+                      spellCheck={false}
+                      className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 font-mono text-xs text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                      placeholder='{"APP-Code":"ROBOCLAW"}'
                     />
+                    <div className="mt-1 text-2xs text-tx3">{t('extraHeadersHint')}</div>
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleTestProvider}
-                    disabled={testingProvider}
-                    className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {testingProvider ? t('testingProvider') : t('testProvider')}
-                  </button>
-                </div>
+                )}
+
+                {canUseProviderTest(selected) && (
+                  <div className="space-y-2 rounded-xl border border-bd/50 bg-white/70 p-3">
+                    <label className="block">
+                      <div className="mb-1.5 text-xs font-medium text-tx2">{t('providerTestInput')}</div>
+                      <textarea
+                        value={testInput}
+                        onChange={(e) => setTestInput(e.target.value)}
+                        className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                        placeholder={t('providerTestPlaceholder')}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleTestProvider}
+                      disabled={testingProvider}
+                      className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {testingProvider ? t('testingProvider') : t('testProvider')}
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-3">
                   <button
