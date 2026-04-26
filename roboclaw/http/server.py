@@ -21,7 +21,7 @@ from loguru import logger
 
 from roboclaw.channels.web import WebChannel
 from roboclaw.config.loader import get_config_path, load_config, load_runtime_config, save_config
-from roboclaw.providers.factory import ProviderConfigurationError, build_provider, is_codex_api_base
+from roboclaw.providers.factory import ProviderConfigurationError, build_provider
 from roboclaw.providers.registry import PROVIDERS, find_by_name
 from roboclaw.utils.helpers import sync_workspace_templates
 
@@ -226,7 +226,6 @@ async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) ->
     provider_name, section = _resolve_provider_section(config, payload)
     _apply_credential_payload(payload, section)
     _apply_extra_headers(payload, section)
-    _validate_provider_payload(provider_name, section)
     config.agents.defaults.provider = provider_name
     await _resolve_default_model(config, payload, section, allow_discovery=True)
 
@@ -281,7 +280,6 @@ async def _handle_provider_test(payload: dict[str, Any]) -> dict[str, Any]:
     provider_name, section = _resolve_provider_section(config, payload)
     _apply_credential_payload(payload, section)
     _apply_extra_headers(payload, section)
-    _validate_provider_payload(provider_name, section)
     config.agents.defaults.provider = provider_name
     await _resolve_default_model(config, payload, section, allow_discovery=False)
 
@@ -332,22 +330,6 @@ def _apply_credential_payload(payload: dict[str, Any], section: Any) -> None:
     api_base = payload.get("api_base")
     if isinstance(api_base, str):
         section.api_base = api_base.strip() or None
-
-
-def _validate_provider_payload(provider_name: str, section: Any) -> None:
-    """Reject endpoint/provider combinations that are known to route incorrectly."""
-    if provider_name == "custom" and is_codex_api_base(section.api_base):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "provider_configuration_error",
-                "message": "Custom provider cannot use a Codex endpoint.",
-                "hint": (
-                    "Select OpenAI Codex as the provider and run `roboclaw provider login openai-codex`, "
-                    "or use a Chat Completions API base for Custom."
-                ),
-            },
-        )
 
 
 async def _resolve_default_model(

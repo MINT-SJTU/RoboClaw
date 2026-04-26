@@ -37,21 +37,19 @@ def test_build_provider_custom_requires_api_base() -> None:
         build_provider(config)
 
 
-def test_build_provider_rejects_codex_base_for_custom_provider() -> None:
+def test_build_provider_allows_custom_gateway_codex_path() -> None:
     config = Config()
     config.agents.defaults.provider = "custom"
     config.agents.defaults.model = "gpt-5.2"
     config.providers.custom.api_base = "https://right.codes/codex/v1"
     config.providers.custom.api_key = "sk-test"
 
-    with pytest.raises(ProviderConfigurationError) as exc_info:
-        build_provider(config)
+    provider = build_provider(config)
 
-    assert "Codex endpoint" in str(exc_info.value)
-    assert "OpenAI Codex" in exc_info.value.hint
+    assert isinstance(provider, CustomProvider)
 
 
-def test_load_config_migrates_custom_codex_base_to_openai_codex(tmp_path) -> None:
+def test_load_config_preserves_custom_gateway_codex_path(tmp_path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(
         """
@@ -65,8 +63,9 @@ def test_load_config_migrates_custom_codex_base_to_openai_codex(tmp_path) -> Non
 
     config = load_config(config_path)
 
-    assert config.agents.defaults.provider == "openai_codex"
-    assert config.agents.defaults.model == "openai-codex/gpt-5.1-codex"
+    assert config.agents.defaults.provider == "custom"
+    assert config.agents.defaults.model == "gpt-5.2"
+    assert config.providers.custom.api_base == "https://right.codes/codex/v1"
 
 
 @pytest.mark.asyncio

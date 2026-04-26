@@ -153,7 +153,7 @@ def test_provider_status_treats_oauth_provider_as_configured(tmp_path: Path) -> 
     assert payload["active_provider_configured"] is True
 
 
-def test_provider_save_rejects_codex_base_for_custom_provider(tmp_path: Path) -> None:
+def test_provider_save_allows_custom_gateway_codex_path(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config = Config()
     config.agents.defaults.provider = "openai"
@@ -175,14 +175,16 @@ def test_provider_save_rejects_codex_base_for_custom_provider(tmp_path: Path) ->
         },
     )
 
-    assert save.status_code == 400
-    detail = save.json()["detail"]
-    assert detail["code"] == "provider_configuration_error"
-    assert "Codex endpoint" in detail["message"]
+    assert save.status_code == 200
+    payload = save.json()
+    assert payload["default_provider"] == "custom"
+    assert payload["active_provider"] == "custom"
+    assert payload["custom_provider"]["api_base"] == "https://right.codes/codex/v1"
 
     saved_config = Config.model_validate_json(config_path.read_text())
-    assert saved_config.agents.defaults.provider == "openai"
-    assert saved_config.providers.custom.api_base is None
+    assert saved_config.agents.defaults.provider == "custom"
+    assert saved_config.agents.defaults.model == "gpt-5.2"
+    assert saved_config.providers.custom.api_base == "https://right.codes/codex/v1"
 
 
 def test_provider_models_discovers_from_payload(tmp_path: Path, monkeypatch) -> None:
@@ -266,7 +268,7 @@ def test_provider_test_returns_provider_permission_error(tmp_path: Path, monkeyp
     assert "API Key 不允许访问该渠道" in payload["error"]
 
 
-def test_provider_test_rejects_codex_base_for_custom_provider(tmp_path: Path) -> None:
+def test_provider_test_allows_custom_gateway_codex_path(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "config.json"
     config = Config()
     config.agents.defaults.provider = "custom"
@@ -275,6 +277,14 @@ def test_provider_test_rejects_codex_base_for_custom_provider(tmp_path: Path) ->
     config.providers.custom.api_key = "sk-existing"
     save_config(config, config_path)
     set_config_path(config_path)
+
+    class OkProvider:
+        async def chat_with_retry(self, **kwargs: Any) -> LLMResponse:
+            assert kwargs["model"] == "gpt-5.2"
+            assert kwargs["messages"][0]["content"] == "测试输入"
+            return LLMResponse(content="OK", finish_reason="stop")
+
+    monkeypatch.setattr("roboclaw.http.server.build_provider", lambda _config: OkProvider())
 
     app = create_app(config_path=str(config_path), workspace=str(tmp_path / "workspace"))
     client = TestClient(app)
@@ -290,5 +300,5 @@ def test_provider_test_rejects_codex_base_for_custom_provider(tmp_path: Path) ->
         },
     )
 
-    assert response.status_code == 400
-    assert "Codex endpoint" in response.json()["detail"]["message"]
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "finish_reason": "stop", "content": "OK"}

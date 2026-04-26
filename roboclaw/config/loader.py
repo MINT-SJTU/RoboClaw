@@ -88,16 +88,4 @@ def _migrate_config(data: dict) -> dict:
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
 
-    defaults = data.get("agents", {}).get("defaults", {})
-    providers = data.get("providers", {})
-    custom = providers.get("custom", {})
-    custom_base = custom.get("apiBase") or custom.get("api_base") or ""
-    if defaults.get("provider") == "custom" and _is_codex_base(custom_base):
-        defaults["provider"] = "openai_codex"
-        defaults["model"] = "openai-codex/gpt-5.1-codex"
     return data
-
-
-def _is_codex_base(api_base: str) -> bool:
-    normalized = api_base.rstrip("/").lower()
-    return normalized.endswith("/codex") or "/codex/" in normalized

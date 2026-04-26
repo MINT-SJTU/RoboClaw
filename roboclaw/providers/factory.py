@@ -18,14 +18,6 @@ class ProviderConfigurationError(RuntimeError):
         self.hint = hint
 
 
-def is_codex_api_base(api_base: str | None) -> bool:
-    """Return True for Codex/Responses endpoints that CustomProvider must not use."""
-    if not api_base:
-        return False
-    normalized = api_base.rstrip("/").lower()
-    return normalized.endswith("/codex") or "/codex/" in normalized
-
-
 def build_provider(config: Config) -> LLMProvider:
     """Create the active provider from config or raise ProviderConfigurationError."""
     stub_module = os.environ.get("ROBOCLAW_STUB_LLM")
@@ -45,12 +37,6 @@ def build_provider(config: Config) -> LLMProvider:
             raise ProviderConfigurationError(
                 "Custom provider requires api_base.",
                 "Set the global base URL in the Web Settings page or in providers.custom.api_base.",
-            )
-        if is_codex_api_base(provider_config.api_base):
-            raise ProviderConfigurationError(
-                "Custom provider cannot use a Codex endpoint.",
-                "Select OpenAI Codex as the provider and run `roboclaw provider login openai-codex`, "
-                "or use a Chat Completions API base for Custom.",
             )
         from roboclaw.providers.custom_provider import CustomProvider
         provider = CustomProvider(
