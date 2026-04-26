@@ -67,6 +67,12 @@ const NAV_ICONS: Record<string, JSX.Element> = {
   ),
 }
 
+interface NavItem {
+  path: string
+  label: string
+  badge?: number
+}
+
 export default function AppShell() {
   const location = useLocation()
   const { connect, disconnect } = useChatSocket()
@@ -93,9 +99,11 @@ export default function AppShell() {
     }
   }, [location.pathname])
 
-  const navItems = [
+  const navItemsBeforePipeline: NavItem[] = [
     { path: '/control', label: t('controlCenter') },
     { path: '/recovery', label: t('recoveryNav'), badge: recoveryFaults.length || undefined },
+  ]
+  const navItemsAfterPipeline: NavItem[] = [
     { path: '/training', label: t('trainingCenter') },
     { path: '/settings', label: t('settings') },
     { path: '/logs', label: t('logs') },
@@ -107,6 +115,34 @@ export default function AppShell() {
     { path: '/curation/data-overview', label: t('dataOverview') },
   ]
   const pipelineActive = location.pathname.startsWith('/curation')
+
+  const renderNavItem = (item: NavItem) => {
+    const active =
+      location.pathname === item.path
+      || location.pathname.startsWith(`${item.path}/`)
+    return (
+      <Link
+        key={item.path}
+        to={item.path}
+        className={cn('app-sidebar__link', active && 'app-sidebar__link--active')}
+        title={sidebarCollapsed ? item.label : undefined}
+      >
+        <span className="app-sidebar__link-icon">
+          {NAV_ICONS[item.path]}
+        </span>
+        {!sidebarCollapsed && <span className="app-sidebar__link-label">{item.label}</span>}
+        {!sidebarCollapsed && item.badge && (
+          <span className={cn(
+            'ml-auto inline-flex min-w-[20px] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold',
+            active ? 'bg-white/20 text-white' : 'bg-rd/10 text-rd',
+          )}
+          >
+            {item.badge}
+          </span>
+        )}
+      </Link>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -130,33 +166,7 @@ export default function AppShell() {
         </div>
 
         <nav className="app-sidebar__nav">
-          {navItems.map((item) => {
-            const active =
-              location.pathname === item.path
-              || location.pathname.startsWith(`${item.path}/`)
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn('app-sidebar__link', active && 'app-sidebar__link--active')}
-                title={sidebarCollapsed ? item.label : undefined}
-              >
-                <span className="app-sidebar__link-icon">
-                  {NAV_ICONS[item.path]}
-                </span>
-                {!sidebarCollapsed && <span className="app-sidebar__link-label">{item.label}</span>}
-                {!sidebarCollapsed && item.badge && (
-                  <span className={cn(
-                    'ml-auto inline-flex min-w-[20px] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold',
-                    active ? 'bg-white/20 text-white' : 'bg-rd/10 text-rd',
-                  )}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </Link>
-            )
-          })}
+          {navItemsBeforePipeline.map(renderNavItem)}
 
           {sidebarCollapsed ? (
             <Link
@@ -230,6 +240,8 @@ export default function AppShell() {
               )}
             </div>
           )}
+
+          {navItemsAfterPipeline.map(renderNavItem)}
         </nav>
       </aside>
 
