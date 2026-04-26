@@ -41,10 +41,6 @@ function canDiscoverModels(p: ProviderOption): boolean {
   return !p.oauth
 }
 
-function canUseProviderTest(p: ProviderOption): boolean {
-  return !p.oauth
-}
-
 function canUseExtraHeaders(p: ProviderOption): boolean {
   return !p.oauth
 }
@@ -482,27 +478,30 @@ export default function ProviderSettingsPage() {
                   </label>
                 )}
 
-                {canUseProviderTest(selected) && (
-                  <div className="space-y-2 rounded-xl border border-bd/50 bg-white/70 p-3">
-                    <label className="block">
-                      <div className="mb-1.5 text-xs font-medium text-tx2">{t('providerTestInput')}</div>
-                      <textarea
-                        value={testInput}
-                        onChange={(e) => setTestInput(e.target.value)}
-                        className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
-                        placeholder={t('providerTestPlaceholder')}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleTestProvider}
-                      disabled={testingProvider}
-                      className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {testingProvider ? t('testingProvider') : t('testProvider')}
-                    </button>
-                  </div>
-                )}
+                <div className="space-y-2 rounded-xl border border-bd/50 bg-white/70 p-3">
+                  {selected.oauth && (
+                    <div className="text-xs text-tx3">
+                      {t('oauthProviderTestHint')}
+                    </div>
+                  )}
+                  <label className="block">
+                    <div className="mb-1.5 text-xs font-medium text-tx2">{t('providerTestInput')}</div>
+                    <textarea
+                      value={testInput}
+                      onChange={(e) => setTestInput(e.target.value)}
+                      className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 text-sm text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                      placeholder={t('providerTestPlaceholder')}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleTestProvider}
+                    disabled={testingProvider}
+                    className="rounded-full border border-bd bg-white px-4 py-2 text-sm font-semibold text-tx transition-all hover:border-ac/40 hover:text-ac disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {testingProvider ? t('testingProvider') : t('testProvider')}
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-3">
                   <button
