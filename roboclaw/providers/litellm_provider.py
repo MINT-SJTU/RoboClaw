@@ -65,7 +65,11 @@ class LiteLLMProvider(LLMProvider):
         self._langsmith_enabled = bool(os.getenv("LANGSMITH_API_KEY"))
 
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
-        """Set environment variables based on detected provider."""
+        """Set environment variables based on detected provider.
+
+        Always overwrite — settings UI lets users rotate keys / base URLs at runtime,
+        and `setdefault` would silently keep the stale first-seen value.
+        """
         spec = self._gateway or find_by_model(model)
         if not spec:
             return
@@ -73,11 +77,7 @@ class LiteLLMProvider(LLMProvider):
             # OAuth/provider-only specs (for example: openai_codex)
             return
 
-        # Gateway/local overrides existing env; standard provider doesn't
-        if self._gateway:
-            os.environ[spec.env_key] = api_key
-        else:
-            os.environ.setdefault(spec.env_key, api_key)
+        os.environ[spec.env_key] = api_key
 
         # Resolve env_extras placeholders:
         #   {api_key}  → user's API key
@@ -85,8 +85,8 @@ class LiteLLMProvider(LLMProvider):
         effective_base = api_base or spec.default_api_base
         for env_name, env_val in spec.env_extras:
             resolved = env_val.replace("{api_key}", api_key)
-            resolved = resolved.replace("{api_base}", effective_base)
-            os.environ.setdefault(env_name, resolved)
+            resolved = resolved.replace("{api_base}", effective_base or "")
+            os.environ[env_name] = resolved
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""

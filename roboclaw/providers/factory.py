@@ -43,6 +43,7 @@ def build_provider(config: Config) -> LLMProvider:
             api_key=provider_config.api_key if provider_config else "no-key",
             api_base=provider_config.api_base,
             default_model=model,
+            extra_headers=provider_config.extra_headers if provider_config else None,
         )
     elif provider_name == "azure_openai":
         if not provider_config or not provider_config.api_key or not provider_config.api_base:

@@ -68,6 +68,34 @@ function uniqueModels(models: string[]): string[] {
   return [...new Set(models.map((item) => item.trim()).filter(Boolean))]
 }
 
+function formatExtraHeaders(headers: Record<string, string> | undefined): string {
+  if (!headers || Object.keys(headers).length === 0) return ''
+  return JSON.stringify(headers, null, 2)
+}
+
+type HeadersParseResult =
+  | { ok: true; value: Record<string, string> }
+  | { ok: false }
+
+function parseExtraHeaders(text: string): HeadersParseResult {
+  const trimmed = text.trim()
+  if (!trimmed) return { ok: true, value: {} }
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false }
+    }
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v !== 'string') return { ok: false }
+      out[k] = v
+    }
+    return { ok: true, value: out }
+  } catch {
+    return { ok: false }
+  }
+}
+
 export default function ProviderSettingsPage() {
   const { t } = useI18n()
   const [providers, setProviders] = useState<ProviderOption[]>([])
@@ -77,6 +105,7 @@ export default function ProviderSettingsPage() {
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [apiBase, setApiBase] = useState('')
+  const [extraHeadersText, setExtraHeadersText] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [discoveringModels, setDiscoveringModels] = useState(false)
@@ -113,6 +142,7 @@ export default function ProviderSettingsPage() {
         const initialProvider = uiProviders.find((provider) => provider.name === initial)
         setSelectedProvider(initial)
         setApiBase(initialProvider?.api_base || '')
+        setExtraHeadersText(formatExtraHeaders(initialProvider?.extra_headers))
         setModel(providerModel(initialProvider || uiProviders[0], payload.default_model))
       } catch (loadError) {
         if (!cancelled) {
@@ -134,17 +164,29 @@ export default function ProviderSettingsPage() {
     setNotice('')
     setApiKey('')
     setApiBase(nextProvider?.api_base || '')
+    setExtraHeadersText(formatExtraHeaders(nextProvider?.extra_headers))
     if (nextProvider) {
       setModel(providerModel(nextProvider, model))
     }
     setDiscoveredModels([])
   }
 
+  function readExtraHeaders(): Record<string, string> | null {
+    const parsed = parseExtraHeaders(extraHeadersText)
+    if (!parsed.ok) {
+      setError(t('extraHeadersInvalid'))
+      return null
+    }
+    return parsed.value
+  }
+
   async function handleSave(event: React.FormEvent) {
     event.preventDefault()
-    setSaving(true)
     setError('')
     setNotice('')
+    const headers = readExtraHeaders()
+    if (headers === null) return
+    setSaving(true)
 
     try {
       const payload = await saveProviderConfig({
@@ -152,12 +194,17 @@ export default function ProviderSettingsPage() {
         model,
         api_key: apiKey,
         api_base: apiBase,
+        extra_headers: headers,
       })
       const uiProviders = payload.providers.filter((provider) => UI_PROVIDERS.includes(provider.name))
       setProviders(uiProviders)
       setActiveProvider(payload.active_provider)
       setActiveModel(payload.default_model)
       setModel(payload.default_model)
+      const refreshed = uiProviders.find((provider) => provider.name === (selectedProvider || 'custom'))
+      if (refreshed) {
+        setExtraHeadersText(formatExtraHeaders(refreshed.extra_headers))
+      }
       setNotice(t('saveSuccess'))
       setApiKey('')
     } catch (saveError) {
@@ -168,15 +215,18 @@ export default function ProviderSettingsPage() {
   }
 
   async function handleDiscoverModels() {
-    setDiscoveringModels(true)
     setError('')
     setNotice('')
+    const headers = readExtraHeaders()
+    if (headers === null) return
+    setDiscoveringModels(true)
 
     try {
       const payload = await fetchProviderModels({
         provider: selectedProvider || 'custom',
         api_key: apiKey,
         api_base: apiBase,
+        extra_headers: headers,
       })
       setDiscoveredModels(payload.models)
       if (payload.models.length > 0) {
@@ -193,9 +243,11 @@ export default function ProviderSettingsPage() {
   }
 
   async function handleTestProvider() {
-    setTestingProvider(true)
     setError('')
     setNotice('')
+    const headers = readExtraHeaders()
+    if (headers === null) return
+    setTestingProvider(true)
 
     try {
       const payload = await testProviderConfig({
@@ -203,6 +255,7 @@ export default function ProviderSettingsPage() {
         model,
         api_key: apiKey,
         api_base: apiBase,
+        extra_headers: headers,
         input: testInput,
       })
       if (payload.ok) {
@@ -397,6 +450,18 @@ export default function ProviderSettingsPage() {
                     />
                   </label>
                 )}
+
+                <label className="block">
+                  <div className="mb-1.5 text-xs font-medium text-tx2">{t('extraHeaders')}</div>
+                  <textarea
+                    value={extraHeadersText}
+                    onChange={(e) => setExtraHeadersText(e.target.value)}
+                    spellCheck={false}
+                    className="min-h-20 w-full resize-y rounded-xl border border-bd bg-white px-3 py-2.5 font-mono text-xs text-tx outline-none transition-all focus:border-ac focus:shadow-glow-ac"
+                    placeholder='{"APP-Code":"ROBOCLAW"}'
+                  />
+                  <div className="mt-1 text-2xs text-tx3">{t('extraHeadersHint')}</div>
+                </label>
 
                 <div className="space-y-2 rounded-xl border border-bd/50 bg-white/70 p-3">
                   <label className="block">

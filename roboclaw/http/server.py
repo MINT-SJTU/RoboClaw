@@ -7,6 +7,7 @@ ChannelManager) so the web UI has feature parity with ``roboclaw gateway``.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -96,6 +97,9 @@ def _provider_status_payload(config: Any) -> dict[str, Any]:
     }
 
 
+_VERSIONED_PATH = re.compile(r"/v\d+(?:beta\d*)?/?$", re.IGNORECASE)
+
+
 async def _discover_provider_models(
     api_base: str,
     api_key: str | None,
@@ -103,32 +107,43 @@ async def _discover_provider_models(
 ) -> tuple[list[str], str]:
     if not api_base:
         return [], ""
-    url = api_base.rstrip("/") + "/models"
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     if extra_headers:
         headers.update(extra_headers)
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-        payload = response.json()
-    except (httpx.HTTPError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to auto-discover models from {}: {}", url, exc)
-        return [], str(exc)
+    base = api_base.rstrip("/")
+    candidates = [base + "/models"]
+    # If user forgot the /vN segment, fall back to /v1/models — the OpenAI-compatible
+    # convention that virtually every LLM gateway speaks.
+    if not _VERSIONED_PATH.search(base):
+        candidates.append(base + "/v1/models")
 
-    data = payload.get("data", []) if isinstance(payload, dict) else payload
-    if not isinstance(data, list):
-        return [], "Model endpoint returned an unsupported response shape."
-    models: list[str] = []
-    for item in data:
-        if isinstance(item, dict) and item.get("id"):
-            models.append(str(item["id"]))
-        elif isinstance(item, str) and item.strip():
-            models.append(item.strip())
-    return sorted(set(models), key=str.lower), ""
+    last_error = ""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for url in candidates:
+            try:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, json.JSONDecodeError) as exc:
+                last_error = str(exc)
+                logger.warning("Failed to auto-discover models from {}: {}", url, exc)
+                continue
+
+            data = payload.get("data", []) if isinstance(payload, dict) else payload
+            if not isinstance(data, list):
+                return [], "Model endpoint returned an unsupported response shape."
+            models: list[str] = []
+            for item in data:
+                if isinstance(item, dict) and item.get("id"):
+                    models.append(str(item["id"]))
+                elif isinstance(item, str) and item.strip():
+                    models.append(item.strip())
+            return sorted(set(models), key=str.lower), ""
+
+    return [], last_error
 
 
 async def _discover_custom_model(api_base: str, api_key: str | None) -> str | None:
@@ -208,38 +223,11 @@ def _register_system_routes(app: FastAPI, runtime: WebRuntime) -> None:
 async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) -> dict[str, Any]:
     """Apply provider config changes, swap provider atomically, refresh agent."""
     config = load_config(get_config_path())
-
-    provider_name = payload.get("provider", "custom")
-    section = getattr(config.providers, provider_name, None)
-    if section is None:
-        return {"status": "error", "message": f"Unknown provider: {provider_name}"}
-
-    if payload.get("clear_api_key"):
-        section.api_key = ""
-
-    api_key = payload.get("api_key")
-    if isinstance(api_key, str) and api_key.strip():
-        section.api_key = api_key.strip()
-
-    api_base = payload.get("api_base")
-    if isinstance(api_base, str):
-        section.api_base = api_base.strip() or None
-
-    error = _apply_extra_headers(payload, section)
-    if error:
-        return error
-
-    model = payload.get("model")
-    if isinstance(model, str) and model.strip():
-        config.agents.defaults.model = model.strip()
-    # Auto-discover model for providers that use a custom base URL when the
-    # user has not chosen one explicitly.
-    elif section.api_base:
-        discovered_model = await _discover_custom_model(section.api_base, section.api_key or None)
-        if discovered_model:
-            config.agents.defaults.model = discovered_model
-
-    config.agents.defaults.provider = provider_name if provider_name != "auto" else "auto"
+    provider_name, section = _resolve_provider_section(config, payload)
+    _apply_credential_payload(payload, section)
+    _apply_extra_headers(payload, section)
+    config.agents.defaults.provider = provider_name
+    await _resolve_default_model(config, payload, section, allow_discovery=True)
 
     try:
         new_provider = build_provider(config)
@@ -289,35 +277,11 @@ async def _handle_provider_models(payload: dict[str, Any]) -> dict[str, Any]:
 async def _handle_provider_test(payload: dict[str, Any]) -> dict[str, Any]:
     """Send a minimal chat request with unsaved provider settings."""
     config = load_config(get_config_path())
-    provider_name = str(payload.get("provider") or config.agents.defaults.provider or "custom")
-    section = getattr(config.providers, provider_name, None)
-    if section is None:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
-
-    if payload.get("clear_api_key"):
-        section.api_key = ""
-
-    api_key = payload.get("api_key")
-    if isinstance(api_key, str) and api_key.strip():
-        section.api_key = api_key.strip()
-
-    api_base = payload.get("api_base")
-    if isinstance(api_base, str):
-        section.api_base = api_base.strip() or None
-
-    error = _apply_extra_headers(payload, section)
-    if error:
-        raise HTTPException(status_code=400, detail=error["message"])
-
-    model = payload.get("model")
-    if isinstance(model, str) and model.strip():
-        config.agents.defaults.model = model.strip()
-    else:
-        spec = find_by_name(provider_name)
-        if spec and spec.default_model:
-            config.agents.defaults.model = spec.default_model
-
-    config.agents.defaults.provider = provider_name if provider_name != "auto" else "auto"
+    provider_name, section = _resolve_provider_section(config, payload)
+    _apply_credential_payload(payload, section)
+    _apply_extra_headers(payload, section)
+    config.agents.defaults.provider = provider_name
+    await _resolve_default_model(config, payload, section, allow_discovery=False)
 
     try:
         provider = build_provider(config)
@@ -345,17 +309,67 @@ async def _handle_provider_test(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _apply_extra_headers(payload: dict[str, Any], section: Any) -> dict[str, Any] | None:
-    """Parse and apply extra_headers from payload. Returns error dict on failure."""
+def _resolve_provider_section(config: Any, payload: dict[str, Any]) -> tuple[str, Any]:
+    """Resolve the providers.<name> section from payload, raising 400 if unknown."""
+    provider_name = str(payload.get("provider") or config.agents.defaults.provider or "custom")
+    section = getattr(config.providers, provider_name, None)
+    if section is None:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
+    return provider_name, section
+
+
+def _apply_credential_payload(payload: dict[str, Any], section: Any) -> None:
+    """Apply api_key / api_base / clear_api_key fields onto the provider section."""
+    if payload.get("clear_api_key"):
+        section.api_key = ""
+    api_key = payload.get("api_key")
+    if isinstance(api_key, str) and api_key.strip():
+        section.api_key = api_key.strip()
+    api_base = payload.get("api_base")
+    if isinstance(api_base, str):
+        section.api_base = api_base.strip() or None
+
+
+async def _resolve_default_model(
+    config: Any,
+    payload: dict[str, Any],
+    section: Any,
+    *,
+    allow_discovery: bool,
+) -> None:
+    """Pick config.agents.defaults.model, in priority order:
+       explicit payload > spec.default_model > (optional) /models discovery.
+    """
+    model = payload.get("model")
+    if isinstance(model, str) and model.strip():
+        config.agents.defaults.model = model.strip()
+        return
+
+    provider_name = config.agents.defaults.provider
+    spec = find_by_name(provider_name) if provider_name else None
+    if spec and spec.default_model:
+        config.agents.defaults.model = spec.default_model
+        return
+
+    if allow_discovery and section.api_base:
+        discovered = await _discover_custom_model(section.api_base, section.api_key or None)
+        if discovered:
+            config.agents.defaults.model = discovered
+
+
+def _apply_extra_headers(payload: dict[str, Any], section: Any) -> None:
+    """Parse and apply extra_headers from payload. Raises HTTP 400 on bad JSON."""
     extra_headers = payload.get("extra_headers")
     if isinstance(extra_headers, str):
         try:
             extra_headers = json.loads(extra_headers) if extra_headers.strip() else {}
-        except json.JSONDecodeError:
-            return {"status": "error", "message": "extra_headers must be valid JSON."}
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="extra_headers must be valid JSON.",
+            ) from exc
     if isinstance(extra_headers, dict):
         section.extra_headers = extra_headers or None
-    return None
 
 
 def _provider_config_http_error(exc: ProviderConfigurationError) -> HTTPException:
