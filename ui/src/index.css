@@ -3340,6 +3340,27 @@ a {
   z-index: 60;
 }
 
+.overview-row-detail-popover__close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(47, 111, 228, 0.12);
+  border-radius: 8px;
+  background: rgba(244, 248, 255, 0.9);
+  color: var(--tx2);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overview-row-detail-popover__close:hover {
+  background: rgba(47, 111, 228, 0.1);
+  color: var(--tx);
+}
+
 .overview-detail-sections {
   display: flex;
   flex-direction: column;

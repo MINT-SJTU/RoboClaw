@@ -1011,13 +1011,16 @@ function downloadBlob(content: string, filename: string, mimeType: string) {
 function OverviewRowDetailPopover({
   row,
   locale,
+  onClose,
 }: {
   row: AlignmentOverviewRow
   locale: 'zh' | 'en'
+  onClose: () => void
 }) {
   const copy = locale === 'zh'
     ? {
       title: '数据纵览',
+      close: '关闭数据纵览',
       quality: '质量验证结果',
       validators: '验证器',
       checks: '检查项',
@@ -1043,6 +1046,7 @@ function OverviewRowDetailPopover({
     }
     : {
       title: 'Data Overview',
+      close: 'Close data overview',
       quality: 'Quality validation result',
       validators: 'Validators',
       checks: 'Checks',
@@ -1085,6 +1089,15 @@ function OverviewRowDetailPopover({
             {row.quality_passed ? copy.passed : copy.failed}
           </span>
         </div>
+        <button
+          type="button"
+          className="overview-row-detail-popover__close"
+          onClick={onClose}
+          aria-label={copy.close}
+          title={copy.close}
+        >
+          ×
+        </button>
       </div>
 
       <div className="overview-detail-sections">
@@ -1375,10 +1388,6 @@ export default function DataOverviewPage() {
     selectFilteredRows()
   }
 
-  function clearInspectedEpisode(episodeIndex: number) {
-    setInspectedEpisodeId((current) => (current === episodeIndex ? null : current))
-  }
-
   function clearSelection() {
     setSelectedEpisodeIds([])
   }
@@ -1639,16 +1648,8 @@ export default function DataOverviewPage() {
                     tabIndex={0}
                     onClick={() => setInspectedEpisodeId(row.episode_index)}
                     onPointerEnter={() => setInspectedEpisodeId(row.episode_index)}
-                    onPointerLeave={() => clearInspectedEpisode(row.episode_index)}
                     onMouseEnter={() => setInspectedEpisodeId(row.episode_index)}
-                    onMouseLeave={() => clearInspectedEpisode(row.episode_index)}
                     onFocus={() => setInspectedEpisodeId(row.episode_index)}
-                    onBlur={(event) => {
-                      const nextTarget = event.relatedTarget as Node | null
-                      if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
-                        clearInspectedEpisode(row.episode_index)
-                      }
-                    }}
                   >
                     <td className="quality-table__checkbox-cell">
                       <input
@@ -1681,7 +1682,13 @@ export default function DataOverviewPage() {
           </table>
         </div>
       </GlassPanel>
-      {inspectedRow && <OverviewRowDetailPopover row={inspectedRow} locale={locale} />}
+      {inspectedRow && (
+        <OverviewRowDetailPopover
+          row={inspectedRow}
+          locale={locale}
+          onClose={() => setInspectedEpisodeId(null)}
+        />
+      )}
 
     </div>
   )
