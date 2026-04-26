@@ -8,6 +8,7 @@ import {
   testProviderConfig,
   type ProviderOption,
 } from '@/domains/provider/api/providerApi'
+import { providerDisplayLabel } from '@/domains/provider/model/providerLabels'
 
 const UI_PROVIDERS = [
   'anthropic', 'openai', 'deepseek', 'dashscope', 'gemini',
@@ -282,6 +283,10 @@ export default function ProviderSettingsPage() {
   }
 
   const selected = providers.find((provider) => provider.name === selectedProvider) || null
+  const activeProviderLabel = providerDisplayLabel(
+    providers.find((provider) => provider.name === activeProvider),
+    t('providerCustomLabel'),
+  )
   const selectableModels = selected ? uniqueModels([
     model,
     activeModel,
@@ -311,7 +316,7 @@ export default function ProviderSettingsPage() {
             <div className="flex flex-wrap items-center gap-3">
               <div className="text-sm font-semibold text-tx">{t('currentProvider')}</div>
               <span className="rounded-full bg-ac/10 px-3 py-1 text-sm font-semibold text-ac">
-                {providers.find((provider) => provider.name === activeProvider)?.label || t('providerNotConfigured')}
+                {activeProviderLabel || t('providerNotConfigured')}
               </span>
               <span className="text-sm text-tx3">
                 {activeModel || t('settingsNoModel')}
@@ -348,7 +353,9 @@ export default function ProviderSettingsPage() {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <div className="break-words text-sm font-semibold">{provider.label}</div>
+                          <div className="break-words text-sm font-semibold">
+                            {providerDisplayLabel(provider, t('providerCustomLabel'))}
+                          </div>
                           <div className="mt-2 flex flex-wrap items-center gap-2 text-2xs">
                             {provider.configured && (
                               <span className="rounded-full bg-gn/10 px-2 py-0.5 font-medium text-gn">
@@ -378,7 +385,9 @@ export default function ProviderSettingsPage() {
                 <div className="text-2xs font-semibold uppercase tracking-[0.18em] text-tx3">
                   {t('configuring')}
                 </div>
-                <h3 className="mt-2 text-xl font-semibold text-tx">{selected.label}</h3>
+                <h3 className="mt-2 text-xl font-semibold text-tx">
+                  {providerDisplayLabel(selected, t('providerCustomLabel'))}
+                </h3>
                 {selected.configured && selected.masked_api_key && (
                   <div className="mt-2 font-mono text-xs text-tx2">{selected.masked_api_key}</div>
                 )}

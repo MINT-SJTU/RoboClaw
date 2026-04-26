@@ -8,6 +8,7 @@ import {
   fetchProviderStatus,
   type ProviderStatusResponse,
 } from '@/domains/provider/api/providerApi'
+import { providerDisplayLabel } from '@/domains/provider/model/providerLabels'
 import { useSetup } from '@/domains/hardware/setup/store/useSetupStore'
 
 function HardwareIcon() {
@@ -70,8 +71,9 @@ export default function SettingsOverviewPage() {
 
   const warningCount = hardwareStatus?.missing.length ?? 0
   const uncalibratedCount = devices.arms.filter((arm) => !arm.calibrated).length
+  const activeProviderOption = providerStatus?.providers.find((provider) => provider.name === providerStatus.active_provider)
   const providerLabel = providerStatus?.active_provider
-    ? providerStatus.providers.find((provider) => provider.name === providerStatus.active_provider)?.label || providerStatus.active_provider
+    ? providerDisplayLabel(activeProviderOption, t('providerCustomLabel')) || providerStatus.active_provider
     : t('providerNotConfigured')
 
   const hubEndpointMode = classifyHfEndpoint(hubSummary.endpoint)
