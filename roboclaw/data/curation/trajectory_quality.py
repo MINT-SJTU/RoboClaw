@@ -143,6 +143,17 @@ def _evaluate_trajectory_entry(
             "No reference trajectory available for trajectory_dtw",
             {"reason": "no_reference"},
         )
+    minimum_reference_count = int(thresholds["trajectory_dtw_min_reference_count"])
+    if len(references) < minimum_reference_count:
+        return inconclusive_result(
+            "insufficient_references",
+            "Insufficient external references for trajectory_dtw",
+            {
+                "reason": "insufficient_references",
+                "reference_count": len(references),
+                "minimum_reference_count": minimum_reference_count,
+            },
+        )
 
     dtw_config = propagation_dtw_config(references[0], entry)
     tube = ReferenceTubeBuilder(

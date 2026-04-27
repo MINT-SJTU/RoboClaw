@@ -79,6 +79,33 @@ def test_reference_tube_flags_hesitation() -> None:
     assert any(issue["check_name"] == "dtw_hesitate" for issue in result["issues"])
 
 
+def test_reference_tube_flags_synchronized_multijoint_hesitation() -> None:
+    thresholds = _thresholds(
+        trajectory_dtw_min_segment_s=0.0,
+        trajectory_dtw_velocity_floor=0.001,
+        trajectory_dtw_hesitation_multiplier=1.0,
+        trajectory_dtw_deviation_multiplier=100.0,
+    )
+    references = [
+        _entry("ref-1", [[0.0, 0.0, 0.0], [0.1, 0.1, 0.1], [0.2, 0.2, 0.2]]),
+        _entry("ref-2", [[0.0, 0.0, 0.0], [0.1, 0.1, 0.1], [0.2, 0.2, 0.2]]),
+    ]
+    tube = ReferenceTubeBuilder(thresholds=thresholds).build(references)
+    assert tube is not None
+
+    result = ReferenceTubeEvaluator(tube, thresholds=thresholds).evaluate(
+        _entry("candidate", [[0.0, 0.0, 0.0], [0.7, 0.7, 0.7], [0.2, 0.2, 0.2]]),
+    )
+
+    assert result["passed"] is False
+    evidence = next(
+        issue["value"]["evidence"]
+        for issue in result["issues"]
+        if issue["check_name"] == "dtw_hesitate"
+    )
+    assert evidence["velocity_energy"] > evidence["threshold"]
+
+
 def test_reference_tube_flags_stall() -> None:
     thresholds = _thresholds(
         trajectory_dtw_min_segment_s=0.0,
@@ -114,7 +141,10 @@ def test_reference_tube_single_reference_fallback_can_run() -> None:
 
 
 def test_trajectory_dtw_excludes_candidate_from_references() -> None:
-    thresholds = _thresholds(trajectory_dtw_min_segment_s=0.0)
+    thresholds = _thresholds(
+        trajectory_dtw_min_segment_s=0.0,
+        trajectory_dtw_min_reference_count=1.0,
+    )
     reference = {
         **_entry("reference", [[0.0], [0.1], [0.2]]),
         "task_key": "pick",
@@ -135,6 +165,34 @@ def test_trajectory_dtw_excludes_candidate_from_references() -> None:
 
     assert result["passed"] is False
     assert any(issue["check_name"] == "dtw_deviation" for issue in result["issues"])
+
+
+def test_trajectory_dtw_requires_enough_external_references() -> None:
+    thresholds = _thresholds(
+        trajectory_dtw_min_segment_s=0.0,
+        trajectory_dtw_min_reference_count=2.0,
+    )
+    reference = {
+        **_entry("reference", [[0.0], [0.1], [0.2]]),
+        "task_key": "pick",
+        "robot_type": "arm",
+        "canonical_mode": "joint_canonical",
+        "base_quality_passed": True,
+    }
+    candidate = {
+        **_entry("candidate", [[0.0], [0.8], [0.2]]),
+        "task_key": "pick",
+        "robot_type": "arm",
+        "canonical_mode": "joint_canonical",
+        "base_quality_passed": True,
+    }
+    groups = {"pick::arm::joint_canonical": [reference, candidate]}
+
+    result = _evaluate_trajectory_entry(candidate, groups, thresholds)
+
+    assert result["passed"] is False
+    assert result["issues"][0]["check_name"] == "insufficient_references"
+    assert result["issues"][0]["value"]["reference_count"] == 1
 
 
 def test_quality_batch_marks_self_reference_as_unverified(monkeypatch, tmp_path) -> None:

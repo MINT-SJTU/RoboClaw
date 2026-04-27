@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from .features import resolve_timestamp
 from .validators import finalize_validator, make_issue, safe_float, _merge_threshold_overrides
 
 
@@ -19,13 +20,14 @@ def _sample_video_frames(video_path: Path, max_samples: int = 10) -> tuple[list[
         width = int(stream.width or 0)
         height = int(stream.height or 0)
         frame_count = int(stream.frames or 0)
-        sample_step = max(1, frame_count // max(max_samples, 1)) if frame_count > 0 else 1
+        sample_count = _video_sample_count(max_samples, fps, frame_count)
+        sample_step = max(1, frame_count // sample_count) if frame_count > 0 else 1
         frames: list[np.ndarray] = []
         for index, frame in enumerate(container.decode(stream)):
             if index % sample_step != 0:
                 continue
             frames.append(frame.to_ndarray(format="rgb24"))
-            if len(frames) >= max_samples:
+            if len(frames) >= sample_count:
                 break
         container.close()
         return frames, fps, width, height, frame_count
@@ -47,17 +49,25 @@ def _sample_video_frames(video_path: Path, max_samples: int = 10) -> tuple[list[
     if frame_count <= 0:
         cap.release()
         return frames, fps, width, height, frame_count
-    sample_step = max(1, frame_count // max(max_samples, 1))
+    sample_count = _video_sample_count(max_samples, fps, frame_count)
+    sample_step = max(1, frame_count // sample_count)
     for index in range(0, frame_count, sample_step):
         cap.set(cv2.CAP_PROP_POS_FRAMES, index)
         ok, frame = cap.read()
         if not ok or frame is None:
             continue
         frames.append(frame)
-        if len(frames) >= max_samples:
+        if len(frames) >= sample_count:
             break
     cap.release()
     return frames, fps, width, height, frame_count
+
+
+def _video_sample_count(min_samples: int, fps: float, frame_count: int) -> int:
+    if fps <= 0 or frame_count <= 0:
+        return max(min_samples, 1)
+    duration_samples = int(np.ceil(frame_count / fps))
+    return max(min_samples, duration_samples, 1)
 
 
 def _video_metadata_from_feature(config: Any) -> tuple[float, int, int]:
@@ -131,7 +141,8 @@ def _iter_visual_parquet_frames(rows: list[dict[str, Any]], max_samples: int = 1
     frames: list[tuple[str, np.ndarray]] = []
     if not rows:
         return frames
-    sample_step = max(1, len(rows) // max(max_samples, 1))
+    sample_count = _row_sample_count(rows, max_samples)
+    sample_step = max(1, len(rows) // sample_count)
     for row in rows[::sample_step]:
         for key, value in row.items():
             if "observation.images" not in key or "depth" in key.lower():
@@ -140,7 +151,7 @@ def _iter_visual_parquet_frames(rows: list[dict[str, Any]], max_samples: int = 1
             if decoded is None:
                 continue
             frames.append((key, decoded))
-            if len(frames) >= max_samples:
+            if len(frames) >= sample_count:
                 return frames
     return frames
 
@@ -149,7 +160,8 @@ def _iter_depth_parquet_frames(rows: list[dict[str, Any]], max_samples: int = 10
     frames: list[tuple[str, np.ndarray]] = []
     if not rows:
         return frames
-    sample_step = max(1, len(rows) // max(max_samples, 1))
+    sample_count = _row_sample_count(rows, max_samples)
+    sample_step = max(1, len(rows) // sample_count)
     for row in rows[::sample_step]:
         for key, value in row.items():
             if "depth" not in key.lower():
@@ -158,9 +170,21 @@ def _iter_depth_parquet_frames(rows: list[dict[str, Any]], max_samples: int = 10
             if decoded is None:
                 continue
             frames.append((key, decoded))
-            if len(frames) >= max_samples:
+            if len(frames) >= sample_count:
                 return frames
     return frames
+
+
+def _row_sample_count(rows: list[dict[str, Any]], min_samples: int) -> int:
+    timestamps = [
+        timestamp for row in rows
+        if (timestamp := resolve_timestamp(row)) is not None
+    ]
+    if len(timestamps) < 2:
+        return max(min_samples, 1)
+    duration = max(timestamps[-1] - timestamps[0], 0.0)
+    duration_samples = int(np.ceil(duration))
+    return max(min_samples, duration_samples, 1)
 
 
 def _compute_visual_frame_stats(frame: np.ndarray) -> dict[str, float]:

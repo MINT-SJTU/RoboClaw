@@ -7,6 +7,16 @@ import numpy as np
 
 from .features import percentile
 
+KEY_JOINT_TOKENS = (
+    "joint",
+    "shoulder",
+    "elbow",
+    "wrist",
+    "waist",
+    "forearm",
+    "arm",
+)
+
 
 def validate_action(
     data: dict[str, Any],
@@ -176,7 +186,7 @@ def _check_static_duration(
 
     static_threshold = thresholds["action_static_threshold"]
     all_static = _longest_static_duration(primary_series, timestamps, static_threshold)
-    key_subset = dict(list(primary_series.items())[:min(6, len(primary_series))])
+    key_subset = _key_joint_series(primary_series)
     key_static = _longest_static_duration(key_subset, timestamps, static_threshold)
     issues.extend([
         make_issue(
@@ -196,6 +206,23 @@ def _check_static_duration(
             value={"key_static_duration_s": key_static},
         ),
     ])
+
+
+def _key_joint_series(
+    primary_series: dict[str, list[float | None]],
+) -> dict[str, list[float | None]]:
+    named = {
+        key: values for key, values in primary_series.items()
+        if _looks_like_key_joint(key)
+    }
+    return named or primary_series
+
+
+def _looks_like_key_joint(name: str) -> bool:
+    lowered = name.lower()
+    if "gripper" in lowered:
+        return False
+    return any(token in lowered for token in KEY_JOINT_TOKENS)
 
 
 def _check_velocity_and_quality(

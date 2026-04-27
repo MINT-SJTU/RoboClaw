@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from roboclaw.data.curation import visual_validators
 
 
@@ -94,3 +96,19 @@ def test_visual_validator_checks_each_declared_video_stream(
     assert result["passed"] is False
     assert any(issue["check_name"] == "video_resolution" and issue["value"]["stream"] == "wrist" for issue in failed)
     assert any(issue["check_name"] == "video_fps" and issue["value"]["stream"] == "wrist" for issue in failed)
+
+
+def test_visual_sampling_scales_to_episode_duration() -> None:
+    assert visual_validators._video_sample_count(10, fps=30.0, frame_count=1800) == 60
+
+    rows = [
+        {
+            "timestamp": float(index),
+            "observation.images.front": np.zeros((2, 2, 3), dtype=np.uint8),
+        }
+        for index in range(61)
+    ]
+
+    sampled = visual_validators._iter_visual_parquet_frames(rows)
+
+    assert len(sampled) == 60

@@ -165,3 +165,20 @@ def test_propagation_uses_dtw_time_mapping_instead_of_duration_scaling() -> None
     assert propagated[0]["source"] == "dtw_propagated"
     assert propagated[0]["startTime"] == 1.0
     assert propagated[0]["prototype_score"] == 1.0
+
+
+def test_propagation_uses_nearest_source_timestamp_and_target_mean() -> None:
+    propagated = propagate_annotation_spans(
+        [{"label": "grasp", "startTime": 0.4, "endTime": 1.6}],
+        source_duration=2.0,
+        target_duration=4.0,
+        target_record_key="target",
+        prototype_score=0.8,
+        source_time_axis=[0.0, 1.0, 2.0],
+        target_time_axis=[0.0, 1.0, 2.0, 3.0, 4.0],
+        alignment_path=[(0, 0), (1, 1), (1, 2), (1, 3), (2, 4)],
+    )
+
+    assert propagated[0]["source"] == "dtw_propagated"
+    assert propagated[0]["startTime"] == 0.0
+    assert propagated[0]["endTime"] == 4.0

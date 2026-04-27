@@ -71,6 +71,7 @@ QUALITY_THRESHOLD_DEFAULTS: dict[str, float] = {
     "trajectory_dtw_hesitation_multiplier": 2.0,
     "trajectory_dtw_stall_frame_threshold": 30.0,
     "trajectory_dtw_min_segment_s": 0.2,
+    "trajectory_dtw_min_reference_count": 6.0,
 }
 
 ISSUE_LEVEL_WEIGHTS: dict[str, float] = {

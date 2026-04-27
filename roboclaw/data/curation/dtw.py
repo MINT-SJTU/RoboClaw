@@ -11,8 +11,8 @@ from .features import mean
 
 CARTESIAN_20D_GROUP_WEIGHTS = {
     "eef_pos": 1.0,
-    "eef_rot6d": 0.8,
-    "gripper": 1.5,
+    "eef_rot6d": 0.7,
+    "gripper": 1.2,
     "delta_pos": 0.5,
     "delta_rot6d": 0.3,
     "delta_gripper": 0.8,

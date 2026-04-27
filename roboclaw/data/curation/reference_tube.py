@@ -191,13 +191,14 @@ class ReferenceTubeEvaluator:
         for frame_index, velocity in enumerate(velocities):
             if frame_index == 0:
                 continue
-            variance = _variance(velocity)
-            if variance <= threshold:
+            velocity_energy = _velocity_energy(velocity)
+            if velocity_energy <= threshold:
                 continue
             points.append({
                 "type": "Hesitate",
                 "frame_index": frame_index,
-                "velocity_variance": variance,
+                "velocity_energy": velocity_energy,
+                "velocity_variance": velocity_energy,
                 "threshold": threshold,
             })
         return points
@@ -481,19 +482,18 @@ def _velocity_threshold(
     floor: float,
     quantile: float,
 ) -> float:
-    variances = [
-        _variance(velocity)
+    energies = [
+        _velocity_energy(velocity)
         for reference in velocity_references
         for velocity in reference
     ]
-    return max(percentile(variances, quantile), float(floor))
+    return max(percentile(energies, quantile), float(floor))
 
 
-def _variance(values: list[float]) -> float:
-    if len(values) < 2:
+def _velocity_energy(values: list[float]) -> float:
+    if not values:
         return 0.0
-    center = mean(values)
-    return mean([(value - center) ** 2 for value in values])
+    return math.sqrt(mean([value * value for value in values]))
 
 
 def _largest_component_delta(left: list[float], right: list[float]) -> tuple[int, float]:
@@ -553,5 +553,5 @@ def _anomaly_message(
         )
     return (
         f"Hesitate near {start_time:.3f}-{end_time:.3f}s; "
-        f"velocity variance {float(evidence.get('velocity_variance', 0.0)):.3f}"
+        f"velocity energy {float(evidence.get('velocity_energy', 0.0)):.3f}"
     )

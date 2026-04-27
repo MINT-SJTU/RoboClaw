@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 from typing import Any
 
 from .dtw import dtw_alignment
@@ -218,40 +219,46 @@ def _build_monotonic_index_map(
     return mapping
 
 
-def _map_time_by_alignment(
+def _target_time_by_nearest_source(
     source_times: list[float],
     target_times: list[float],
-    index_map: list[int],
+    path: list[tuple[int, int]],
     source_time: float,
 ) -> float:
-    if not source_times or not target_times or not index_map:
+    if not source_times or not target_times or not path:
         return 0.0
 
     safe_source_time = clamp(float(source_time), 0.0, float(source_times[-1] or 0.0))
-    if safe_source_time <= float(source_times[0]):
-        return float(target_times[index_map[0]])
-    if safe_source_time >= float(source_times[-1]):
-        return float(target_times[index_map[-1]])
+    source_index = min(
+        range(len(source_times)),
+        key=lambda index: abs(float(source_times[index]) - safe_source_time),
+    )
+    target_indices = sorted({
+        right_index for left_index, right_index in path
+        if left_index == source_index and 0 <= right_index < len(target_times)
+    })
+    if not target_indices:
+        index_map = _build_monotonic_index_map(
+            path,
+            source_len=len(source_times),
+            target_len=len(target_times),
+        )
+        return float(target_times[index_map[source_index]]) if index_map else 0.0
+    return float(statistics.fmean(float(target_times[index]) for index in target_indices))
 
-    left = 0
-    right = len(source_times) - 1
-    while left + 1 < right:
-        mid = (left + right) // 2
-        if float(source_times[mid]) < safe_source_time:
-            left = mid
-        else:
-            right = mid
 
-    t0 = float(source_times[left])
-    t1 = float(source_times[right])
-    if t1 <= t0:
-        return float(target_times[index_map[left]])
-    weight = (safe_source_time - t0) / (t1 - t0)
-    j0 = index_map[left]
-    j1 = index_map[right]
-    y0 = float(target_times[j0])
-    y1 = float(target_times[j1])
-    return y0 + (y1 - y0) * weight
+def _map_time_by_alignment(
+    source_times: list[float],
+    target_times: list[float],
+    alignment_path: list[tuple[int, int]],
+    source_time: float,
+) -> float:
+    return _target_time_by_nearest_source(
+        source_times,
+        target_times,
+        alignment_path,
+        source_time,
+    )
 
 
 def propagate_annotation_spans(
@@ -271,7 +278,7 @@ def propagate_annotation_spans(
     safe_source_duration = max(source_duration, 1e-6)
     scale = max(target_duration, 0.0) / safe_source_duration
 
-    index_map: list[int] | None = None
+    usable_alignment_path: list[tuple[int, int]] | None = None
     alignment_path = alignment_path or _build_alignment_path(
         source_sequence,
         target_sequence,
@@ -284,17 +291,18 @@ def propagate_annotation_spans(
         and len(source_time_axis) > 1
         and len(target_time_axis) > 1
     ):
-        index_map = _build_monotonic_index_map(
-            alignment_path,
-            source_len=len(source_time_axis),
-            target_len=len(target_time_axis),
-        )
+        usable_alignment_path = alignment_path
 
     propagated: list[dict[str, Any]] = []
     for span in spans:
         raw_start = float(span.get("startTime", 0.0))
-        if index_map and source_time_axis and target_time_axis:
-            start_time = _map_time_by_alignment(source_time_axis, target_time_axis, index_map, raw_start)
+        if usable_alignment_path and source_time_axis and target_time_axis:
+            start_time = _map_time_by_alignment(
+                source_time_axis,
+                target_time_axis,
+                usable_alignment_path,
+                raw_start,
+            )
         else:
             start_time = raw_start * scale
         raw_end = span.get("endTime")
@@ -302,8 +310,13 @@ def propagate_annotation_spans(
             end_time = None
         else:
             end_source = float(raw_end)
-            if index_map and source_time_axis and target_time_axis:
-                end_time = _map_time_by_alignment(source_time_axis, target_time_axis, index_map, end_source)
+            if usable_alignment_path and source_time_axis and target_time_axis:
+                end_time = _map_time_by_alignment(
+                    source_time_axis,
+                    target_time_axis,
+                    usable_alignment_path,
+                    end_source,
+                )
             else:
                 end_time = end_source * scale
 
@@ -316,7 +329,7 @@ def propagate_annotation_spans(
             "endTime": round(end_time, 4) if end_time is not None else None,
             "target_record_key": target_record_key,
             "propagated": True,
-            "source": "dtw_propagated" if index_map else "duration_scaled",
+            "source": "dtw_propagated" if usable_alignment_path else "duration_scaled",
             "prototype_score": round(clamp(prototype_score, 0.0, 1.0), 4),
         })
     return propagated

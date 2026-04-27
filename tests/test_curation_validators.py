@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import math
 
-from roboclaw.data.curation.dtw import dtw_alignment, dtw_distance
+from roboclaw.data.curation.dtw import (
+    CARTESIAN_20D_GROUP_WEIGHTS,
+    dtw_alignment,
+    dtw_distance,
+)
 from roboclaw.data.curation.propagation import propagate_annotation_spans
 from roboclaw.data.curation.validators import safe_float, validate_action
 
@@ -18,6 +22,11 @@ def test_empty_dtw_is_not_perfect_match() -> None:
     distance, path = dtw_alignment([], [[1.0]])
     assert math.isinf(distance)
     assert path == []
+
+
+def test_cartesian_20d_group_weights_match_documented_defaults() -> None:
+    assert CARTESIAN_20D_GROUP_WEIGHTS["eef_rot6d"] == 0.7
+    assert CARTESIAN_20D_GROUP_WEIGHTS["gripper"] == 1.2
 
 
 def test_propagation_falls_back_to_duration_scaling_for_empty_dtw() -> None:
@@ -135,3 +144,54 @@ def test_validate_action_counts_nan_values_as_missing() -> None:
     assert issues_by_name["nan_ratio"]["passed"] is False
     assert issues_by_name["nan_ratio"]["value"]["nan_ratio"] > 0.0
     assert result["passed"] is False
+
+
+def test_validate_action_uses_named_key_joints_instead_of_first_six_columns() -> None:
+    rows = []
+    for index in range(8):
+        rows.append({
+            "timestamp": float(index),
+            "action": [
+                float(index),
+                float(index),
+                float(index),
+                float(index),
+                float(index),
+                float(index),
+                0.0,
+            ],
+        })
+
+    result = validate_action(
+        {
+            "rows": rows,
+            "info": {
+                "features": {
+                    "action": {
+                        "names": {
+                            "axes": [
+                                "aux_0",
+                                "aux_1",
+                                "aux_2",
+                                "aux_3",
+                                "aux_4",
+                                "aux_5",
+                                "wrist_joint",
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+        threshold_overrides={
+            "action_max_all_static_s": 10.0,
+            "action_max_key_static_s": 3.0,
+            "action_max_velocity_rad_s": 10.0,
+            "action_min_duration_s": 1.0,
+        },
+    )
+
+    issues_by_name = {issue["check_name"]: issue for issue in result["issues"]}
+    assert issues_by_name["all_static_duration"]["passed"] is True
+    assert issues_by_name["key_static_duration"]["passed"] is False
+    assert issues_by_name["key_static_duration"]["value"]["key_static_duration_s"] > 3.0
