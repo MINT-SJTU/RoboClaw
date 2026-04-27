@@ -157,6 +157,20 @@ class CurationService:
     # Task management
     # ------------------------------------------------------------------
 
+    def _task_key(self, dataset_path: Path, stage_key: str) -> tuple[str, str]:
+        return (str(dataset_path.resolve()), stage_key)
+
+    def _active_stage_task(
+        self,
+        dataset_path: Path,
+        stage_key: str,
+    ) -> asyncio.Task[Any] | None:
+        return self._active_tasks.get(self._task_key(dataset_path, stage_key))
+
+    def _stage_task_is_running(self, dataset_path: Path, stage_key: str) -> bool:
+        task = self._active_stage_task(dataset_path, stage_key)
+        return task is not None and not task.done()
+
     async def _run_in_background(
         self,
         coro: Any,
@@ -164,21 +178,25 @@ class CurationService:
         stage_key: str,
     ) -> None:
         """Wrapper that logs errors and updates state on failure."""
-        task_key = (str(dataset_path.resolve()), stage_key)
+        task_key = self._task_key(dataset_path, stage_key)
+        current_task = asyncio.current_task()
         try:
             await coro
         except asyncio.CancelledError:
-            state = load_workflow_state(dataset_path)
-            state["stages"][stage_key]["status"] = "error"
-            save_workflow_state(dataset_path, state)
+            if self._active_tasks.get(task_key) is current_task:
+                state = load_workflow_state(dataset_path)
+                state["stages"][stage_key]["status"] = "error"
+                save_workflow_state(dataset_path, state)
             raise
         except Exception:
             logger.exception("Background workflow task failed")
-            state = load_workflow_state(dataset_path)
-            state["stages"][stage_key]["status"] = "error"
-            save_workflow_state(dataset_path, state)
+            if self._active_tasks.get(task_key) is current_task:
+                state = load_workflow_state(dataset_path)
+                state["stages"][stage_key]["status"] = "error"
+                save_workflow_state(dataset_path, state)
         finally:
-            self._active_tasks.pop(task_key, None)
+            if self._active_tasks.get(task_key) is current_task:
+                self._active_tasks.pop(task_key, None)
 
     def _register_workflow_task(
         self,
@@ -187,8 +205,8 @@ class CurationService:
         coro: Any,
     ) -> None:
         """Schedule *coro* as the active background task for a stage."""
-        task_key = (str(dataset_path.resolve()), stage_key)
-        existing = self._active_tasks.get(task_key)
+        task_key = self._task_key(dataset_path, stage_key)
+        existing = self._active_stage_task(dataset_path, stage_key)
         if existing is not None and not existing.done():
             existing.cancel()
         task = asyncio.create_task(
@@ -334,6 +352,14 @@ class CurationService:
         dataset_name: str,
         source_episode_index: int,
     ) -> dict[str, str]:
+        if self._stage_task_is_running(dataset_path, "annotation"):
+            logger.info(
+                "Propagation run already active for dataset '{}'; ignoring duplicate request",
+                dataset_name,
+            )
+            return {"status": "already_running"}
+
+        _set_stage_status(dataset_path, "annotation", "running")
         svc = _LegacyCurationService(dataset_path, dataset_name)
 
         async def _task() -> None:

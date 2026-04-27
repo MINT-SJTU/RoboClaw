@@ -806,6 +806,7 @@ export default function AnnotationPanel() {
     saveAnnotations,
     runPropagation,
     loadPropagationResults,
+    refreshState,
   } = useWorkflow()
 
   const copy = locale === 'zh'
@@ -937,6 +938,8 @@ export default function AnnotationPanel() {
 
   const annotationIdRef = useRef(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const propagationRequestPendingRef = useRef(false)
+  const propagationRunAcceptedRef = useRef(false)
 
   const effectiveSelectedVideo = useMemo(() => {
     if (!workspace?.videos.length) return null
@@ -1297,8 +1300,17 @@ export default function AnnotationPanel() {
   }, [effectiveSelectedVideo, workspace])
 
   useEffect(() => {
+    if (propagationRequestPendingRef.current) return
     const status = workflowState?.stages.annotation.status
-    if (status !== 'running' && propagationState.isRunning) {
+    if (!propagationState.isRunning) return
+
+    if (status === 'running') {
+      propagationRunAcceptedRef.current = true
+      return
+    }
+
+    if (propagationRunAcceptedRef.current) {
+      propagationRunAcceptedRef.current = false
       setPropagationState((current) => ({ ...current, isRunning: false }))
     }
   }, [propagationState.isRunning, workflowState])
@@ -1430,21 +1442,30 @@ export default function AnnotationPanel() {
 
   async function handleRunPropagation(): Promise<void> {
     if (selectedAnchorEpisode === null) return
+    if (propagationState.isRunning || propagationRequestPendingRef.current) return
 
+    propagationRequestPendingRef.current = true
+    propagationRunAcceptedRef.current = false
     setPropagationState({ isRunning: true, error: '' })
 
     try {
       if (hasUnsavedChanges || saveState.versionNumber === 0) {
         const saved = await handleSaveAnnotations()
         if (!saved) {
+          propagationRequestPendingRef.current = false
           setPropagationState({ isRunning: false, error: '' })
           return
         }
       }
 
       await runPropagation(selectedAnchorEpisode)
+      propagationRunAcceptedRef.current = true
+      propagationRequestPendingRef.current = false
+      await refreshState()
       await loadPropagationResults()
     } catch (error) {
+      propagationRequestPendingRef.current = false
+      propagationRunAcceptedRef.current = false
       setPropagationState({
         isRunning: false,
         error: error instanceof Error ? error.message : 'Failed to run propagation',

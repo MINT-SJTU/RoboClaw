@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -566,6 +567,62 @@ def test_prototype_run_passes_selected_episode_indices_and_filter_mode(
     assert captured["candidate_limit"] == 40
     assert captured["episode_indices"] == [0, 2, 5]
     assert captured["quality_filter_mode"] == "all"
+
+
+def test_duplicate_propagation_run_keeps_existing_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _run() -> None:
+        dataset_path = _write_demo_dataset(tmp_path)
+        service = curation_service.CurationService()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls: list[int] = []
+
+        async def _fake_to_thread(
+            _function: object,
+            source_episode_index: int,
+        ) -> dict[str, object]:
+            calls.append(source_episode_index)
+            started.set()
+            await release.wait()
+            curation_service._update_stage_summary(
+                dataset_path,
+                "annotation",
+                {
+                    "source_episode_index": source_episode_index,
+                    "target_count": 0,
+                    "annotated_count": 1,
+                },
+            )
+            return {"source_episode_index": source_episode_index}
+
+        monkeypatch.setattr(curation_service.asyncio, "to_thread", _fake_to_thread)
+
+        first = await service.start_propagation_run(dataset_path, "demo", 0)
+        assert first == {"status": "started"}
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        running_state = load_workflow_state(dataset_path)
+        assert running_state["stages"]["annotation"]["status"] == "running"
+
+        second = await service.start_propagation_run(dataset_path, "demo", 0)
+        assert second == {"status": "already_running"}
+        assert calls == [0]
+
+        duplicate_state = load_workflow_state(dataset_path)
+        assert duplicate_state["stages"]["annotation"]["status"] == "running"
+
+        task = service._active_stage_task(dataset_path, "annotation")
+        assert task is not None
+        release.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        completed_state = load_workflow_state(dataset_path)
+        assert completed_state["stages"]["annotation"]["status"] == "completed"
+
+    asyncio.run(_run())
 
 
 def test_quality_pause_request_marks_state(
