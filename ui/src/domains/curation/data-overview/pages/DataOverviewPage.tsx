@@ -249,6 +249,10 @@ function groupQualityIssues(issues: Array<Record<string, unknown>>): Array<{
   return Array.from(groups.entries()).map(([validator, checks]) => ({ validator, checks }))
 }
 
+function isFailingIssue(issue: Record<string, unknown>): boolean {
+  return issue['passed'] !== true
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -1310,6 +1314,7 @@ function buildExportRows(
     quality_score: Number(row.quality_score.toFixed(1)),
     failed_validators: row.failed_validators.join(', '),
     issue_types: row.issues
+      .filter((issue) => isFailingIssue(issue))
       .map((issue) => {
         const checkName = issue['check_name']
         return typeof checkName === 'string' ? formatIssueLabel(checkName, locale) : ''
