@@ -7,11 +7,11 @@ from .reference_tube import (
     TRAJECTORY_DTW_VALIDATOR,
     ReferenceTubeBuilder,
     ReferenceTubeEvaluator,
-    skipped_result,
+    inconclusive_result,
     unavailable_result,
 )
 from .trajectory_entries import build_prototype_entry, propagation_dtw_config
-from .validators import _merge_threshold_overrides
+from .validators import _merge_threshold_overrides, weighted_validator_score
 
 
 def append_trajectory_dtw_results(
@@ -63,12 +63,12 @@ def attach_validator_result(episode: dict[str, Any], result: dict[str, Any]) -> 
         for issue in issues
         if issue.get("level") in blocking_levels
     )
-    scores = [
-        float(value.get("score", 0.0) or 0.0)
-        for value in validators.values()
+    validator_scores = [
+        {"name": name, "score": value.get("score", 0.0)}
+        for name, value in validators.items()
         if isinstance(value, dict)
     ]
-    episode["score"] = round(sum(scores) / len(scores), 1) if scores else 0.0
+    episode["score"] = weighted_validator_score(validator_scores) if validator_scores else 0.0
 
 
 def _build_trajectory_entry_lookup(
@@ -129,25 +129,19 @@ def _evaluate_trajectory_entry(
         )
 
     group_entries = groups.get(_trajectory_group_key(entry), [])
-    references = [item for item in group_entries if item.get("base_quality_passed")]
+    record_key = str(entry.get("record_key"))
+    comparable_entries = [
+        item for item in group_entries
+        if str(item.get("record_key")) != record_key
+    ]
+    references = [item for item in comparable_entries if item.get("base_quality_passed")]
     if not references:
-        references = group_entries[:]
+        references = comparable_entries[:]
     if not references:
-        return skipped_result(
+        return inconclusive_result(
             "no_reference",
             "No reference trajectory available for trajectory_dtw",
             {"reason": "no_reference"},
-        )
-
-    if len(references) == 1 and str(references[0].get("record_key")) == str(entry.get("record_key")):
-        return skipped_result(
-            "self_reference",
-            "Only self reference available for trajectory_dtw",
-            {
-                "reason": "self_reference",
-                "record_key": str(entry.get("record_key")),
-                "reference_count": 1,
-            },
         )
 
     dtw_config = propagation_dtw_config(references[0], entry)
@@ -156,7 +150,7 @@ def _evaluate_trajectory_entry(
         dtw_config=dtw_config,
     ).build(references)
     if tube is None:
-        return skipped_result(
+        return inconclusive_result(
             "no_reference",
             "No comparable reference trajectory available for trajectory_dtw",
             {"reason": "no_comparable_reference"},

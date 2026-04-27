@@ -6,6 +6,7 @@ from roboclaw.data.curation.reference_tube import (
 )
 from roboclaw.data.curation import service as curation_service
 from roboclaw.data.curation.service import _LegacyCurationService
+from roboclaw.data.curation.trajectory_quality import _evaluate_trajectory_entry
 from roboclaw.data.curation.validators import QUALITY_THRESHOLD_DEFAULTS
 
 
@@ -112,7 +113,31 @@ def test_reference_tube_single_reference_fallback_can_run() -> None:
     assert result["passed"] is True
 
 
-def test_quality_batch_appends_trajectory_dtw_validator(monkeypatch, tmp_path) -> None:
+def test_trajectory_dtw_excludes_candidate_from_references() -> None:
+    thresholds = _thresholds(trajectory_dtw_min_segment_s=0.0)
+    reference = {
+        **_entry("reference", [[0.0], [0.1], [0.2]]),
+        "task_key": "pick",
+        "robot_type": "arm",
+        "canonical_mode": "joint_canonical",
+        "base_quality_passed": True,
+    }
+    candidate = {
+        **_entry("candidate", [[0.0], [0.8], [0.2]]),
+        "task_key": "pick",
+        "robot_type": "arm",
+        "canonical_mode": "joint_canonical",
+        "base_quality_passed": True,
+    }
+    groups = {"pick::arm::joint_canonical": [reference, candidate]}
+
+    result = _evaluate_trajectory_entry(candidate, groups, thresholds)
+
+    assert result["passed"] is False
+    assert any(issue["check_name"] == "dtw_deviation" for issue in result["issues"])
+
+
+def test_quality_batch_marks_self_reference_as_unverified(monkeypatch, tmp_path) -> None:
     dataset_path = tmp_path / "demo"
     dataset_path.mkdir()
     info = {
@@ -161,6 +186,6 @@ def test_quality_batch_appends_trajectory_dtw_validator(monkeypatch, tmp_path) -
 
     episode = result["episodes"][0]
     assert "trajectory_dtw" in episode["validators"]
-    assert episode["validators"]["trajectory_dtw"]["passed"] is True
-    assert any(issue["check_name"] == "self_reference" for issue in episode["issues"])
-    assert result["passed"] == 1
+    assert episode["validators"]["trajectory_dtw"]["passed"] is False
+    assert any(issue["check_name"] == "no_reference" for issue in episode["issues"])
+    assert result["passed"] == 0

@@ -650,12 +650,12 @@ $$
 
 # Reference Tube DTW 轨迹异常检测
 
-这一节对应 `robot_data_analysis` 当前质检链路里更接近生产使用的 DTW：不是 K-medoids，也不是 ProSemA，而是用历史高质量样本构建一个 reference tube，再把候选 episode 对齐到这个标准动作通道上，诊断 `Deviation`、`Hesitate`、`Stall` 等异常。
+这一节对应 RoboClaw 当前质检链路里更接近生产使用的 DTW：不是 K-medoids，也不是 ProSemA，而是用同任务、同机器人、同轨迹表示下的其他高质量样本构建一个 reference tube，再把候选 episode 对齐到这个标准动作通道上，诊断 `Deviation`、`Hesitate`、`Stall` 等异常。候选 episode 不能进入自己的 reference tube；如果没有外部参考，应标记为未验证，而不是通过。
 
 对应实现：
 
-- `src/arts_analysis/services/duration_detector/miner_logic.py`
-- `src/arts_analysis/services/acceptance_service/acceptance_service.py`
+- `roboclaw/data/curation/trajectory_quality.py`
+- `roboclaw/data/curation/reference_tube.py`
 
 ---
 
@@ -707,7 +707,7 @@ $$
 
 ---
 
-## R3. fastDTW 对齐
+## R3. Windowed exact DTW 对齐
 
 对每条参考轨迹 \(R^{(r)}\)，使用 DTW 将其对齐到锚点 \(A\)：
 
@@ -723,10 +723,10 @@ $$
 
 其中 \(i\) 是锚点轨迹帧索引，\(j\) 是参考轨迹帧索引。
 
-工程里使用的是近似 DTW：
+工程里使用的是带窗口约束的精确 DTW：
 
 $$
-\operatorname{fastDTW}(A,R^{(r)};\ \text{radius}=20)
+\operatorname{DTW}(A,R^{(r)};\ \rho)
 $$
 
 局部距离使用多关节欧氏距离：
@@ -1034,7 +1034,7 @@ $$
 |---|---|
 | 算法角色 | 当前质检链路中的轨迹异常检测 |
 | 对齐对象 | 候选轨迹对齐到历史高质量 reference tube |
-| DTW 实现 | `fastdtw`，局部距离为多关节欧氏距离 |
+| DTW 实现 | windowed exact DTW，局部距离按轨迹表示选择欧氏或 grouped Huber |
 | 主要异常 | `Deviation`、`Hesitate`、`Stall` |
 | 结果归属 | 合并进“动作数据”类别 |
 | 通过影响 | 异常被标记为 `MAJOR`，会阻塞整体通过 |
@@ -1656,4 +1656,3 @@ $$
 \text{检查项}\rightarrow\text{验证器}\rightarrow\text{质量类别}\rightarrow\text{episode 决策}\rightarrow\text{数据集价值}
 }
 $$
-

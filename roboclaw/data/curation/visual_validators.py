@@ -77,6 +77,31 @@ def _video_metadata_from_feature(config: Any) -> tuple[float, int, int]:
     return fps, width, height
 
 
+def _visual_feature_lookup(info: dict[str, Any]) -> dict[str, Any]:
+    features = info.get("features", {}) if isinstance(info.get("features"), dict) else {}
+    return {
+        key: value for key, value in features.items()
+        if isinstance(value, dict) and value.get("dtype") == "video" and "depth" not in key.lower()
+    }
+
+
+def _feature_key_for_video_path(video_path: Path, feature_keys: list[str]) -> str | None:
+    text = video_path.as_posix()
+    for key in sorted(feature_keys, key=len, reverse=True):
+        short_name = key.rsplit(".", 1)[-1]
+        if key in text or short_name in video_path.stem:
+            return key
+    if len(feature_keys) == 1:
+        return feature_keys[0]
+    return None
+
+
+def _stream_label(video_path: Path, feature_key: str | None) -> str:
+    if feature_key:
+        return feature_key.rsplit(".", 1)[-1]
+    return video_path.stem
+
+
 def _decode_image_like(value: Any) -> np.ndarray | None:
     from PIL import Image
     if value is None:
@@ -188,11 +213,8 @@ def validate_visual_assets(
     info = data["info"]
     issues: list[dict[str, Any]] = []
     min_video_count = int(thresholds["visual_min_video_count"])
-    features = info.get("features", {}) if isinstance(info.get("features"), dict) else {}
-    visual_feature_keys = [
-        key for key, value in features.items()
-        if isinstance(value, dict) and value.get("dtype") == "video" and "depth" not in key.lower()
-    ]
+    visual_features = _visual_feature_lookup(info)
+    visual_feature_keys = list(visual_features)
 
     if not visual_feature_keys:
         issues.append(make_issue(
@@ -215,7 +237,7 @@ def validate_visual_assets(
     ))
 
     non_depth = [f for f in video_files if "depth" not in f.stem.lower()]
-    sample = non_depth[:2] or video_files[:2]
+    sample = non_depth or video_files
     accessible = sum(1 for f in sample if f.exists() and f.stat().st_size > 0)
     if sample:
         accessible_ratio = accessible / len(sample)
@@ -234,57 +256,19 @@ def validate_visual_assets(
 
     sampled_frames: list[np.ndarray] = []
     video_metrics: list[dict[str, float]] = []
-    if sample:
-        frames, fps, width, height, _frame_count = _sample_video_frames(sample[0])
-        if (fps <= 0 or width <= 0 or height <= 0) and visual_feature_keys:
+    for video_path in sample:
+        feature_key = _feature_key_for_video_path(video_path, visual_feature_keys)
+        stream = _stream_label(video_path, feature_key)
+        frames, fps, width, height, _frame_count = _sample_video_frames(video_path)
+        if fps <= 0 or width <= 0 or height <= 0:
             meta_fps, meta_width, meta_height = _video_metadata_from_feature(
-                features.get(visual_feature_keys[0])
+                visual_features.get(feature_key)
             )
             fps = fps or meta_fps
             width = width or meta_width
             height = height or meta_height
-        sampled_frames = frames
-        min_width = thresholds["visual_min_resolution_width"]
-        min_height = thresholds["visual_min_resolution_height"]
-        if width and height:
-            resolution_passed = width >= min_width and height >= min_height
-            issues.append(make_issue(
-                operator_name=operator_name,
-                check_name="video_resolution",
-                passed=resolution_passed,
-                message=f"{width}x{height} (min {int(min_width)}x{int(min_height)})",
-                level="major",
-                value={"width": width, "height": height},
-            ))
-        elif min_width > 0 or min_height > 0:
-            issues.append(make_issue(
-                operator_name=operator_name,
-                check_name="video_resolution",
-                passed=False,
-                message=f"Video resolution unavailable (min {int(min_width)}x{int(min_height)})",
-                level="major",
-                value={"width": None, "height": None},
-            ))
-
-        min_fps = thresholds["visual_min_frame_rate"]
-        if fps > 0:
-            issues.append(make_issue(
-                operator_name=operator_name,
-                check_name="video_fps",
-                passed=fps >= min_fps,
-                message=f"{fps:.1f} Hz (min {min_fps:.1f} Hz)",
-                level="major",
-                value={"fps": fps},
-            ))
-        elif min_fps > 0:
-            issues.append(make_issue(
-                operator_name=operator_name,
-                check_name="video_fps",
-                passed=False,
-                message=f"Video frame rate unavailable (min {min_fps:.1f} Hz)",
-                level="major",
-                value={"fps": None},
-            ))
+        sampled_frames.extend(frames)
+        _check_video_shape_and_rate(issues, operator_name, thresholds, stream, fps, width, height)
 
     if not sampled_frames:
         sampled_frames = [frame for _, frame in _iter_visual_parquet_frames(rows)]
@@ -296,6 +280,58 @@ def validate_visual_assets(
         _check_visual_metrics(issues, operator_name, video_metrics, thresholds)
 
     return finalize_validator(operator_name, issues, details={"sample_size": len(sample)})
+
+
+def _check_video_shape_and_rate(
+    issues: list[dict[str, Any]],
+    operator_name: str,
+    thresholds: dict[str, float],
+    stream: str,
+    fps: float,
+    width: int,
+    height: int,
+) -> None:
+    min_width = thresholds["visual_min_resolution_width"]
+    min_height = thresholds["visual_min_resolution_height"]
+    if width and height:
+        resolution_passed = width >= min_width and height >= min_height
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="video_resolution",
+            passed=resolution_passed,
+            message=f"{stream}: {width}x{height} (min {int(min_width)}x{int(min_height)})",
+            level="major",
+            value={"stream": stream, "width": width, "height": height},
+        ))
+    elif min_width > 0 or min_height > 0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="video_resolution",
+            passed=False,
+            message=f"{stream}: video resolution unavailable (min {int(min_width)}x{int(min_height)})",
+            level="major",
+            value={"stream": stream, "width": None, "height": None},
+        ))
+
+    min_fps = thresholds["visual_min_frame_rate"]
+    if fps > 0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="video_fps",
+            passed=fps >= min_fps,
+            message=f"{stream}: {fps:.1f} Hz (min {min_fps:.1f} Hz)",
+            level="major",
+            value={"stream": stream, "fps": fps},
+        ))
+    elif min_fps > 0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="video_fps",
+            passed=False,
+            message=f"{stream}: video frame rate unavailable (min {min_fps:.1f} Hz)",
+            level="major",
+            value={"stream": stream, "fps": None},
+        ))
 
 
 def _check_visual_metrics(

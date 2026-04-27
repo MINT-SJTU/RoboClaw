@@ -172,6 +172,10 @@ def test_quality_defaults_adapt_to_dataset_metadata(
         "dtype": "video",
         "shape": [480, 640, 3],
     }
+    info["features"]["observation.images.wrist"] = {
+        "dtype": "video",
+        "shape": [480, 640, 3],
+    }
     info_path.write_text(json.dumps(info), encoding="utf-8")
     monkeypatch.setattr(curation_routes, "datasets_root", lambda: dataset_root)
 
@@ -185,6 +189,7 @@ def test_quality_defaults_adapt_to_dataset_metadata(
     assert "trajectory_dtw" in payload["selected_validators"]
     assert "visual" in payload["selected_validators"]
     assert payload["threshold_overrides"]["metadata_require_videos"] == 1.0
+    assert payload["threshold_overrides"]["visual_min_video_count"] == 2.0
     assert payload["threshold_overrides"]["visual_min_resolution_width"] == 640.0
     assert payload["threshold_overrides"]["visual_min_resolution_height"] == 480.0
     assert payload["checks"]["task_descriptions_present"] is True

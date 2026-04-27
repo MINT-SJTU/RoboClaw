@@ -296,12 +296,12 @@ class ReferenceTubeEvaluator:
         }
 
 
-def skipped_result(check_name: str, message: str, value: dict[str, Any] | None = None) -> dict[str, Any]:
+def inconclusive_result(check_name: str, message: str, value: dict[str, Any] | None = None) -> dict[str, Any]:
     return _single_issue_result(
         check_name=check_name,
-        passed=True,
+        passed=False,
         message=message,
-        level="info",
+        level="major",
         value=value or {},
     )
 

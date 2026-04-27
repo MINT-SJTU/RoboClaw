@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from roboclaw.data.curation.clustering import discover_prototype_clusters, refine_clusters_with_dba
 from roboclaw.data.curation.propagation import propagate_annotation_spans
+from roboclaw.data.curation.propagation_history import collect_propagation_targets
 from roboclaw.data.curation.prototypes import discover_grouped_prototypes
 
 
@@ -119,6 +120,27 @@ def test_grouped_prototypes_treat_fixed_cluster_count_as_global_budget() -> None
 
     assert result["group_count"] == 2
     assert result["refinement"]["cluster_count"] == 3
+
+
+def test_propagation_targets_normalize_prototype_score_within_cluster() -> None:
+    prototype_results = {
+        "refinement": {
+            "clusters": [
+                {
+                    "members": [
+                        {"record_key": "0", "distance_to_barycenter": 0.0},
+                        {"record_key": "1", "distance_to_barycenter": 2.0},
+                        {"record_key": "2", "distance_to_barycenter": 4.0},
+                    ],
+                },
+            ],
+        },
+    }
+
+    targets = collect_propagation_targets(prototype_results, source_episode_index=0)
+    scores = {target["episode_index"]: target["prototype_score"] for target in targets}
+
+    assert scores == {1: 0.5, 2: 0.0}
 
 
 def test_propagation_uses_dtw_time_mapping_instead_of_duration_scaling() -> None:

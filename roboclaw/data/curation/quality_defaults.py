@@ -38,7 +38,7 @@ def build_quality_defaults(dataset_path: Path, dataset_name: str | None = None) 
         "metadata_require_videos": 1.0 if visual_features else 0.0,
         "metadata_require_task_description": 1.0,
         "metadata_min_duration_s": _duration_default(median_duration),
-        "visual_min_video_count": 1.0 if visual_features else 0.0,
+        "visual_min_video_count": float(len(visual_features)),
         "depth_min_stream_count": 1.0 if depth_features else 0.0,
     })
 

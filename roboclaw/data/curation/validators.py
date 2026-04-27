@@ -73,6 +73,23 @@ QUALITY_THRESHOLD_DEFAULTS: dict[str, float] = {
     "trajectory_dtw_min_segment_s": 0.2,
 }
 
+ISSUE_LEVEL_WEIGHTS: dict[str, float] = {
+    "critical": 1.0,
+    "major": 0.7,
+    "minor": 0.3,
+    "info": 0.05,
+}
+
+VALIDATOR_CATEGORY_WEIGHTS: dict[str, float] = {
+    "metadata": 0.20,
+    "timing": 0.15,
+    "action": 0.20,
+    "visual": 0.15,
+    "depth": 0.10,
+    "ee_trajectory": 0.10,
+    "trajectory_dtw": 0.10,
+}
+
 # ---------------------------------------------------------------------------
 # Issue / score model
 # ---------------------------------------------------------------------------
@@ -110,9 +127,7 @@ def finalize_validator(
     issues: list[dict[str, Any]],
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    total = max(len(issues), 1)
-    passed_count = sum(1 for issue in issues if issue["passed"])
-    score = round((passed_count / total) * 100, 1)
+    score = weighted_issue_score(issues)
     blocking_levels = {"critical", "major"}
     passed = all(issue["passed"] for issue in issues if issue["level"] in blocking_levels)
     return {
@@ -122,6 +137,31 @@ def finalize_validator(
         "issues": issues,
         "details": details or {},
     }
+
+
+def weighted_issue_score(issues: list[dict[str, Any]]) -> float:
+    weights = [
+        ISSUE_LEVEL_WEIGHTS.get(str(issue.get("level", "major")), ISSUE_LEVEL_WEIGHTS["major"])
+        for issue in issues
+    ]
+    total_weight = sum(weights) or 1.0
+    passed_weight = sum(
+        weight
+        for issue, weight in zip(issues, weights)
+        if issue.get("passed")
+    )
+    return round((passed_weight / total_weight) * 100, 1)
+
+
+def weighted_validator_score(results: list[dict[str, Any]]) -> float:
+    weighted_scores = []
+    for result in results:
+        name = str(result.get("name", ""))
+        weight = VALIDATOR_CATEGORY_WEIGHTS.get(name, 0.10)
+        weighted_scores.append((float(result.get("score", 0.0) or 0.0), weight))
+    total_weight = sum(weight for _score, weight in weighted_scores) or 1.0
+    score = sum(score * weight for score, weight in weighted_scores) / total_weight
+    return round(score, 1)
 
 
 def safe_float(value: Any) -> float | None:
@@ -897,9 +937,9 @@ def validate_trajectory_dtw(
     issue = make_issue(
         operator_name=operator_name,
         check_name="requires_batch_context",
-        passed=True,
+        passed=False,
         message="trajectory_dtw runs after batch quality validation",
-        level="info",
+        level="major",
         value={"skipped": True, "reason": "requires_batch_context"},
     )
     return finalize_validator(
@@ -942,7 +982,7 @@ def run_quality_validators(
         results.append(VALIDATOR_REGISTRY[name](data, threshold_overrides))
 
     all_issues = [issue for result in results for issue in result["issues"]]
-    total_score = statistics.fmean([r["score"] for r in results]) if results else 0.0
+    total_score = weighted_validator_score(results) if results else 0.0
     passed = all(r["passed"] for r in results)
     validators_dict = {
         r["name"]: {"passed": r["passed"], "score": r["score"]}
