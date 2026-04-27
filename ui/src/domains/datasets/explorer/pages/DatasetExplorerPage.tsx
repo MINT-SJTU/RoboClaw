@@ -1718,7 +1718,7 @@ export default function DatasetExplorerView() {
         </GlassPanel>
       ) : !summaryLoading ? (
         <GlassPanel className="quality-view__empty">
-          {source === 'remote' ? t('hfDatasetPlaceholder') : t('chooseLocalDirectory')}
+          {source === 'remote' ? t('remoteDatasetEmpty') : t('chooseLocalDirectory')}
         </GlassPanel>
       ) : null}
 
