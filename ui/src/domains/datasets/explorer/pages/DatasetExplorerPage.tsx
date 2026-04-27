@@ -1171,12 +1171,15 @@ export default function DatasetExplorerView() {
   const { prepareRemoteDatasetForWorkflow, createLocalDirectorySession } = useWorkflow()
   const {
     summary,
+    summaryRefKey,
     summaryLoading,
     summaryError,
     dashboard,
+    dashboardRefKey,
     dashboardLoading,
     dashboardError,
     episodePage,
+    episodePageRefKey,
     source,
     datasetIdInput,
     remoteDatasetSelected,
@@ -1206,21 +1209,30 @@ export default function DatasetExplorerView() {
   const requestedDatasetKeyRef = useRef('')
   const preparingForQualityRef = useRef(false)
   const activeRefForSource = activeDatasetRef?.source === source ? activeDatasetRef : null
-  const summaryForSource = activeRefForSource ? summary : null
-  const dashboardForSource = activeRefForSource ? dashboard : null
-  const episodePageForSource = activeRefForSource ? episodePage : null
+  const activeRefKey = buildExplorerRefKey(activeRefForSource)
+  const summaryMatchesActiveRef = Boolean(activeRefKey && summaryRefKey === activeRefKey)
+  const dashboardMatchesActiveRef = Boolean(activeRefKey && dashboardRefKey === activeRefKey)
+  const summaryForSource = summaryMatchesActiveRef ? summary : null
+  const summaryLoadingForSource = summaryMatchesActiveRef && summaryLoading
+  const summaryErrorForSource = summaryMatchesActiveRef ? summaryError : ''
+  const dashboardForSource = dashboardMatchesActiveRef ? dashboard : null
+  const dashboardLoadingForSource = dashboardMatchesActiveRef && dashboardLoading
+  const dashboardErrorForSource = dashboardMatchesActiveRef ? dashboardError : ''
+  const episodePageForSource = activeRefKey && episodePageRefKey.startsWith(`${activeRefKey}|`)
+    ? episodePage
+    : null
   const currentDataset =
     summaryForSource?.dataset || dashboardForSource?.dataset || episodePageForSource?.dataset || ''
 
   const datasetRef: ExplorerDatasetRef =
     source === 'remote'
-      ? { source, dataset: remoteDatasetSelected.trim() || activeRefForSource?.dataset }
+      ? { source, dataset: remoteDatasetSelected.trim() || undefined }
       : source === 'local'
-        ? { source, dataset: localDatasetInput.trim() || activeRefForSource?.dataset }
+        ? { source, dataset: localDatasetInput.trim() || undefined }
         : {
             source,
-            dataset: localPathDatasetLabel.trim() || activeRefForSource?.dataset,
-            path: localDatasetPathSelected.trim() || activeRefForSource?.path,
+            dataset: localPathDatasetLabel.trim() || undefined,
+            path: localDatasetPathSelected.trim() || undefined,
           }
 
   async function loadDataset(ref: ExplorerDatasetRef): Promise<void> {
@@ -1427,6 +1439,13 @@ export default function DatasetExplorerView() {
     }
   }
 
+  function markExplorerDraft(nextSource: ExplorerSource): void {
+    requestedDatasetKeyRef.current = ''
+    if (activeDatasetRef?.source === nextSource) {
+      setActiveDatasetRef(null)
+    }
+  }
+
   function closeSuggestionsSoon(): void {
     if (blurTimerRef.current != null) {
       window.clearTimeout(blurTimerRef.current)
@@ -1592,6 +1611,9 @@ export default function DatasetExplorerView() {
                         : remoteDatasetSelected,
                   }
                   setPageState(patch)
+                  if (nextValue.trim() !== remoteDatasetSelected.trim()) {
+                    markExplorerDraft('remote')
+                  }
                 }}
                 onFocus={openSuggestions}
                 onBlur={closeSuggestionsSoon}
@@ -1653,7 +1675,10 @@ export default function DatasetExplorerView() {
               <select
                 className="dataset-workbench__select"
                 value={localDatasetInput}
-                onChange={(event) => setPageState({ localDatasetInput: event.target.value })}
+                onChange={(event) => {
+                  setPageState({ localDatasetInput: event.target.value })
+                  markExplorerDraft('local')
+                }}
               >
                 <option value="">{t('selectDataset')}</option>
                 {localDatasets.map((item) => (
@@ -1681,7 +1706,14 @@ export default function DatasetExplorerView() {
                   className="dataset-workbench__input"
                   type="text"
                   value={localDatasetPathInput}
-                  onChange={(event) => setPageState({ localDatasetPathInput: event.target.value })}
+                  onChange={(event) => {
+                    setPageState({
+                      localDatasetPathInput: event.target.value,
+                      localDatasetPathSelected: '',
+                      localPathDatasetLabel: '',
+                    })
+                    markExplorerDraft('path')
+                  }}
                   placeholder={t('localPathPlaceholder')}
                 />
                 <input
@@ -1744,17 +1776,17 @@ export default function DatasetExplorerView() {
           <span>{datasetSummary.robot_type}</span>
           {datasetSummary.codebase_version && <span>{datasetSummary.codebase_version}</span>}
         </div>
-      ) : summaryError ? (
+      ) : summaryErrorForSource ? (
         <GlassPanel className="quality-view__empty">
-          <span className="quality-sidebar__error">{summaryError}</span>
+          <span className="quality-sidebar__error">{summaryErrorForSource}</span>
         </GlassPanel>
-      ) : !summaryLoading ? (
+      ) : !summaryLoadingForSource ? (
         <GlassPanel className="quality-view__empty">
           {source === 'remote' ? t('remoteDatasetEmpty') : t('chooseLocalDirectory')}
         </GlassPanel>
       ) : null}
 
-      {summaryLoading && (
+      {summaryLoadingForSource && (
         <GlassPanel className="quality-view__empty">{t('running')}...</GlassPanel>
       )}
 
@@ -1772,8 +1804,8 @@ export default function DatasetExplorerView() {
             summary={datasetSummary}
             dashboard={dashboardForSource}
             episodePage={episodePageForSource}
-            dashboardLoading={dashboardLoading}
-            dashboardError={dashboardError}
+            dashboardLoading={dashboardLoadingForSource}
+            dashboardError={dashboardErrorForSource}
             episodesNode={<EpisodeBrowser datasetRef={datasetRef} />}
             modalitiesNode={
               <div className="explorer-section">
@@ -1781,7 +1813,7 @@ export default function DatasetExplorerView() {
                 {dashboardForSource ? (
                   <ModalityChips items={dashboardForSource.modality_summary} />
                 ) : (
-                  <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
                 )}
               </div>
             }
@@ -1798,7 +1830,7 @@ export default function DatasetExplorerView() {
                     <FeatureStatsTable stats={dashboardForSource.feature_stats} />
                   </>
                 ) : (
-                  <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
                 )}
               </div>
             }
@@ -1816,7 +1848,7 @@ export default function DatasetExplorerView() {
                     </div>
                   </>
                 ) : (
-                  <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
                 )}
               </div>
             }

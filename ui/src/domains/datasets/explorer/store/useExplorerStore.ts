@@ -226,16 +226,20 @@ function persistExplorerPageState(state: ExplorerPageState): void {
 
 interface ExplorerStore extends ExplorerPageState {
   summary: ExplorerSummary | null
+  summaryRefKey: string
   summaryLoading: boolean
   summaryError: string
   dashboard: ExplorerDashboard | null
+  dashboardRefKey: string
   dashboardLoading: boolean
   dashboardError: string
   episodePage: ExplorerEpisodePage | null
+  episodePageRefKey: string
   episodePageLoading: boolean
   episodePageError: string
   selectedEpisodeIndex: number | null
   episodeDetail: EpisodeDetail | null
+  episodeDetailRefKey: string
   episodeLoading: boolean
   episodeError: string
 
@@ -306,19 +310,38 @@ function buildExplorerQuery(ref: ExplorerDatasetRef): string {
   return params.toString()
 }
 
+function assertRemoteDatasetMatchesRequest(
+  ref: ExplorerDatasetRef,
+  payload: { dataset?: string },
+  label: string,
+): void {
+  if (ref.source !== 'remote' || !ref.dataset || !payload.dataset) {
+    return
+  }
+  if (payload.dataset !== ref.dataset) {
+    throw new Error(
+      `${label} returned '${payload.dataset}' while '${ref.dataset}' was requested`,
+    )
+  }
+}
+
 export const useExplorer = create<ExplorerStore>((set) => ({
   ...getStoredExplorerPageState(),
   summary: null,
+  summaryRefKey: '',
   summaryLoading: false,
   summaryError: '',
   dashboard: null,
+  dashboardRefKey: '',
   dashboardLoading: false,
   dashboardError: '',
   episodePage: null,
+  episodePageRefKey: '',
   episodePageLoading: false,
   episodePageError: '',
   selectedEpisodeIndex: null,
   episodeDetail: null,
+  episodeDetailRefKey: '',
   episodeLoading: false,
   episodeError: '',
 
@@ -344,8 +367,10 @@ export const useExplorer = create<ExplorerStore>((set) => ({
   },
 
   loadSummary: async (ref: ExplorerDatasetRef) => {
+    const requestKey = buildExplorerRefKey(ref)
     set({
       summary: null,
+      summaryRefKey: requestKey,
       summaryLoading: true,
       summaryError: '',
     })
@@ -353,21 +378,24 @@ export const useExplorer = create<ExplorerStore>((set) => ({
       const summary = await fetchJson<ExplorerSummary>(
         `/api/explorer/summary?${buildExplorerQuery(ref)}`,
       )
-      set({ summary })
+      assertRemoteDatasetMatchesRequest(ref, summary, 'Explorer summary')
+      set((state) => (state.summaryRefKey === requestKey ? { summary } : {}))
       return summary
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to load explorer summary'
-      set({ summaryError: message })
+      set((state) => (state.summaryRefKey === requestKey ? { summaryError: message } : {}))
       throw error instanceof Error ? error : new Error(message)
     } finally {
-      set({ summaryLoading: false })
+      set((state) => (state.summaryRefKey === requestKey ? { summaryLoading: false } : {}))
     }
   },
 
   loadDashboard: async (ref: ExplorerDatasetRef) => {
+    const requestKey = buildExplorerRefKey(ref)
     set({
       dashboard: null,
+      dashboardRefKey: requestKey,
       dashboardLoading: true,
       dashboardError: '',
     })
@@ -375,48 +403,53 @@ export const useExplorer = create<ExplorerStore>((set) => ({
       const dashboard = await fetchJson<ExplorerDashboard>(
         `/api/explorer/details?${buildExplorerQuery(ref)}`,
       )
-      set({ dashboard })
+      assertRemoteDatasetMatchesRequest(ref, dashboard, 'Explorer dashboard')
+      set((state) => (state.dashboardRefKey === requestKey ? { dashboard } : {}))
       return dashboard
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to load explorer dashboard'
-      set({
-        dashboardError: message,
-      })
+      set((state) => (state.dashboardRefKey === requestKey ? { dashboardError: message } : {}))
       throw error instanceof Error ? error : new Error(message)
     } finally {
-      set({ dashboardLoading: false })
+      set((state) => (state.dashboardRefKey === requestKey ? { dashboardLoading: false } : {}))
     }
   },
 
   loadEpisodePage: async (ref: ExplorerDatasetRef, page = 1, pageSize = 50) => {
     if (!ref.dataset && !ref.path) return
+    const requestKey = `${buildExplorerRefKey(ref)}|page:${page}|size:${pageSize}`
     set({
+      episodePage: null,
+      episodePageRefKey: requestKey,
       episodePageLoading: true,
       episodePageError: '',
       selectedEpisodeIndex: null,
       episodeDetail: null,
+      episodeDetailRefKey: '',
       episodeError: '',
     })
     try {
       const episodePage = await fetchJson<ExplorerEpisodePage>(
         `/api/explorer/episodes?${buildExplorerQuery(ref)}&page=${page}&page_size=${pageSize}`,
       )
-      set({ episodePage })
+      assertRemoteDatasetMatchesRequest(ref, episodePage, 'Explorer episodes')
+      set((state) => (state.episodePageRefKey === requestKey ? { episodePage } : {}))
     } catch (error) {
-      set({
-        episodePageError: error instanceof Error ? error.message : 'Failed to load episodes',
-      })
+      const message = error instanceof Error ? error.message : 'Failed to load episodes'
+      set((state) => (state.episodePageRefKey === requestKey ? { episodePageError: message } : {}))
     } finally {
-      set({ episodePageLoading: false })
+      set((state) => (state.episodePageRefKey === requestKey ? { episodePageLoading: false } : {}))
     }
   },
 
   selectEpisode: async (ref: ExplorerDatasetRef, index: number) => {
     if (!ref.dataset && !ref.path) return
+    const requestKey = `${buildExplorerRefKey(ref)}|episode:${index}`
     set({
       selectedEpisodeIndex: index,
       episodeDetail: null,
+      episodeDetailRefKey: requestKey,
       episodeLoading: true,
       episodeError: '',
     })
@@ -424,17 +457,21 @@ export const useExplorer = create<ExplorerStore>((set) => ({
       const detail = await fetchJson<EpisodeDetail>(
         `/api/explorer/episode?${buildExplorerQuery(ref)}&episode_index=${index}`,
       )
-      set({ episodeDetail: detail })
+      set((state) => (state.episodeDetailRefKey === requestKey ? { episodeDetail: detail } : {}))
     } catch (error) {
-      set({
-        episodeError: error instanceof Error ? error.message : 'Failed to load episode detail',
-      })
+      const message = error instanceof Error ? error.message : 'Failed to load episode detail'
+      set((state) => (state.episodeDetailRefKey === requestKey ? { episodeError: message } : {}))
     } finally {
-      set({ episodeLoading: false })
+      set((state) => (state.episodeDetailRefKey === requestKey ? { episodeLoading: false } : {}))
     }
   },
 
   clearEpisode: () => {
-    set({ selectedEpisodeIndex: null, episodeDetail: null, episodeError: '' })
+    set({
+      selectedEpisodeIndex: null,
+      episodeDetail: null,
+      episodeDetailRefKey: '',
+      episodeError: '',
+    })
   },
 }))
