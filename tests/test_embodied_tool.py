@@ -54,6 +54,7 @@ from roboclaw.embodied.command.helpers import (
     group_arms,
     resolve_action_arms as _resolve_arms,
     resolve_bimanual_pair,
+    validate_dataset_name,
 )
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
@@ -860,3 +861,14 @@ def test_resolve_cameras_maps_stable_camera_port_to_runtime_index(tmp_path: Path
 
 def test_dataset_path_appends_local_and_dataset_name(tmp_path: Path) -> None:
     assert dataset_path(_manifest_from_data(tmp_path, _MOCK_SETUP), "demo") == Path("/data/local/demo")
+
+
+@pytest.mark.parametrize("name", ["demo", "pick_cup", "eval-001", "Run_2"])
+def test_validate_dataset_name_accepts_ascii_slug(name: str) -> None:
+    validate_dataset_name(name)
+
+
+@pytest.mark.parametrize("name", ["", "pick cup", "抓取杯子", "../demo", "demo\n"])
+def test_validate_dataset_name_rejects_non_slug(name: str) -> None:
+    with pytest.raises(ValueError, match="ASCII slug"):
+        validate_dataset_name(name)

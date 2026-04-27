@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
+from roboclaw.data.datasets import validate_dataset_slug
 from roboclaw.embodied.embodiment.manifest.binding import ArmBinding, ArmRole, CameraBinding
-
-_DATASET_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 
 class ActionError(RuntimeError):
@@ -54,11 +52,7 @@ def resolve_bimanual_pair(
 
 def validate_dataset_name(name: str) -> None:
     """Raise ValueError if name is not a valid dataset slug."""
-    if not name or not _DATASET_NAME_RE.match(name):
-        raise ValueError(
-            "dataset_name must be a non-empty ASCII slug "
-            "(letters, numbers, underscores, hyphens)."
-        )
+    validate_dataset_slug(name)
 
 
 def dataset_path(manifest: Any, name: str, fallback: Path | None = None) -> Path:
