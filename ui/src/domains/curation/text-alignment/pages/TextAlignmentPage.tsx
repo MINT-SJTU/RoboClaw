@@ -13,6 +13,7 @@ export default function TextAlignmentView() {
     qualityResults,
     prototypeResults,
     propagationResults,
+    applyTextAnnotationsToTrainingTasks,
     publishTextAnnotationsParquet,
     selectDataset,
     stopPolling,
@@ -21,6 +22,7 @@ export default function TextAlignmentView() {
     workflowState,
   } = useWorkflow()
   const [publishing, setPublishing] = useState(false)
+  const [applyingTasks, setApplyingTasks] = useState(false)
   const [publishMessage, setPublishMessage] = useState('')
   const [publishError, setPublishError] = useState('')
 
@@ -45,6 +47,22 @@ export default function TextAlignmentView() {
       setPublishError(error instanceof Error ? error.message : 'Publish failed')
     } finally {
       setPublishing(false)
+    }
+  }
+
+  async function handleApplyTasks(): Promise<void> {
+    setApplyingTasks(true)
+    setPublishMessage('')
+    setPublishError('')
+    try {
+      const result = await applyTextAnnotationsToTrainingTasks()
+      setPublishMessage(
+        `${t('trainingTasksApplied')}: ${result.updated_episode_count} ${t('episodes')} · ${result.manifest_path}`,
+      )
+    } catch (error) {
+      setPublishError(error instanceof Error ? error.message : 'Apply failed')
+    } finally {
+      setApplyingTasks(false)
     }
   }
 
@@ -101,11 +119,20 @@ export default function TextAlignmentView() {
               <ActionButton
                 type="button"
                 variant="secondary"
-                disabled={!selectedDataset || publishing}
+                disabled={!selectedDataset || publishing || applyingTasks}
                 onClick={() => void handlePublish()}
                 className="justify-center"
               >
                 {publishing ? t('publishing') : t('publishTextParquet')}
+              </ActionButton>
+              <ActionButton
+                type="button"
+                variant="warning"
+                disabled={!selectedDataset || publishing || applyingTasks}
+                onClick={() => void handleApplyTasks()}
+                className="justify-center"
+              >
+                {applyingTasks ? t('applying') : t('applyTextToTrainingTasks')}
               </ActionButton>
             </div>
           </div>

@@ -27,6 +27,7 @@ from roboclaw.data.datasets import (
 from roboclaw.data.curation.exports import (
     export_quality_csv,
     publish_quality_metadata_parquet,
+    publish_text_annotations_as_training_tasks,
     publish_text_annotations_metadata_parquet,
 )
 from roboclaw.data.curation.paths import datasets_root
@@ -478,6 +479,15 @@ def register_curation_routes(app: FastAPI) -> None:
         """Publish current annotation state into dataset metadata as parquet."""
         dataset_path = _ensure_dataset_workspace(body.dataset)
         return publish_text_annotations_metadata_parquet(body.dataset, dataset_path)
+
+    @app.post("/api/curation/text-annotations-apply")
+    async def workflow_text_annotations_apply(body: DatasetPublishRequest) -> dict[str, Any]:
+        """Apply current annotation text to the training task metadata."""
+        dataset_path = _ensure_dataset_workspace(body.dataset)
+        try:
+            return publish_text_annotations_as_training_tasks(body.dataset, dataset_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # -----------------------------------------------------------------------
     # Video serving

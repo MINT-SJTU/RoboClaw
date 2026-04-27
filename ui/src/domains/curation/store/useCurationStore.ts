@@ -124,6 +124,21 @@ export interface PropagationResults {
   published_parquet_path?: string
 }
 
+export interface TrainingTaskApplyResult {
+  status: string
+  path: string
+  manifest_path: string
+  backup_dir: string
+  updated_episode_count: number
+  updated_episode_file_count: number
+  updated_data_file_count: number
+  updated_task_file_count: number
+  updated_info_file_count: number
+  synced_quality_episode_count?: number
+  task_count: number
+  unmatched_episode_indices: number[]
+}
+
 export interface RemoteWorkflowPrepareResult {
   dataset_id: string
   local_path: string
@@ -334,6 +349,7 @@ interface WorkflowStore {
   deleteQualityResults: () => Promise<void>
   publishQualityParquet: () => Promise<{ path: string; row_count: number }>
   publishTextAnnotationsParquet: () => Promise<{ path: string; row_count: number }>
+  applyTextAnnotationsToTrainingTasks: () => Promise<TrainingTaskApplyResult>
   getQualityCsvUrl: (failedOnly?: boolean) => string
   fetchAnnotationWorkspace: (episodeIndex: number) => Promise<AnnotationWorkspacePayload>
   saveAnnotations: (
@@ -821,6 +837,24 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       },
     )
     await get().loadPropagationResults()
+    await get().loadAlignmentOverview()
+    return result
+  },
+
+  applyTextAnnotationsToTrainingTasks: async () => {
+    const { selectedDataset } = get()
+    if (!selectedDataset) {
+      throw new Error('No dataset selected')
+    }
+    const result = await fetchJson<TrainingTaskApplyResult>(
+      '/api/curation/text-annotations-apply',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataset: selectedDataset }),
+      },
+    )
+    await get().loadQualityResults()
     await get().loadAlignmentOverview()
     return result
   },
