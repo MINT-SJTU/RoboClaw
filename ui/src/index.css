@@ -4904,8 +4904,14 @@ a {
   grid-template-columns: 1fr;
 }
 
+.pipeline-compact-text-page .review-tool-rail,
+.pipeline-compact-text-page .review-stage-overlay,
+.pipeline-compact-text-page .review-stage-footer {
+  display: none;
+}
+
 .pipeline-compact-text-page .review-tool-rail {
-  display: flex;
+  display: none;
   gap: 6px;
   padding: 6px;
   border-radius: 8px;
@@ -4931,11 +4937,16 @@ a {
 }
 
 .pipeline-compact-text-page .review-stage {
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
+  border-color: rgba(5, 7, 11, 0.12);
+  background: #05070b;
 }
 
 .pipeline-compact-text-page .review-stage-viewport {
   aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #05070b;
 }
 
 .pipeline-compact-text-page .review-stage-player,
