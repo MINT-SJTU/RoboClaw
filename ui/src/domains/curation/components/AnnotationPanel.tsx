@@ -1044,7 +1044,7 @@ export default function AnnotationPanel() {
   }, [workspace])
 
   useEffect(() => {
-    if (!selectedAnchorEpisode) return
+    if (selectedAnchorEpisode === null) return
 
     let active = true
     setWorkspaceLoading(true)
@@ -1304,7 +1304,7 @@ export default function AnnotationPanel() {
   }, [propagationState.isRunning, workflowState])
 
   function createAnnotation(seedTime = playbackState.time): void {
-    if (!selectedAnchorEpisode) return
+    if (selectedAnchorEpisode === null) return
 
     annotationIdRef.current += 1
     const startTime = clampAnnotationTime(seedTime, Number.POSITIVE_INFINITY)
@@ -1394,7 +1394,7 @@ export default function AnnotationPanel() {
   }
 
   async function handleSaveAnnotations(): Promise<boolean> {
-    if (!selectedAnchorEpisode) return false
+    if (selectedAnchorEpisode === null) return false
 
     setSaveState((current) => ({ ...current, isSaving: true, error: '' }))
 
@@ -1429,7 +1429,7 @@ export default function AnnotationPanel() {
   }
 
   async function handleRunPropagation(): Promise<void> {
-    if (!selectedAnchorEpisode) return
+    if (selectedAnchorEpisode === null) return
 
     setPropagationState({ isRunning: true, error: '' })
 
@@ -1471,7 +1471,7 @@ export default function AnnotationPanel() {
     )
   }
 
-  if (!selectedAnchorEpisode) {
+  if (selectedAnchorEpisode === null) {
     return (
       <div className="annotation-panel__empty">
         <p>{copy.selectAnchor}</p>
@@ -1481,88 +1481,114 @@ export default function AnnotationPanel() {
 
   return (
     <div className="annotation-panel">
-      <div className="annotation-panel__anchor-strip">
-        <div className="annotation-panel__anchor-head">
-          <div>
-            <h4>{copy.anchors}</h4>
+      <div className="annotation-panel__topdock">
+        <div className="annotation-panel__anchor-strip">
+          <div className="annotation-panel__anchor-head">
+            <div>
+              <h4>{copy.anchors}</h4>
+            </div>
+            {hasUnsavedChanges ? (
+              <span className="annotation-pill annotation-pill--warn">
+                {copy.saveBeforeSwitch}
+              </span>
+            ) : null}
           </div>
-          {hasUnsavedChanges ? (
-            <span className="annotation-pill annotation-pill--warn">
-              {copy.saveBeforeSwitch}
-            </span>
-          ) : null}
-        </div>
-        <div className="annotation-panel__anchor-list">
-          {anchorItems.map((item) => (
-            <button
-              key={item.episodeIndex}
-              type="button"
-              className={
-                item.episodeIndex === selectedAnchorEpisode
-                  ? 'annotation-anchor-card is-selected'
-                  : 'annotation-anchor-card'
-              }
-              onClick={() => void focusAnchorEpisode(item.episodeIndex)}
-            >
-              <div className="annotation-anchor-card__head">
-                <span>{copy.cluster} {item.clusterIndex + 1}</span>
-                <strong>EP {item.episodeIndex}</strong>
-              </div>
-              <div className="annotation-anchor-card__meta">
-                <span>{copy.members}: {item.memberCount}</span>
-                <span>{copy.quality}: {item.qualityScore?.toFixed(1) ?? '-'}</span>
-              </div>
-              <div className="annotation-anchor-card__status">
-                {item.annotated ? (
-                  <span className="annotation-pill annotation-pill--ok">
-                    {copy.annotated}
+          <div className="annotation-panel__anchor-list">
+            {anchorItems.map((item) => (
+              <button
+                key={item.episodeIndex}
+                type="button"
+                className={
+                  item.episodeIndex === selectedAnchorEpisode
+                    ? 'annotation-anchor-card is-selected'
+                    : 'annotation-anchor-card'
+                }
+                onClick={() => void focusAnchorEpisode(item.episodeIndex)}
+              >
+                <div className="annotation-anchor-card__head">
+                  <span>{copy.cluster} {item.clusterIndex + 1}</span>
+                  <strong>EP {item.episodeIndex}</strong>
+                </div>
+                <div className="annotation-anchor-card__meta">
+                  <span>{copy.members}: {item.memberCount}</span>
+                  <span>{copy.quality}: {item.qualityScore?.toFixed(1) ?? '-'}</span>
+                </div>
+                <div className="annotation-anchor-card__status">
+                  {item.annotated ? (
+                    <span className="annotation-pill annotation-pill--ok">
+                      {copy.annotated}
+                    </span>
+                  ) : null}
+                  <span className={item.propagated ? 'annotation-pill annotation-pill--ok' : 'annotation-pill'}>
+                    {item.propagated ? copy.propagationDone : copy.propagationPending}
                   </span>
-                ) : null}
-                <span className={item.propagated ? 'annotation-pill annotation-pill--ok' : 'annotation-pill'}>
-                  {item.propagated ? copy.propagationDone : copy.propagationPending}
-                </span>
-              </div>
-            </button>
-          ))}
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
 
-      <div className="annotation-panel__toolbar">
-        <div className="annotation-panel__toolbar-status">
-          <span className="annotation-pill">
-            {copy.savedVersion}: {saveState.versionNumber || copy.notSavedYet}
-          </span>
-          <span className="annotation-pill">
-            {copy.annotationCount}: {annotations.length}
-          </span>
-          {latestPropagation ? (
-            <span className="annotation-pill annotation-pill--ok">
-              {copy.targetCount}: {latestPropagation.target_count}
+        <div className="annotation-panel__toolbar">
+          <div className="annotation-panel__toolbar-status">
+            <span className="annotation-pill">
+              {copy.savedVersion}: {saveState.versionNumber || copy.notSavedYet}
             </span>
-          ) : null}
+            <span className="annotation-pill">
+              {copy.annotationCount}: {annotations.length}
+            </span>
+            {latestPropagation ? (
+              <span className="annotation-pill annotation-pill--ok">
+                {copy.targetCount}: {latestPropagation.target_count}
+              </span>
+            ) : null}
+          </div>
+          <div className="annotation-panel__toolbar-actions">
+            <button
+              type="button"
+              className="annotation-primary-button"
+              onClick={() => void handleSaveAnnotations()}
+              disabled={saveState.isSaving || workspaceLoading}
+            >
+              {saveState.isSaving ? copy.saving : copy.saveAnnotationVersion}
+            </button>
+            <button
+              type="button"
+              className="annotation-primary-button"
+              onClick={() => void handleRunPropagation()}
+              disabled={saveState.isSaving || workspaceLoading || propagationState.isRunning}
+            >
+              {propagationState.isRunning
+                ? copy.propagating
+                : hasUnsavedChanges || saveState.versionNumber === 0
+                  ? copy.saveAndPropagate
+                  : copy.runPropagation}
+            </button>
+          </div>
         </div>
-        <div className="annotation-panel__toolbar-actions">
-          <button
-            type="button"
-            className="annotation-primary-button"
-            onClick={() => void handleSaveAnnotations()}
-            disabled={saveState.isSaving || workspaceLoading}
-          >
-            {saveState.isSaving ? copy.saving : copy.saveAnnotationVersion}
-          </button>
-          <button
-            type="button"
-            className="annotation-primary-button"
-            onClick={() => void handleRunPropagation()}
-            disabled={saveState.isSaving || workspaceLoading || propagationState.isRunning}
-          >
-            {propagationState.isRunning
-              ? copy.propagating
-              : hasUnsavedChanges || saveState.versionNumber === 0
-                ? copy.saveAndPropagate
-                : copy.runPropagation}
-          </button>
-        </div>
+
+        {workspace && workspace.videos.length > 1 ? (
+          <section className="annotation-stream-switcher">
+            <div className="annotation-stream-switcher__head">
+              <span>{copy.switchVideo}</span>
+            </div>
+            <div className="annotation-stream-switcher__list">
+              {workspace.videos.map((video) => (
+                <button
+                  key={video.path}
+                  type="button"
+                  className={
+                    video.path === effectiveSelectedVideo?.path
+                      ? 'annotation-stream-pill is-selected'
+                      : 'annotation-stream-pill'
+                  }
+                  onClick={() => setSelectedVideoPath(video.path)}
+                >
+                  {video.stream || video.path}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {workspaceError ? <div className="status-panel error">{workspaceError}</div> : null}
@@ -1573,56 +1599,34 @@ export default function AnnotationPanel() {
       {workspaceLoading ? <div className="status-panel">{copy.loadingWorkspace}</div> : null}
 
       {workspace && !workspaceLoading ? (
-        <>
-          <AnnotationWorkspaceCard
-            videoRef={videoRef}
-            videoSource={effectiveSelectedVideo?.url || ''}
-            videoTitle={effectiveSelectedVideo?.path || ''}
-            fps={Number(workspace.summary.fps) || 30}
-            streamLabel={effectiveSelectedVideo?.stream || ''}
-            chunkLabel={
-              effectiveSelectedVideo
-                ? effectiveSelectedVideo.path.split('/').slice(-2, -1)[0] || ''
-                : ''
-            }
-            currentFrame={currentFrame}
-            isPaused={isStudioPaused}
-            videoCurrentTime={playbackState.time}
-            timelineDuration={timelineDuration}
-            annotations={annotations}
-            selectedAnnotationId={selectedAnnotationId}
-            onSelectAnnotation={setSelectedAnnotationId}
-            onCreateAnnotation={createAnnotation}
-            onUpdateAnnotation={updateAnnotation}
-            onDeleteAnnotation={deleteAnnotation}
-            onJumpToTime={jumpToTime}
-          />
+        <div className="annotation-panel__studio-grid">
+          <div className="annotation-panel__studio-main">
+            <AnnotationWorkspaceCard
+              videoRef={videoRef}
+              videoSource={effectiveSelectedVideo?.url || ''}
+              videoTitle={effectiveSelectedVideo?.path || ''}
+              fps={Number(workspace.summary.fps) || 30}
+              streamLabel={effectiveSelectedVideo?.stream || ''}
+              chunkLabel={
+                effectiveSelectedVideo
+                  ? effectiveSelectedVideo.path.split('/').slice(-2, -1)[0] || ''
+                  : ''
+              }
+              currentFrame={currentFrame}
+              isPaused={isStudioPaused}
+              videoCurrentTime={playbackState.time}
+              timelineDuration={timelineDuration}
+              annotations={annotations}
+              selectedAnnotationId={selectedAnnotationId}
+              onSelectAnnotation={setSelectedAnnotationId}
+              onCreateAnnotation={createAnnotation}
+              onUpdateAnnotation={updateAnnotation}
+              onDeleteAnnotation={deleteAnnotation}
+              onJumpToTime={jumpToTime}
+            />
+          </div>
 
-          {workspace.videos.length > 1 ? (
-            <section className="annotation-stream-switcher">
-              <div className="annotation-stream-switcher__head">
-                <span>{copy.switchVideo}</span>
-              </div>
-              <div className="annotation-stream-switcher__list">
-                {workspace.videos.map((video) => (
-                  <button
-                    key={video.path}
-                    type="button"
-                    className={
-                      video.path === effectiveSelectedVideo?.path
-                        ? 'annotation-stream-pill is-selected'
-                        : 'annotation-stream-pill'
-                    }
-                    onClick={() => setSelectedVideoPath(video.path)}
-                  >
-                    {video.stream || video.path}
-                  </button>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          <section className="episode-preview-trajectory-panel">
+          <section className="episode-preview-trajectory-panel annotation-panel__trajectory-dock">
             <div className="episode-preview-trajectory-head">
               <span>{copy.syncedAxes}</span>
               <strong>{copy.syncedAxesHint}</strong>
@@ -1663,7 +1667,7 @@ export default function AnnotationPanel() {
               onSelectEntry={setSelectedComparisonKey}
             />
           </section>
-        </>
+        </div>
       ) : null}
     </div>
   )

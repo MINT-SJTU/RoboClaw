@@ -1,7 +1,7 @@
 import { useI18n } from '@/i18n'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
 
-export default function PrototypePanel() {
+export default function PrototypePanel({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n()
   const {
     runPrototypeDiscovery,
@@ -16,7 +16,7 @@ export default function PrototypePanel() {
   const qualityDone = qStage?.status === 'completed'
 
   return (
-    <div className="prototype-panel">
+    <div className={compact ? 'prototype-panel prototype-panel--compact' : 'prototype-panel'}>
       <div className="prototype-panel__topbar">
         <button
           type="button"

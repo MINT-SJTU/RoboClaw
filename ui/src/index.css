@@ -4626,12 +4626,30 @@ a {
 }
 
 .pipeline-toolbar-card {
-  padding: 10px 12px;
+  padding: 10px 12px !important;
   border-radius: 8px;
 }
 
+.pipeline-toolbar-card.text-alignment-control-card {
+  gap: 7px;
+}
+
 .pipeline-toolbar-card .text-alignment-control-card__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.pipeline-toolbar-card .text-alignment-control-card__meta {
+  gap: 3px;
+}
+
+.pipeline-toolbar-card .text-alignment-control-card__actions .dataset-selector__select {
+  min-height: 34px;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
 .pipeline-toolbar-card .text-alignment-control-card__title {
@@ -4641,6 +4659,520 @@ a {
 .pipeline-toolbar-card .text-alignment-control-card__stats {
   gap: 8px;
   font-size: 12px;
+}
+
+.pipeline-toolbar-card .text-alignment-control-card__actions {
+  gap: 8px;
+}
+
+.pipeline-toolbar-card .text-alignment-control-card__actions .action-button,
+.pipeline-toolbar-card .text-alignment-control-card__actions button {
+  min-height: 34px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.pipeline-toolbar-card .text-alignment-control-card__footer {
+  gap: 3px;
+  min-width: 0;
+}
+
+.pipeline-toolbar-card .text-alignment-control-card__footer .quality-sidebar__path,
+.pipeline-toolbar-card .text-alignment-control-card__footer .quality-sidebar__error {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.text-alignment-control-card__prototype {
+  padding-top: 6px;
+  border-top: 1px solid rgba(47, 111, 228, 0.08);
+}
+
+.prototype-panel--compact {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding-top: 0;
+  min-width: 0;
+}
+
+.prototype-panel--compact .prototype-panel__topbar {
+  grid-column: 1;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.prototype-panel--compact .prototype-panel__run-btn {
+  min-height: 32px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.prototype-panel--compact .prototype-panel__hint {
+  font-size: 12px;
+}
+
+.prototype-panel--compact .prototype-panel__results {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  overflow: hidden;
+  grid-column: 2;
+}
+
+.prototype-panel--compact .prototype-panel__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.prototype-panel--compact .prototype-panel__summary-item,
+.prototype-panel--compact .prototype-panel__stat {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.prototype-panel--compact .prototype-panel__stat-label {
+  font-size: 10px;
+}
+
+.prototype-panel--compact .prototype-panel__stat-value,
+.prototype-panel--compact .prototype-panel__summary-value {
+  font-size: 12px;
+}
+
+.prototype-panel--compact .prototype-panel__clusters {
+  display: flex;
+  flex-wrap: nowrap;
+  flex: 1 1 auto;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.prototype-panel--compact .prototype-panel__cluster-card {
+  min-width: 122px;
+  max-width: 150px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.prototype-panel--compact .prototype-panel__cluster-header {
+  font-size: 12px;
+}
+
+.prototype-panel--compact .prototype-panel__cluster-count,
+.prototype-panel--compact .prototype-panel__cluster-detail {
+  font-size: 10px;
+}
+
+.pipeline-compact-text-page .annotation-panel {
+  gap: 8px;
+  padding-top: 0;
+}
+
+.annotation-panel__topdock {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(240px, auto) minmax(150px, 0.45fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.pipeline-compact-text-page .annotation-panel__anchor-strip,
+.pipeline-compact-text-page .annotation-panel__toolbar,
+.pipeline-compact-text-page .annotation-stream-switcher {
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.pipeline-compact-text-page .annotation-panel__anchor-head h4 {
+  font-size: 13px;
+}
+
+.pipeline-compact-text-page .annotation-panel__anchor-list {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  overflow-x: auto;
+}
+
+.pipeline-compact-text-page .annotation-anchor-card {
+  min-width: 136px;
+  gap: 5px;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .annotation-anchor-card__head strong {
+  font-size: 12px;
+}
+
+.pipeline-compact-text-page .annotation-anchor-card__meta,
+.pipeline-compact-text-page .annotation-anchor-card__status {
+  gap: 5px;
+  font-size: 10px;
+}
+
+.pipeline-compact-text-page .annotation-pill {
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+.pipeline-compact-text-page .annotation-primary-button,
+.pipeline-compact-text-page .annotation-secondary-button {
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.pipeline-compact-text-page .annotation-panel__toolbar {
+  align-content: center;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.pipeline-compact-text-page .annotation-panel__toolbar-status,
+.pipeline-compact-text-page .annotation-panel__toolbar-actions {
+  gap: 6px;
+}
+
+.pipeline-compact-text-page .annotation-stream-switcher {
+  grid-column: auto;
+  align-content: center;
+  min-width: 0;
+}
+
+.pipeline-compact-text-page .annotation-stream-switcher__head {
+  display: none;
+}
+
+.pipeline-compact-text-page .annotation-stream-switcher__list {
+  margin-top: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+.pipeline-compact-text-page .annotation-stream-pill {
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.annotation-panel__studio-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.02fr) minmax(380px, 0.98fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.annotation-panel__studio-main {
+  min-width: 0;
+}
+
+.annotation-panel__trajectory-dock {
+  position: sticky;
+  top: 84px;
+  max-height: calc(100vh - 104px);
+  overflow: auto;
+}
+
+.pipeline-compact-text-page .review-console {
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.pipeline-compact-text-page .review-console-shell,
+.pipeline-compact-text-page .review-top {
+  gap: 8px;
+}
+
+.pipeline-compact-text-page .review-top {
+  grid-template-columns: 1fr;
+}
+
+.pipeline-compact-text-page .review-tool-rail {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.pipeline-compact-text-page .review-tool-button {
+  min-width: 90px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .review-tool-button strong,
+.pipeline-compact-text-page .review-tool-button span {
+  font-size: 10px;
+}
+
+.pipeline-compact-text-page .review-stage,
+.pipeline-compact-text-page .review-sidebar,
+.pipeline-compact-text-page .timeline-dock,
+.pipeline-compact-text-page .episode-preview-trajectory-panel {
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .review-stage {
+  min-height: 0;
+}
+
+.pipeline-compact-text-page .review-stage-viewport {
+  aspect-ratio: 16 / 9;
+}
+
+.pipeline-compact-text-page .review-stage-player,
+.pipeline-compact-text-page .review-stage-empty {
+  min-height: 220px;
+}
+
+.pipeline-compact-text-page .review-stage-overlay {
+  left: 8px;
+  right: 8px;
+}
+
+.pipeline-compact-text-page .review-stage-overlay-top {
+  top: 8px;
+}
+
+.pipeline-compact-text-page .review-timecode-badge {
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.pipeline-compact-text-page .review-stage-badges {
+  gap: 4px;
+}
+
+.pipeline-compact-text-page .review-stage-badges span {
+  padding: 4px 6px;
+  font-size: 9px;
+}
+
+.pipeline-compact-text-page .review-stage-footer {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 7px 8px;
+}
+
+.pipeline-compact-text-page .review-stage-meta span {
+  margin-bottom: 2px;
+  font-size: 9px;
+}
+
+.pipeline-compact-text-page .review-stage-meta strong {
+  font-size: 11px;
+}
+
+.pipeline-compact-text-page .review-sidebar {
+  min-height: 0;
+  max-height: 230px;
+}
+
+.pipeline-compact-text-page .review-sidebar-head {
+  padding: 8px;
+}
+
+.pipeline-compact-text-page .review-sidebar-head h3 {
+  font-size: 13px;
+}
+
+.pipeline-compact-text-page .review-sidebar-head p {
+  display: none;
+}
+
+.pipeline-compact-text-page .review-sidebar-list {
+  gap: 7px;
+  padding: 8px;
+}
+
+.pipeline-compact-text-page .annotation-rail-card {
+  gap: 7px;
+  padding: 8px 9px;
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .annotation-rail-title {
+  font-size: 13px;
+}
+
+.pipeline-compact-text-page .annotation-rail-copy {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pipeline-compact-text-page .annotation-rail-edit-grid {
+  gap: 6px;
+}
+
+.pipeline-compact-text-page .annotation-edit-field,
+.pipeline-compact-text-page .annotation-edit-textarea {
+  gap: 4px;
+}
+
+.pipeline-compact-text-page .annotation-edit-field input,
+.pipeline-compact-text-page .annotation-edit-field select,
+.pipeline-compact-text-page .annotation-edit-textarea textarea {
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.pipeline-compact-text-page .annotation-edit-textarea textarea {
+  min-height: 68px;
+}
+
+.pipeline-compact-text-page .timeline-toolbar {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 7px 8px;
+}
+
+.pipeline-compact-text-page .timeline-frame,
+.pipeline-compact-text-page .timeline-canvas {
+  min-height: 116px;
+}
+
+.pipeline-compact-text-page .timeline-label-spacer,
+.pipeline-compact-text-page .timeline-ruler-strip {
+  min-height: 34px;
+  height: 34px;
+}
+
+.pipeline-compact-text-page .timeline-lane-row {
+  height: 38px;
+}
+
+.pipeline-compact-text-page .timeline-block {
+  top: 8px;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.pipeline-compact-text-page .episode-preview-trajectory-panel {
+  gap: 8px;
+  padding: 8px;
+  box-shadow: none;
+}
+
+.pipeline-compact-text-page .episode-preview-trajectory-head span {
+  font-size: 13px;
+}
+
+.pipeline-compact-text-page .episode-preview-trajectory-head strong {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pipeline-compact-text-page .joint-comparison-focus-strip {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pipeline-compact-text-page .joint-comparison-focus-metric {
+  gap: 2px;
+  padding: 6px;
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .joint-comparison-focus-metric span {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.pipeline-compact-text-page .joint-comparison-focus-metric strong {
+  font-size: 11px;
+}
+
+.pipeline-compact-text-page .joint-comparison-workbench {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.pipeline-compact-text-page .joint-comparison-main-panel {
+  gap: 7px;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .joint-comparison-main-panel__head strong {
+  font-size: 13px;
+}
+
+.pipeline-compact-text-page .joint-comparison-main-panel__sub,
+.pipeline-compact-text-page .joint-comparison-main-panel__metrics {
+  font-size: 10px;
+}
+
+.pipeline-compact-text-page .joint-comparison-chart {
+  min-height: 112px;
+}
+
+.pipeline-compact-text-page .joint-comparison-chart--delta {
+  min-height: 72px;
+}
+
+.pipeline-compact-text-page .joint-comparison-list {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.pipeline-compact-text-page .joint-comparison-list__item {
+  min-width: 130px;
+  gap: 4px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+.pipeline-compact-text-page .joint-comparison-list__head strong,
+.pipeline-compact-text-page .joint-comparison-list__head span,
+.pipeline-compact-text-page .joint-comparison-list__meta span {
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .pipeline-toolbar-card .text-alignment-control-card__row,
+  .annotation-panel__topdock,
+  .annotation-panel__studio-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prototype-panel--compact,
+  .prototype-panel--compact .prototype-panel__results {
+    grid-template-columns: 1fr;
+  }
+
+  .prototype-panel--compact .prototype-panel__results {
+    grid-column: 1;
+  }
+
+  .annotation-panel__trajectory-dock {
+    position: static;
+    max-height: none;
+  }
 }
 
 .pipeline-inline-status {

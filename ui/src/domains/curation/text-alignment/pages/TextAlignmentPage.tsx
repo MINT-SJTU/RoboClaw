@@ -119,10 +119,9 @@ export default function TextAlignmentView() {
             {publishMessage ? <div className="quality-sidebar__path">{publishMessage}</div> : null}
             {publishError ? <div className="quality-sidebar__error">{publishError}</div> : null}
           </div>
-        </GlassPanel>
-
-        <GlassPanel className="text-alignment-section text-alignment-section--compact">
-          <PrototypePanel />
+          <div className="text-alignment-control-card__prototype">
+            <PrototypePanel compact />
+          </div>
         </GlassPanel>
 
         <AnnotationPanel />
