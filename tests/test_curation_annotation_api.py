@@ -182,6 +182,7 @@ def test_quality_defaults_adapt_to_dataset_metadata(
 
     assert response.status_code == 200
     payload = response.json()
+    assert "trajectory_dtw" in payload["selected_validators"]
     assert "visual" in payload["selected_validators"]
     assert payload["threshold_overrides"]["metadata_require_videos"] == 1.0
     assert payload["threshold_overrides"]["visual_min_resolution_width"] == 640.0
@@ -1120,11 +1121,12 @@ def test_workflow_publish_endpoints_build_quality_and_text_parquet(
                     "validators": {
                         "metadata": {"passed": True, "score": 100.0},
                         "timing": {"passed": True, "score": 90.0},
+                        "trajectory_dtw": {"passed": True, "score": 100.0},
                     },
                     "issues": [],
                 }
             ],
-            "selected_validators": ["metadata", "timing"],
+            "selected_validators": ["metadata", "timing", "trajectory_dtw"],
         },
     )
 
@@ -1183,6 +1185,7 @@ def test_workflow_publish_endpoints_build_quality_and_text_parquet(
 
     assert written[0][0].endswith("meta/quality_results.parquet")
     assert written[0][1][0]["episode_index"] == 0
+    assert written[0][1][0]["trajectory_dtw_score"] == 100.0
     assert written[1][0].endswith("meta/text_annotations.parquet")
     assert written[1][1][0]["annotation_id"] == "ann-1"
 

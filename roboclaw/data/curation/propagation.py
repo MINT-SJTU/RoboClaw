@@ -330,6 +330,8 @@ def _build_alignment_path(
     if not source_sequence or not target_sequence:
         return None
     _distance, path = dtw_alignment(source_sequence, target_sequence, **(dtw_config or {}))
+    if _distance == float("inf"):
+        return None
     return path or None
 
 

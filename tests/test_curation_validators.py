@@ -1,11 +1,40 @@
 from __future__ import annotations
 
-import pytest
+import math
 
-pytest.importorskip("av")
-pytest.importorskip("cv2")
+from roboclaw.data.curation.dtw import dtw_alignment, dtw_distance
+from roboclaw.data.curation.propagation import propagate_annotation_spans
+from roboclaw.data.curation.validators import safe_float, validate_action
 
-from roboclaw.data.curation.validators import validate_action
+
+def test_safe_float_rejects_non_finite_values() -> None:
+    assert safe_float(float("nan")) is None
+    assert safe_float(float("inf")) is None
+    assert safe_float("-inf") is None
+
+
+def test_empty_dtw_is_not_perfect_match() -> None:
+    assert math.isinf(dtw_distance([], [[1.0]]))
+    distance, path = dtw_alignment([], [[1.0]])
+    assert math.isinf(distance)
+    assert path == []
+
+
+def test_propagation_falls_back_to_duration_scaling_for_empty_dtw() -> None:
+    propagated = propagate_annotation_spans(
+        [{"label": "grasp", "startTime": 1.0, "endTime": 1.5}],
+        source_duration=2.0,
+        target_duration=4.0,
+        target_record_key="target",
+        prototype_score=0.8,
+        source_sequence=[],
+        target_sequence=[[1.0]],
+        source_time_axis=[],
+        target_time_axis=[0.0],
+    )
+
+    assert propagated[0]["source"] == "duration_scaled"
+    assert propagated[0]["startTime"] == 2.0
 
 
 def test_validate_action_accepts_vector_series_without_false_missing_ratio() -> None:
@@ -89,3 +118,20 @@ def test_validate_action_accepts_vector_series_without_false_missing_ratio() -> 
     assert nan_issue["value"]["nan_ratio"] == 0.0
     assert issues_by_name["duration"]["passed"] is True
     assert result["passed"] is True
+
+
+def test_validate_action_counts_nan_values_as_missing() -> None:
+    rows = [
+        {"timestamp": 0.0, "action": [0.0, 0.1], "observation.state": [0.0, 0.1]},
+        {"timestamp": 0.5, "action": [float("nan"), 0.2], "observation.state": [0.1, 0.2]},
+        {"timestamp": 1.0, "action": [0.2, 0.3], "observation.state": [0.2, 0.3]},
+    ]
+    result = validate_action(
+        {"rows": rows, "info": {"features": {"action": {"names": ["j0", "j1"]}}}},
+        threshold_overrides={"action_max_nan_ratio": 0.01},
+    )
+
+    issues_by_name = {issue["check_name"]: issue for issue in result["issues"]}
+    assert issues_by_name["nan_ratio"]["passed"] is False
+    assert issues_by_name["nan_ratio"]["value"]["nan_ratio"] > 0.0
+    assert result["passed"] is False

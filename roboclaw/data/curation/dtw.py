@@ -253,7 +253,7 @@ def dtw_distance(
     huber_delta: float = DEFAULT_DTW_HUBER_DELTA,
 ) -> float:
     if not left or not right:
-        return 0.0
+        return math.inf
     left_length = len(left)
     right_length = len(right)
     matrix, steps = _compute_dtw_cost_matrix(
@@ -278,7 +278,7 @@ def dtw_alignment(
     huber_delta: float = DEFAULT_DTW_HUBER_DELTA,
 ) -> tuple[float, list[tuple[int, int]]]:
     if not left or not right:
-        return 0.0, []
+        return math.inf, []
 
     left_length = len(left)
     right_length = len(right)
@@ -339,6 +339,7 @@ def build_distance_matrix_with_progress(
     *,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[dict[str, dict[str, float]], int]:
+    entries = [entry for entry in entries if entry.get("sequence")]
     distances: dict[str, dict[str, float]] = {
         entry["record_key"]: {}
         for entry in entries

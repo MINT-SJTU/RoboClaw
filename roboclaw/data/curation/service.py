@@ -20,6 +20,8 @@ from . import propagation_history
 from .propagation import propagate_annotation_spans
 from .prototypes import discover_grouped_prototypes
 from .quality_defaults import build_quality_defaults
+from .quality_results import aggregate_quality_results, run_base_quality_validators
+from .reference_tube import TRAJECTORY_DTW_VALIDATOR
 from .serializers import (
     build_workspace_payload,
     coerce_int,
@@ -47,6 +49,7 @@ from .trajectory_entries import (
     build_prototype_entry,
     propagation_dtw_config,
 )
+from .trajectory_quality import append_trajectory_dtw_results
 from .validators import load_episode_data, run_quality_validators
 
 # ---------------------------------------------------------------------------
@@ -527,6 +530,11 @@ class _LegacyCurationService:
 
         info = _load_info(self.dataset_path)
         indices = episode_indices or _episode_range(info)
+        include_trajectory_dtw = TRAJECTORY_DTW_VALIDATOR in selected_validators
+        base_validators = [
+            name for name in selected_validators
+            if name != TRAJECTORY_DTW_VALIDATOR
+        ]
         per_episode: list[dict[str, Any]] = []
         passed_count = 0
         failed_count = 0
@@ -549,7 +557,7 @@ class _LegacyCurationService:
                 total = len(per_episode) + len(indices)
 
         def finalize_quality_run(stage_status: str) -> dict[str, Any]:
-            aggregated = _aggregate_quality_results(
+            aggregated = aggregate_quality_results(
                 per_episode,
                 selected_validators,
                 passed_count,
@@ -605,11 +613,12 @@ class _LegacyCurationService:
             if is_stage_pause_requested(self.dataset_path, "quality_validation"):
                 return finalize_quality_run("paused")
             logger.info("Validating episode {}/{}", initial_completed + position + 1, total)
-            result = run_quality_validators(
+            result = run_base_quality_validators(
                 self.dataset_path,
                 ep_idx,
-                selected_validators=selected_validators,
+                selected_validators=base_validators,
                 threshold_overrides=threshold_overrides,
+                runner=run_quality_validators,
             )
             entry = {
                 "episode_index": ep_idx,
@@ -626,8 +635,13 @@ class _LegacyCurationService:
 
             save_quality_results(
                 self.dataset_path,
-                _aggregate_quality_results(
-                    per_episode, selected_validators, passed_count, failed_count, total, threshold_overrides,
+                aggregate_quality_results(
+                    per_episode,
+                    selected_validators,
+                    passed_count,
+                    failed_count,
+                    total,
+                    threshold_overrides,
                 ),
             )
 
@@ -645,6 +659,16 @@ class _LegacyCurationService:
                         1,
                     ),
                 })
+
+        if include_trajectory_dtw:
+            append_trajectory_dtw_results(
+                self.dataset_path,
+                per_episode,
+                threshold_overrides=threshold_overrides,
+                progress_callback=progress_callback,
+            )
+            passed_count = sum(1 for episode in per_episode if episode.get("passed"))
+            failed_count = max(len(per_episode) - passed_count, 0)
 
         return finalize_quality_run("completed")
 
@@ -805,32 +829,6 @@ class _LegacyCurationService:
 
 
 # ---------------------------------------------------------------------------
-# Quality aggregation
-# ---------------------------------------------------------------------------
-
-
-def _aggregate_quality_results(
-    per_episode: list[dict[str, Any]],
-    selected_validators: list[str],
-    passed_count: int,
-    failed_count: int,
-    total: int,
-    threshold_overrides: dict[str, float] | None = None,
-) -> dict[str, Any]:
-    scores = [ep["score"] for ep in per_episode]
-    overall_score = (sum(scores) / len(scores)) if scores else 0.0
-    return {
-        "total": total,
-        "passed": passed_count,
-        "failed": failed_count,
-        "overall_score": round(overall_score, 1),
-        "selected_validators": selected_validators,
-        "threshold_overrides": threshold_overrides or {},
-        "episodes": per_episode,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Prototype helpers
 # ---------------------------------------------------------------------------
 
@@ -859,12 +857,15 @@ def _build_canonical_entries(
         rows = data["rows"]
         if not rows:
             continue
-        entries.append(build_prototype_entry(
+        entry = build_prototype_entry(
             dataset_path,
             ep_idx,
             quality=_episode_quality_summary(dataset_path, ep_idx),
             data=data,
-        ))
+        )
+        if not entry.get("sequence"):
+            continue
+        entries.append(entry)
 
         if progress_callback is not None:
             progress_callback({

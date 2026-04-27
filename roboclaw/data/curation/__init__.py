@@ -78,7 +78,15 @@ _EXPORTS_BY_MODULE = {
         "validate_depth_assets",
         "validate_metadata",
         "validate_timing",
+        "validate_trajectory_dtw",
         "validate_visual_assets",
+    ),
+    "reference_tube": (
+        "REFERENCE_TUBE_BACKEND",
+        "TRAJECTORY_DTW_VALIDATOR",
+        "ReferenceTube",
+        "ReferenceTubeBuilder",
+        "ReferenceTubeEvaluator",
     ),
     "state": (
         "init_workflow_state",

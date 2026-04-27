@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from roboclaw.data.curation.clustering import discover_prototype_clusters
+from roboclaw.data.curation.clustering import discover_prototype_clusters, refine_clusters_with_dba
 from roboclaw.data.curation.propagation import propagate_annotation_spans
 from roboclaw.data.curation.prototypes import discover_grouped_prototypes
 
@@ -14,6 +14,46 @@ def test_auto_cluster_selection_does_not_prefer_all_singletons() -> None:
     result = discover_prototype_clusters(entries, cluster_count=None)
 
     assert result["cluster_count"] < len(entries)
+
+
+def test_prototype_discovery_skips_empty_sequences() -> None:
+    entries = [
+        {"record_key": "empty", "sequence": [], "canonical_groups": {}},
+        {"record_key": "valid-0", "sequence": [[0.0], [0.1]], "canonical_groups": {}},
+        {"record_key": "valid-1", "sequence": [[0.0], [0.2]], "canonical_groups": {}},
+    ]
+
+    result = discover_prototype_clusters(entries, cluster_count=1)
+    cluster_members = {
+        member["record_key"]
+        for cluster in result["clusters"]
+        for member in cluster["members"]
+    }
+
+    assert "empty" not in cluster_members
+    assert result["distance_matrix"].keys() == {"valid-0", "valid-1"}
+
+
+def test_dba_refinement_skips_empty_sequences_without_zero_fallback() -> None:
+    entries = [
+        {"record_key": "empty", "sequence": [], "canonical_groups": {}},
+        {"record_key": "valid", "sequence": [[0.0], [0.1]], "canonical_groups": {}},
+    ]
+    clusters = [
+        {
+            "prototype_record_key": "empty",
+            "members": [
+                {"record_key": "empty", "distance_to_prototype": 0.0},
+                {"record_key": "valid", "distance_to_prototype": 0.0},
+            ],
+        }
+    ]
+
+    result = refine_clusters_with_dba(entries, clusters=clusters)
+
+    assert result["cluster_count"] == 1
+    assert result["anchor_record_keys"] == ["valid"]
+    assert [member["record_key"] for member in result["clusters"][0]["members"]] == ["valid"]
 
 
 def test_grouped_prototypes_keep_different_tasks_apart() -> None:

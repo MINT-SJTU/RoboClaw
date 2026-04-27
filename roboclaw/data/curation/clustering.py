@@ -28,6 +28,7 @@ def discover_prototype_clusters(
     max_iterations: int = 8,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    entries = [entry for entry in entries if entry.get("sequence")]
     if not entries:
         return _empty_clustering_result(max_iterations)
 
@@ -520,12 +521,15 @@ def _refine_single_cluster(
         entry_lookup[str(m.get("record_key"))]
         for m in member_records
         if str(m.get("record_key")) in entry_lookup
+        and entry_lookup[str(m.get("record_key"))].get("sequence")
     ]
     if not member_entries:
         return None
 
     prototype_key = str(cluster.get("prototype_record_key") or member_entries[0]["record_key"])
     reference = entry_lookup.get(prototype_key, member_entries[0])
+    if not reference.get("sequence"):
+        reference = member_entries[0]
     ref_groups = reference.get("canonical_groups") or {}
     dtw_cfg = resolve_dtw_configuration(
         left_mode=reference.get("canonical_mode"),
@@ -535,8 +539,8 @@ def _refine_single_cluster(
     )
 
     bary = compute_dba_barycenter(
-        [e.get("sequence") or [[0.0]] for e in member_entries],
-        reference_sequence=reference.get("sequence") or [[0.0]],
+        [e["sequence"] for e in member_entries],
+        reference_sequence=reference["sequence"],
         max_iterations=max_iterations,
         groups=ref_groups,
         dtw_configuration=dtw_cfg,
@@ -547,6 +551,8 @@ def _refine_single_cluster(
         member_entries, member_records, bary_seq, dtw_cfg,
     )
     summaries.sort(key=lambda m: m["distance_to_barycenter"])
+    if not summaries:
+        return None
     for rank, member in enumerate(summaries, start=1):
         member["assignment_rank"] = rank
 
@@ -575,11 +581,12 @@ def _compute_member_summaries(
     summaries: list[dict[str, Any]] = []
     for entry in member_entries:
         rk = str(entry["record_key"])
-        dist, _align = dtw_alignment(
-            barycenter_sequence,
-            entry.get("sequence") or [[0.0]],
-            **dtw_cfg,
-        )
+        sequence = entry.get("sequence") or []
+        if not sequence:
+            continue
+        dist, _align = dtw_alignment(barycenter_sequence, sequence, **dtw_cfg)
+        if not math.isfinite(dist):
+            continue
         proto_member = next(
             (m for m in member_records if str(m.get("record_key")) == rk),
             {},

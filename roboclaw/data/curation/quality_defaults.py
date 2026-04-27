@@ -10,7 +10,7 @@ from .state import load_dataset_info
 from .task_descriptions import payload_has_task_description
 from .validators import QUALITY_THRESHOLD_DEFAULTS, safe_float
 
-VALIDATOR_ORDER = ["metadata", "timing", "action", "visual", "depth", "ee_trajectory"]
+VALIDATOR_ORDER = ["metadata", "timing", "action", "visual", "depth", "ee_trajectory", "trajectory_dtw"]
 
 
 def build_quality_defaults(dataset_path: Path, dataset_name: str | None = None) -> dict[str, Any]:
@@ -67,6 +67,8 @@ def build_quality_defaults(dataset_path: Path, dataset_name: str | None = None) 
         selected_validators.append("depth")
     if has_action and has_state and has_gripper:
         selected_validators.append("ee_trajectory")
+    if has_action or has_state:
+        selected_validators.append("trajectory_dtw")
 
     return {
         "dataset": dataset_name or dataset_path.name,
