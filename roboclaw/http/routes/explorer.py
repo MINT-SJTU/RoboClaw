@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from huggingface_hub.errors import HFValidationError, HfHubHTTPError, RepositoryNotFoundError
 from loguru import logger
 from pydantic import BaseModel
 
@@ -51,6 +54,53 @@ class ExplorerPrepareRequest(BaseModel):
     dataset_id: str
     include_videos: bool = False
     force: bool = False
+
+
+T = TypeVar("T")
+
+
+def _remote_dataset_not_accessible_detail(dataset_name: str) -> str:
+    return f"Remote dataset '{dataset_name}' was not found or is not accessible"
+
+
+def _remote_dataset_http_exception(dataset_name: str, exc: HfHubHTTPError | httpx.HTTPError) -> HTTPException:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in {401, 403, 404}:
+        return HTTPException(
+            status_code=404,
+            detail=_remote_dataset_not_accessible_detail(dataset_name),
+        )
+    if status_code == 429:
+        return HTTPException(
+            status_code=503,
+            detail=f"Remote dataset '{dataset_name}' is temporarily rate limited by the upstream service",
+        )
+    return HTTPException(
+        status_code=502,
+        detail=f"Failed to load remote dataset '{dataset_name}' from the upstream service",
+    )
+
+
+async def _run_remote_dataset_call(
+    dataset_name: str,
+    func: Callable[..., T],
+    *args: Any,
+    **kwargs: Any,
+) -> T:
+    try:
+        return await asyncio.to_thread(func, *args, **kwargs)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=_remote_dataset_not_accessible_detail(dataset_name),
+        ) from exc
+    except HFValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HfHubHTTPError as exc:
+        raise _remote_dataset_http_exception(dataset_name, exc) from exc
+    except httpx.HTTPError as exc:
+        raise _remote_dataset_http_exception(dataset_name, exc) from exc
 
 
 def _local_dataset_name(dataset_path: Path) -> str:
@@ -241,7 +291,11 @@ def register_explorer_routes(app: FastAPI) -> None:
             path=path,
         )
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(build_remote_explorer_payload, dataset_name)
+            payload = await _run_remote_dataset_call(
+                dataset_name,
+                build_remote_explorer_payload,
+                dataset_name,
+            )
         else:
             payload = await asyncio.to_thread(_build_local_explorer_details, dataset_path, dataset_name)
         logger.info("Explorer dashboard loaded for '{}' ({})", dataset_name, resolved_source)
@@ -259,7 +313,11 @@ def register_explorer_routes(app: FastAPI) -> None:
             path=path,
         )
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(build_remote_explorer_summary, dataset_name)
+            payload = await _run_remote_dataset_call(
+                dataset_name,
+                build_remote_explorer_summary,
+                dataset_name,
+            )
         else:
             payload = await asyncio.to_thread(_build_local_explorer_summary, dataset_path, dataset_name)
         logger.info("Explorer summary loaded for '{}' ({})", dataset_name, resolved_source)
@@ -277,7 +335,11 @@ def register_explorer_routes(app: FastAPI) -> None:
             path=path,
         )
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(build_remote_explorer_details, dataset_name)
+            payload = await _run_remote_dataset_call(
+                dataset_name,
+                build_remote_explorer_details,
+                dataset_name,
+            )
         else:
             payload = await asyncio.to_thread(_build_local_explorer_details, dataset_path, dataset_name)
         logger.info("Explorer details loaded for '{}' ({})", dataset_name, resolved_source)
@@ -298,7 +360,13 @@ def register_explorer_routes(app: FastAPI) -> None:
             path=path,
         )
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(build_remote_episode_page, dataset_name, page, safe_page_size)
+            payload = await _run_remote_dataset_call(
+                dataset_name,
+                build_remote_episode_page,
+                dataset_name,
+                page,
+                safe_page_size,
+            )
         else:
             payload = await asyncio.to_thread(
                 _build_local_episode_page,
@@ -330,7 +398,8 @@ def register_explorer_routes(app: FastAPI) -> None:
             path=path,
         )
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(
+            payload = await _run_remote_dataset_call(
+                dataset_name,
                 load_remote_episode_detail,
                 dataset_name,
                 episode_index,
@@ -360,7 +429,11 @@ def register_explorer_routes(app: FastAPI) -> None:
             path=path,
         )
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(build_remote_dataset_info, dataset_name)
+            payload = await _run_remote_dataset_call(
+                dataset_name,
+                build_remote_dataset_info,
+                dataset_name,
+            )
         else:
             details = await asyncio.to_thread(_build_local_explorer_summary, dataset_path, dataset_name)
             info = load_json_file(dataset_path / "meta" / "info.json")
@@ -390,7 +463,7 @@ def register_explorer_routes(app: FastAPI) -> None:
         resolved_source = normalize_explorer_source(source)
         safe_limit = max(1, min(limit, 12))
         if resolved_source == "remote":
-            payload = await asyncio.to_thread(search_remote_datasets, q, safe_limit)
+            payload = await _run_remote_dataset_call(q, search_remote_datasets, q, safe_limit)
         else:
             needle = q.strip().lower()
             local_items = await asyncio.to_thread(list_local_dataset_options)
@@ -404,7 +477,8 @@ def register_explorer_routes(app: FastAPI) -> None:
 
     @app.post("/api/explorer/prepare-remote")
     async def explorer_prepare_remote(body: ExplorerPrepareRequest) -> dict[str, Any]:
-        payload = await asyncio.to_thread(
+        payload = await _run_remote_dataset_call(
+            body.dataset_id,
             register_remote_dataset_session,
             body.dataset_id,
             include_videos=body.include_videos,

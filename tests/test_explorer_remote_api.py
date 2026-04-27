@@ -6,7 +6,9 @@ import io
 import json
 from pathlib import Path
 
+import httpx
 import pytest
+from huggingface_hub.errors import HFValidationError, HfHubHTTPError, RepositoryNotFoundError
 
 pytest.importorskip("fastapi")
 pa = pytest.importorskip("pyarrow")
@@ -16,6 +18,12 @@ from fastapi.testclient import TestClient
 
 from roboclaw.data.explorer import remote as remote_explorer
 from roboclaw.http.routes import explorer as explorer_routes
+
+
+def _hub_http_error(error_type: type[HfHubHTTPError], status_code: int) -> HfHubHTTPError:
+    request = httpx.Request("GET", "https://huggingface.co/api/datasets/demo/stacked-cards")
+    response = httpx.Response(status_code, request=request)
+    return error_type("upstream error", response=response)
 
 
 def _parquet_bytes(rows: list[dict]) -> bytes:
@@ -64,6 +72,75 @@ def test_explorer_dashboard_uses_remote_payload(monkeypatch: pytest.MonkeyPatch)
     payload = response.json()
     assert payload["dataset"] == "cadene/droid_1.0.1"
     assert payload["summary"]["total_episodes"] == 2
+
+
+def test_explorer_summary_returns_404_for_missing_remote_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    def missing_dataset(_dataset: str) -> dict[str, object]:
+        raise _hub_http_error(RepositoryNotFoundError, 401)
+
+    monkeypatch.setattr(explorer_routes, "build_remote_explorer_summary", missing_dataset)
+
+    response = client.get(
+        "/api/explorer/summary",
+        params={"source": "remote", "dataset": "demo/stacked-cards"},
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "Remote dataset 'demo/stacked-cards' was not found or is not accessible"
+    }
+
+
+def test_explorer_details_maps_remote_rate_limit_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    def rate_limited(_dataset: str) -> dict[str, object]:
+        raise _hub_http_error(HfHubHTTPError, 429)
+
+    monkeypatch.setattr(explorer_routes, "build_remote_explorer_details", rate_limited)
+
+    response = client.get(
+        "/api/explorer/details",
+        params={"source": "remote", "dataset": "cadene/droid_1.0.1"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Remote dataset 'cadene/droid_1.0.1' is temporarily rate limited by the upstream service"
+    }
+
+
+def test_explorer_prepare_remote_returns_422_for_invalid_remote_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    def invalid_dataset_id(
+        _dataset_id: str,
+        *,
+        include_videos: bool = False,
+        force: bool = False,
+    ) -> dict[str, object]:
+        raise HFValidationError("invalid repo id")
+
+    monkeypatch.setattr(explorer_routes, "register_remote_dataset_session", invalid_dataset_id)
+
+    response = client.post(
+        "/api/explorer/prepare-remote",
+        json={"dataset_id": "bad dataset", "include_videos": False, "force": False},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid repo id"}
 
 
 def test_explorer_episode_uses_remote_detail(monkeypatch: pytest.MonkeyPatch) -> None:

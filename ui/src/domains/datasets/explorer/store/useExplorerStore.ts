@@ -257,7 +257,19 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const contentType = res.headers.get('content-type') || ''
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`${res.status}: ${text}`)
+    if (contentType.includes('application/json')) {
+      let payload: { detail?: unknown; error?: unknown; message?: unknown } | null = null
+      try {
+        payload = JSON.parse(text) as { detail?: unknown; error?: unknown; message?: unknown }
+      } catch {
+        payload = null
+      }
+      const detail = payload?.detail ?? payload?.error ?? payload?.message
+      if (typeof detail === 'string' && detail.trim()) {
+        throw new Error(detail)
+      }
+    }
+    throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ''}`)
   }
   if (!contentType.includes('application/json')) {
     const text = await res.text()
