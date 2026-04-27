@@ -1230,10 +1230,8 @@ function QualityDtwScatter({
   )
 }
 
-function taskTextWithMarker(row: AlignmentOverviewRow): string {
-  const taskInfo = taskInfoForRow(row)
-  if (!taskInfo.text) return ''
-  return `${taskInfo.text}${taskInfo.supplemental ? '*' : ''}`
+function primaryPropagationSpan(row: AlignmentOverviewRow): AlignmentOverviewSpan | null {
+  return row.propagation_spans?.[0] || null
 }
 
 function TaskDescriptionCell({
@@ -1304,33 +1302,44 @@ function buildExportRows(
   locale: 'zh' | 'en',
   t: (key: 'passed' | 'failed' | 'untitledTask' | 'alignmentPropagated' | 'alignmentAnnotated' | 'alignmentNotStarted') => string,
 ) {
-  return rows.map((row) => ({
-    episode_index: row.episode_index,
-    record_key: row.record_key,
-    task: taskTextWithMarker(row),
-    task_source: row.task_source || '',
-    semantic_task_text: semanticTaskTextForRow(row),
-    quality_status: row.quality_passed ? t('passed') : t('failed'),
-    quality_score: Number(row.quality_score.toFixed(1)),
-    failed_validators: row.failed_validators.join(', '),
-    issue_types: row.issues
-      .filter((issue) => isFailingIssue(issue))
-      .map((issue) => {
-        const checkName = issue['check_name']
-        return typeof checkName === 'string' ? formatIssueLabel(checkName, locale) : ''
-      })
-      .filter(Boolean)
-      .join(', '),
-    alignment_status: t(alignmentStatusKey(row.alignment_status)),
-    annotation_count: row.annotation_count,
-    propagated_count: row.propagated_count,
-    dtw_start_delay_s: averageDelayForRow(row, 'dtw_start_delay_s') ?? '',
-    dtw_end_delay_s: averageDelayForRow(row, 'dtw_end_delay_s') ?? '',
-    duration_delta_s: averageDelayForRow(row, 'duration_delta_s') ?? '',
-    prototype_score:
-      typeof row.prototype_score === 'number' ? Number(row.prototype_score.toFixed(4)) : '',
-    updated_at: row.updated_at || '',
-  }))
+  return rows.map((row) => {
+    const taskInfo = taskInfoForRow(row)
+    const propagationSpan = primaryPropagationSpan(row)
+    return {
+      episode_index: row.episode_index,
+      record_key: row.record_key,
+      task: taskInfo.text,
+      task_source: row.task_source || '',
+      task_is_supplemental: taskInfo.supplemental,
+      semantic_task_text: semanticTaskTextForRow(row),
+      quality_status: row.quality_passed ? t('passed') : t('failed'),
+      quality_score: Number(row.quality_score.toFixed(1)),
+      failed_validators: row.failed_validators.join(', '),
+      issue_types: row.issues
+        .filter((issue) => isFailingIssue(issue))
+        .map((issue) => {
+          const checkName = issue['check_name']
+          return typeof checkName === 'string' ? formatIssueLabel(checkName, locale) : ''
+        })
+        .filter(Boolean)
+        .join(', '),
+      alignment_status: t(alignmentStatusKey(row.alignment_status)),
+      alignment_method: row.propagation_alignment_method || '',
+      propagation_source_episode_index: row.propagation_source_episode_index ?? '',
+      annotation_count: row.annotation_count,
+      propagated_count: row.propagated_count,
+      target_start_s: propagationSpan?.startTime ?? '',
+      target_end_s: propagationSpan?.endTime ?? '',
+      source_start_s: propagationSpan?.source_start_time ?? '',
+      source_end_s: propagationSpan?.source_end_time ?? '',
+      dtw_start_delay_s: averageDelayForRow(row, 'dtw_start_delay_s') ?? '',
+      dtw_end_delay_s: averageDelayForRow(row, 'dtw_end_delay_s') ?? '',
+      duration_delta_s: averageDelayForRow(row, 'duration_delta_s') ?? '',
+      prototype_score:
+        typeof row.prototype_score === 'number' ? Number(row.prototype_score.toFixed(4)) : '',
+      updated_at: row.updated_at || '',
+    }
+  })
 }
 
 function escapeCsvValue(value: unknown): string {
