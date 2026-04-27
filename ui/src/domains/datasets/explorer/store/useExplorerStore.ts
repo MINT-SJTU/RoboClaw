@@ -99,11 +99,25 @@ export interface ExplorerDatasetRef {
   path?: string
 }
 
+export interface ExplorerPageState {
+  source: ExplorerSource
+  datasetIdInput: string
+  remoteDatasetSelected: string
+  localDatasetInput: string
+  localDatasetPathInput: string
+  localDatasetPathSelected: string
+  localPathDatasetLabel: string
+  prepareStatus: string
+  prepareError: string
+  preparingForQuality: boolean
+  activeDatasetRef: ExplorerDatasetRef | null
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
-interface ExplorerStore {
+interface ExplorerStore extends ExplorerPageState {
   summary: ExplorerSummary | null
   summaryLoading: boolean
   summaryError: string
@@ -123,6 +137,8 @@ interface ExplorerStore {
   loadEpisodePage: (ref: ExplorerDatasetRef, page?: number, pageSize?: number) => Promise<void>
   selectEpisode: (ref: ExplorerDatasetRef, index: number) => Promise<void>
   clearEpisode: () => void
+  setPageState: (patch: Partial<ExplorerPageState>) => void
+  setActiveDatasetRef: (ref: ExplorerDatasetRef | null) => void
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -164,6 +180,13 @@ export async function listExplorerDatasets(
   )
 }
 
+export function buildExplorerRefKey(ref: ExplorerDatasetRef | null | undefined): string {
+  if (!ref) {
+    return ''
+  }
+  return `${ref.source}|${ref.dataset?.trim() ?? ''}|${ref.path?.trim() ?? ''}`
+}
+
 function buildExplorerQuery(ref: ExplorerDatasetRef): string {
   const params = new URLSearchParams()
   params.set('source', ref.source)
@@ -177,6 +200,17 @@ function buildExplorerQuery(ref: ExplorerDatasetRef): string {
 }
 
 export const useExplorer = create<ExplorerStore>((set) => ({
+  source: 'remote',
+  datasetIdInput: '',
+  remoteDatasetSelected: '',
+  localDatasetInput: '',
+  localDatasetPathInput: '',
+  localDatasetPathSelected: '',
+  localPathDatasetLabel: '',
+  prepareStatus: '',
+  prepareError: '',
+  preparingForQuality: false,
+  activeDatasetRef: null,
   summary: null,
   summaryLoading: false,
   summaryError: '',
@@ -190,6 +224,9 @@ export const useExplorer = create<ExplorerStore>((set) => ({
   episodeDetail: null,
   episodeLoading: false,
   episodeError: '',
+
+  setPageState: (patch) => set(patch),
+  setActiveDatasetRef: (ref) => set({ activeDatasetRef: ref }),
 
   loadSummary: async (ref: ExplorerDatasetRef) => {
     set({

@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
 import {
+  buildExplorerRefKey,
   listExplorerDatasets,
   searchDatasetSuggestions,
   type ExplorerDatasetRef,
+  type ExplorerPageState,
   type ExplorerSource,
   type DatasetSuggestion,
   useExplorer,
@@ -1174,50 +1176,56 @@ export default function DatasetExplorerView() {
     dashboardLoading,
     dashboardError,
     episodePage,
+    source,
+    datasetIdInput,
+    remoteDatasetSelected,
+    localDatasetInput,
+    localDatasetPathInput,
+    localDatasetPathSelected,
+    localPathDatasetLabel,
+    prepareStatus,
+    prepareError,
+    preparingForQuality,
+    activeDatasetRef,
+    setPageState,
+    setActiveDatasetRef,
     loadSummary,
     loadDashboard,
     loadEpisodePage,
   } = useExplorer()
-  const [source, setSource] = useState<ExplorerSource>('remote')
-  const [datasetIdInput, setDatasetIdInput] = useState('')
-  const [remoteDatasetSelected, setRemoteDatasetSelected] = useState('')
-  const [localDatasetInput, setLocalDatasetInput] = useState('')
-  const [localDatasetPathInput, setLocalDatasetPathInput] = useState('')
-  const [localDatasetPathSelected, setLocalDatasetPathSelected] = useState('')
-  const [localPathDatasetLabel, setLocalPathDatasetLabel] = useState('')
   const [localDatasets, setLocalDatasets] = useState<DatasetSuggestion[]>([])
   const [datasetSuggestions, setDatasetSuggestions] = useState<DatasetSuggestion[]>([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(-1)
-  const [prepareStatus, setPrepareStatus] = useState('')
-  const [prepareError, setPrepareError] = useState('')
-  const [preparingForQuality, setPreparingForQuality] = useState(false)
   const datasetInputRef = useRef<HTMLInputElement | null>(null)
   const localDirectoryInputRef = useRef<HTMLInputElement | null>(null)
   const blurTimerRef = useRef<number | null>(null)
   const suggestionRequestRef = useRef(0)
   const requestedDatasetKeyRef = useRef('')
   const preparingForQualityRef = useRef(false)
-  const currentDataset = summary?.dataset || dashboard?.dataset || episodePage?.dataset || ''
+  const activeRefForSource = activeDatasetRef?.source === source ? activeDatasetRef : null
+  const summaryForSource = activeRefForSource ? summary : null
+  const dashboardForSource = activeRefForSource ? dashboard : null
+  const episodePageForSource = activeRefForSource ? episodePage : null
+  const currentDataset =
+    summaryForSource?.dataset || dashboardForSource?.dataset || episodePageForSource?.dataset || ''
 
   const datasetRef: ExplorerDatasetRef =
     source === 'remote'
-      ? { source, dataset: remoteDatasetSelected.trim() || currentDataset }
+      ? { source, dataset: remoteDatasetSelected.trim() || activeRefForSource?.dataset }
       : source === 'local'
-        ? { source, dataset: localDatasetInput.trim() || currentDataset }
+        ? { source, dataset: localDatasetInput.trim() || activeRefForSource?.dataset }
         : {
             source,
-            dataset: localPathDatasetLabel.trim() || undefined,
-            path: localDatasetPathSelected.trim() || undefined,
+            dataset: localPathDatasetLabel.trim() || activeRefForSource?.dataset,
+            path: localDatasetPathSelected.trim() || activeRefForSource?.path,
           }
 
-  function buildDatasetRequestKey(ref: ExplorerDatasetRef): string {
-    return `${ref.source}|${ref.dataset?.trim() ?? ''}|${ref.path?.trim() ?? ''}`
-  }
-
   async function loadDataset(ref: ExplorerDatasetRef): Promise<void> {
-    requestedDatasetKeyRef.current = buildDatasetRequestKey(ref)
+    const requestKey = buildExplorerRefKey(ref)
+    requestedDatasetKeyRef.current = requestKey
+    setActiveDatasetRef(ref)
     await Promise.allSettled([
       loadSummary(ref),
       loadDashboard(ref),
@@ -1237,11 +1245,12 @@ export default function DatasetExplorerView() {
   useEffect(() => {
     const activeDataset = datasetRef.dataset?.trim() ?? ''
     const activePath = datasetRef.path?.trim() ?? ''
-    const requestKey = buildDatasetRequestKey(datasetRef)
+    const requestKey = buildExplorerRefKey(datasetRef)
     if (!activeDataset && !activePath) {
       return
     }
-    if (requestedDatasetKeyRef.current === requestKey) {
+    const loadedKey = buildExplorerRefKey(activeDatasetRef)
+    if (requestedDatasetKeyRef.current === requestKey || loadedKey === requestKey) {
       return
     }
     void loadDataset(datasetRef)
@@ -1252,6 +1261,7 @@ export default function DatasetExplorerView() {
     localDatasetPathSelected,
     localPathDatasetLabel,
     currentDataset,
+    activeDatasetRef,
     loadSummary,
     loadDashboard,
     loadEpisodePage,
@@ -1283,16 +1293,17 @@ export default function DatasetExplorerView() {
 
       const preparedName = typeof detail.dataset_name === 'string' ? detail.dataset_name : ''
       const nextRef: ExplorerDatasetRef = { source: 'remote', dataset: sourceDataset }
-      requestedDatasetKeyRef.current = buildDatasetRequestKey(nextRef)
-      setSource('remote')
-      setDatasetIdInput(sourceDataset)
-      setRemoteDatasetSelected(sourceDataset)
-      setPrepareError('')
-      setPrepareStatus(
-        preparedName
+      requestedDatasetKeyRef.current = buildExplorerRefKey(nextRef)
+      setActiveDatasetRef(nextRef)
+      setPageState({
+        source: 'remote',
+        datasetIdInput: sourceDataset,
+        remoteDatasetSelected: sourceDataset,
+        prepareError: '',
+        prepareStatus: preparedName
           ? `${t('preparedForQuality')}: ${preparedName}`
           : `${t('preparedForQuality')}: ${sourceDataset}`,
-      )
+      })
       void Promise.allSettled([
         loadSummary(nextRef),
         loadDashboard(nextRef),
@@ -1302,7 +1313,7 @@ export default function DatasetExplorerView() {
 
     window.addEventListener('roboclaw:pipeline-event', handlePipelineEvent)
     return () => window.removeEventListener('roboclaw:pipeline-event', handlePipelineEvent)
-  }, [loadDashboard, loadEpisodePage, loadSummary, t])
+  }, [loadDashboard, loadEpisodePage, loadSummary, setActiveDatasetRef, setPageState, t])
 
   useEffect(() => {
     if (source !== 'remote') {
@@ -1378,16 +1389,20 @@ export default function DatasetExplorerView() {
       return
     }
     if (nextSource === 'remote' && nextRef.dataset) {
-      setDatasetIdInput(nextRef.dataset)
-      setRemoteDatasetSelected(nextRef.dataset)
+      setPageState({
+        datasetIdInput: nextRef.dataset,
+        remoteDatasetSelected: nextRef.dataset,
+      })
     }
     if (nextSource === 'local' && nextRef.dataset) {
-      setLocalDatasetInput(nextRef.dataset)
+      setPageState({ localDatasetInput: nextRef.dataset })
     }
     if (nextSource === 'path' && nextRef.path) {
-      setLocalDatasetPathInput(nextRef.path)
-      setLocalDatasetPathSelected(nextRef.path)
-      setLocalPathDatasetLabel(nextRef.dataset ?? '')
+      setPageState({
+        localDatasetPathInput: nextRef.path,
+        localDatasetPathSelected: nextRef.path,
+        localPathDatasetLabel: nextRef.dataset ?? '',
+      })
     }
     setSuggestionsOpen(false)
     setDatasetSuggestions([])
@@ -1464,19 +1479,21 @@ export default function DatasetExplorerView() {
     const datasetId = datasetIdInput.trim()
     if (!datasetId) return
     preparingForQualityRef.current = true
-    setPreparingForQuality(true)
-    setPrepareStatus(t('preparingForQuality'))
-    setPrepareError('')
+    setPageState({
+      preparingForQuality: true,
+      prepareStatus: t('preparingForQuality'),
+      prepareError: '',
+      remoteDatasetSelected: datasetId,
+    })
     try {
-      setRemoteDatasetSelected(datasetId)
       const payload = await prepareRemoteDatasetForWorkflow(datasetId, false)
-      setPrepareStatus(`${t('preparedForQuality')}: ${payload.dataset_name}`)
+      setPageState({ prepareStatus: `${t('preparedForQuality')}: ${payload.dataset_name}` })
       navigate('/curation/quality')
     } catch (error) {
-      setPrepareError(error instanceof Error ? error.message : t('qualityRunFailed'))
+      setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
     } finally {
       preparingForQualityRef.current = false
-      setPreparingForQuality(false)
+      setPageState({ preparingForQuality: false })
     }
   }
 
@@ -1492,27 +1509,31 @@ export default function DatasetExplorerView() {
       return maybeRelative && maybeRelative.trim() ? maybeRelative : file.name
     })
     const displayName = relativePaths[0]?.split('/')[0] || files[0].name
-    setPrepareStatus(t('localDirectoryUploading'))
-    setPrepareError('')
+    setPageState({
+      prepareStatus: t('localDirectoryUploading'),
+      prepareError: '',
+    })
     try {
       const payload = await createLocalDirectorySession(files, relativePaths, displayName)
-      setLocalDatasetPathInput(payload.local_path)
-      setLocalDatasetPathSelected(payload.local_path)
-      setLocalPathDatasetLabel(payload.dataset_name)
-      setPrepareStatus(payload.display_name)
+      setPageState({
+        localDatasetPathInput: payload.local_path,
+        localDatasetPathSelected: payload.local_path,
+        localPathDatasetLabel: payload.dataset_name,
+        prepareStatus: payload.display_name,
+      })
       await handleLoad({
         source: 'path',
         path: payload.local_path,
         datasetOverride: payload.dataset_name,
       })
     } catch (error) {
-      setPrepareError(error instanceof Error ? error.message : t('qualityRunFailed'))
+      setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
     } finally {
       event.target.value = ''
     }
   }
 
-  const datasetSummary = summary?.summary
+  const datasetSummary = summaryForSource?.summary
 
   return (
     <div className="page-enter quality-view pipeline-page pipeline-compact-shell pipeline-compact-datasets">
@@ -1532,7 +1553,7 @@ export default function DatasetExplorerView() {
               value={source}
               onChange={(event) => {
                 const nextSource = event.target.value as ExplorerSource
-                setSource(nextSource)
+                setPageState({ source: nextSource })
                 setDatasetSuggestions([])
                 setSuggestionsOpen(false)
                 setHighlightedSuggestionIndex(-1)
@@ -1556,10 +1577,14 @@ export default function DatasetExplorerView() {
                 value={datasetIdInput}
                 onChange={(event) => {
                   const nextValue = event.target.value
-                  setDatasetIdInput(nextValue)
-                  if (nextValue.trim() !== remoteDatasetSelected.trim()) {
-                    setRemoteDatasetSelected('')
+                  const patch: Partial<ExplorerPageState> = {
+                    datasetIdInput: nextValue,
+                    remoteDatasetSelected:
+                      nextValue.trim() !== remoteDatasetSelected.trim()
+                        ? ''
+                        : remoteDatasetSelected,
                   }
+                  setPageState(patch)
                 }}
                 onFocus={openSuggestions}
                 onBlur={closeSuggestionsSoon}
@@ -1621,7 +1646,7 @@ export default function DatasetExplorerView() {
               <select
                 className="dataset-workbench__select"
                 value={localDatasetInput}
-                onChange={(event) => setLocalDatasetInput(event.target.value)}
+                onChange={(event) => setPageState({ localDatasetInput: event.target.value })}
               >
                 <option value="">{t('selectDataset')}</option>
                 {localDatasets.map((item) => (
@@ -1649,7 +1674,7 @@ export default function DatasetExplorerView() {
                   className="dataset-workbench__input"
                   type="text"
                   value={localDatasetPathInput}
-                  onChange={(event) => setLocalDatasetPathInput(event.target.value)}
+                  onChange={(event) => setPageState({ localDatasetPathInput: event.target.value })}
                   placeholder={t('localPathPlaceholder')}
                 />
                 <input
@@ -1706,7 +1731,7 @@ export default function DatasetExplorerView() {
       {/* Info bar */}
       {currentDataset && datasetSummary ? (
         <div className="workflow-view__info-bar">
-          <span>{prepareStatus || summary!.dataset}</span>
+          <span>{prepareStatus || summaryForSource!.dataset}</span>
           <span>{datasetSummary.total_episodes} {t('episodes')}</span>
           <span>{datasetSummary.fps} fps</span>
           <span>{datasetSummary.robot_type}</span>
@@ -1726,7 +1751,7 @@ export default function DatasetExplorerView() {
         <GlassPanel className="quality-view__empty">{t('running')}...</GlassPanel>
       )}
 
-      {currentDataset && (datasetSummary || dashboard || episodePage) && (
+      {currentDataset && (datasetSummary || dashboardForSource || episodePageForSource) && (
         <div className="quality-layout">
           <div className="quality-layout__main">
             {/* KPIs */}
@@ -1734,8 +1759,8 @@ export default function DatasetExplorerView() {
               <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
               <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
               <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
-              <MetricCard label={t('parquetFiles')} value={dashboard?.files.parquet_files ?? '--'} accent="teal" />
-              <MetricCard label={t('videoFiles')} value={dashboard?.files.video_files ?? '--'} accent="coral" />
+              <MetricCard label={t('parquetFiles')} value={dashboardForSource?.files.parquet_files ?? '--'} accent="teal" />
+              <MetricCard label={t('videoFiles')} value={dashboardForSource?.files.video_files ?? '--'} accent="coral" />
             </div>
 
             {/* Modality chips */}
@@ -1743,8 +1768,8 @@ export default function DatasetExplorerView() {
               <h3>{t('modalities')}</h3>
               {dashboardLoading && !dashboard ? (
                 <div className="explorer-empty">{t('running')}...</div>
-              ) : dashboard ? (
-                <ModalityChips items={dashboard.modality_summary} />
+              ) : dashboardForSource ? (
+                <ModalityChips items={dashboardForSource.modality_summary} />
               ) : (
                 <div className="explorer-empty">{dashboardError || t('noStats')}</div>
               )}
@@ -1753,14 +1778,14 @@ export default function DatasetExplorerView() {
             {/* Feature stats table */}
             <GlassPanel className="explorer-section">
               <h3>{t('featureStats')}</h3>
-              {dashboard ? (
+              {dashboardForSource ? (
                 <>
                   <p className="explorer-section__sub">
-                    {dashboard.feature_names.length} features
-                    {dashboard.dataset_stats.features_with_stats > 0 &&
-                      ` / ${dashboard.dataset_stats.features_with_stats} with stats`}
+                    {dashboardForSource.feature_names.length} features
+                    {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+                      ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
                   </p>
-                  <FeatureStatsTable stats={dashboard.feature_stats} />
+                  <FeatureStatsTable stats={dashboardForSource.feature_stats} />
                 </>
               ) : (
                 <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
@@ -1777,13 +1802,13 @@ export default function DatasetExplorerView() {
 
             <div className="quality-sidebar__section">
               <h3>{t('fileInventory')}</h3>
-              {dashboard ? (
+              {dashboardForSource ? (
                 <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboard.files.total_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboard.files.parquet_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboard.files.video_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboard.files.meta_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('otherFiles')}</span> <span>{dashboard.files.other_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('otherFiles')}</span> <span>{dashboardForSource.files.other_files}</span></div>
                 </div>
               ) : (
                 <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
@@ -1792,18 +1817,18 @@ export default function DatasetExplorerView() {
 
             <div className="quality-sidebar__section">
               <h3>{t('featureType')}</h3>
-              {dashboard ? (
-                <TypeDistribution items={dashboard.feature_type_distribution} />
+              {dashboardForSource ? (
+                <TypeDistribution items={dashboardForSource.feature_type_distribution} />
               ) : (
                 <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
               )}
             </div>
 
-            {dashboard?.dataset_stats.row_count != null && (
+            {dashboardForSource?.dataset_stats.row_count != null && (
               <div className="quality-sidebar__section">
                 <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">Total rows</span> <span>{dashboard.dataset_stats.row_count.toLocaleString()}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('vectorFeatures')}</span> <span>{dashboard.dataset_stats.vector_features}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">Total rows</span> <span>{dashboardForSource.dataset_stats.row_count.toLocaleString()}</span></div>
+                  <div><span className="explorer-sidebar-stats__label">{t('vectorFeatures')}</span> <span>{dashboardForSource.dataset_stats.vector_features}</span></div>
                 </div>
               </div>
             )}
