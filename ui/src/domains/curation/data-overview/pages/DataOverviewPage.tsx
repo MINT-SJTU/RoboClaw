@@ -16,6 +16,7 @@ type ValidatorKey = 'metadata' | 'timing' | 'action' | 'visual' | 'depth' | 'ee_
 type DelayMetric = 'dtw_start_delay_s' | 'dtw_end_delay_s' | 'duration_delta_s'
 type MissingMatrixState = 'pass' | 'fail' | 'supplemented' | null
 type OverviewVideoClip = AnnotationWorkspacePayload['videos'][number]
+type QualityOverviewPanel = 'timeline' | 'validators' | 'missing'
 type EpisodeInspectHandlers = {
   onPreviewEpisode: (episodeIndex: number) => void
   onCommitEpisode: (episodeIndex: number) => void
@@ -1966,6 +1967,7 @@ export default function DataOverviewPage() {
   const [alignmentFilter, setAlignmentFilter] = useState<
     'all' | 'not_started' | 'annotated' | 'propagated'
   >('all')
+  const [activeQualityPanel, setActiveQualityPanel] = useState<QualityOverviewPanel>('timeline')
   const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<number[]>([])
   const [inspectedEpisodeId, setInspectedEpisodeId] = useState<number | null>(null)
   const [inspectedWorkspace, setInspectedWorkspace] = useState<AnnotationWorkspacePayload | null>(null)
@@ -2173,6 +2175,7 @@ export default function DataOverviewPage() {
       qualitySection: '质量',
       semanticSection: '语义 / DTW',
       coverageSection: '覆盖 / 原型',
+      stackedCharts: '堆叠分析卡片',
       timeline: 'Episode 质量时间线',
       timelineDesc: '连续低分区间会直接浮现',
       validatorHeatmap: 'Validator × Episode 热力图',
@@ -2197,6 +2200,11 @@ export default function DataOverviewPage() {
       semanticTextColumn: '语义文本',
       dtwColumn: 'DTW 延迟',
       supplementLegend: '* 表示由语义对齐文本补充的任务描述',
+      qualityPanelTabs: [
+        { key: 'timeline' as const, label: '时间线' },
+        { key: 'validators' as const, label: '验证器' },
+        { key: 'missing' as const, label: '缺失项' },
+      ],
     }
     : {
       title: 'Pipeline Analytics Cockpit',
@@ -2211,6 +2219,7 @@ export default function DataOverviewPage() {
       qualitySection: 'Quality',
       semanticSection: 'Semantic / DTW',
       coverageSection: 'Coverage / Prototype',
+      stackedCharts: 'Stacked analytics cards',
       timeline: 'Episode Quality Timeline',
       timelineDesc: 'Consecutive low-score ranges stand out',
       validatorHeatmap: 'Validator × Episode Heatmap',
@@ -2235,6 +2244,11 @@ export default function DataOverviewPage() {
       semanticTextColumn: 'Semantic Text',
       dtwColumn: 'DTW Delay',
       supplementLegend: '* marks task descriptions supplemented from semantic alignment text',
+      qualityPanelTabs: [
+        { key: 'timeline' as const, label: 'Timeline' },
+        { key: 'validators' as const, label: 'Validators' },
+        { key: 'missing' as const, label: 'Missing' },
+      ],
     }
 
   function toggleEpisodeSelection(episodeIndex: number) {
@@ -2380,97 +2394,154 @@ export default function DataOverviewPage() {
         </div>
       </div>
 
-      <section className="pipeline-chart-section">
-        <div className="pipeline-chart-section__head">
-          <h3>{overviewCopy.qualitySection}</h3>
+      <section className="pipeline-stacked-charts" aria-label={overviewCopy.stackedCharts}>
+        <div className="pipeline-stack-card">
+          <div className="pipeline-stack-card__head">
+            <div>
+              <h3>{overviewCopy.qualitySection}</h3>
+              <p>
+                {activeQualityPanel === 'timeline'
+                  ? overviewCopy.timelineDesc
+                  : activeQualityPanel === 'validators'
+                    ? overviewCopy.validatorDesc
+                    : overviewCopy.missingDesc}
+              </p>
+            </div>
+            <div className="pipeline-segmented-control" role="tablist" aria-label={overviewCopy.qualitySection}>
+              {overviewCopy.qualityPanelTabs.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeQualityPanel === item.key}
+                  className={cn(activeQualityPanel === item.key && 'is-active')}
+                  onClick={() => setActiveQualityPanel(item.key)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="pipeline-stack-card__body">
+            {activeQualityPanel === 'timeline' && (
+              <PipelineChartPanel
+                title={overviewCopy.timeline}
+                subtitle={overviewCopy.timelineDesc}
+                className="pipeline-chart-card--stacked-active"
+              >
+                <QualityTimelineChart
+                  rows={filteredRows}
+                  emptyLabel={overviewCopy.empty}
+                  inspectHandlers={inspectHandlers}
+                />
+              </PipelineChartPanel>
+            )}
+            {activeQualityPanel === 'validators' && (
+              <PipelineChartPanel
+                title={overviewCopy.validatorHeatmap}
+                subtitle={overviewCopy.validatorDesc}
+                className="pipeline-chart-card--stacked-active pipeline-chart-card--matrix"
+              >
+                <ValidatorHeatmap
+                  rows={filteredRows}
+                  locale={locale}
+                  emptyLabel={overviewCopy.empty}
+                  inspectHandlers={inspectHandlers}
+                />
+              </PipelineChartPanel>
+            )}
+            {activeQualityPanel === 'missing' && (
+              <PipelineChartPanel
+                title={overviewCopy.missingMatrix}
+                subtitle={overviewCopy.missingDesc}
+                className="pipeline-chart-card--stacked-active pipeline-chart-card--matrix"
+              >
+                <MissingMatrix
+                  rows={filteredRows}
+                  locale={locale}
+                  emptyLabel={overviewCopy.empty}
+                  inspectHandlers={inspectHandlers}
+                />
+              </PipelineChartPanel>
+            )}
+          </div>
         </div>
-        <div className="pipeline-chart-grid">
-          <PipelineChartPanel
-            title={overviewCopy.timeline}
-            subtitle={overviewCopy.timelineDesc}
-            className="pipeline-chart-card--full"
-          >
-            <QualityTimelineChart
-              rows={filteredRows}
-              emptyLabel={overviewCopy.empty}
-              inspectHandlers={inspectHandlers}
-            />
-          </PipelineChartPanel>
-          <PipelineChartPanel
-            title={overviewCopy.validatorHeatmap}
-            subtitle={overviewCopy.validatorDesc}
-            className="pipeline-chart-card--matrix"
-          >
-            <ValidatorHeatmap
-              rows={filteredRows}
-              locale={locale}
-              emptyLabel={overviewCopy.empty}
-              inspectHandlers={inspectHandlers}
-            />
-          </PipelineChartPanel>
-          <PipelineChartPanel
-            title={overviewCopy.missingMatrix}
-            subtitle={overviewCopy.missingDesc}
-            className="pipeline-chart-card--matrix"
-          >
-            <MissingMatrix
-              rows={filteredRows}
-              locale={locale}
-              emptyLabel={overviewCopy.empty}
-              inspectHandlers={inspectHandlers}
-            />
-          </PipelineChartPanel>
-        </div>
-      </section>
 
-      <section className="pipeline-chart-section">
-        <div className="pipeline-chart-section__head">
-          <h3>{overviewCopy.semanticSection}</h3>
+        <div className="pipeline-stack-card">
+          <div className="pipeline-stack-card__head">
+            <div>
+              <h3>{overviewCopy.semanticSection}</h3>
+              <p>{overviewCopy.semanticTimelineDesc}</p>
+            </div>
+          </div>
+          <div className="pipeline-stack-card__grid pipeline-stack-card__grid--semantic">
+            <PipelineChartPanel
+              title={overviewCopy.dtwHistogram}
+              subtitle={overviewCopy.dtwDesc}
+              className="pipeline-chart-card--flat"
+            >
+              <DtwDelayHistogram rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
+            </PipelineChartPanel>
+            <PipelineChartPanel
+              title={overviewCopy.semanticTimeline}
+              subtitle={overviewCopy.semanticTimelineDesc}
+              className="pipeline-chart-card--flat pipeline-chart-card--wide"
+            >
+              <SemanticSpanTimeline
+                rows={filteredRows}
+                locale={locale}
+                emptyLabel={overviewCopy.empty}
+                inspectHandlers={inspectHandlers}
+              />
+            </PipelineChartPanel>
+            <PipelineChartPanel
+              title={overviewCopy.labelBars}
+              subtitle={overviewCopy.labelBarsDesc}
+              className="pipeline-chart-card--flat"
+            >
+              <SemanticLabelBars rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
+            </PipelineChartPanel>
+          </div>
         </div>
-        <div className="pipeline-chart-grid">
-          <PipelineChartPanel title={overviewCopy.dtwHistogram} subtitle={overviewCopy.dtwDesc}>
-            <DtwDelayHistogram rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
-          </PipelineChartPanel>
-          <PipelineChartPanel
-            title={overviewCopy.semanticTimeline}
-            subtitle={overviewCopy.semanticTimelineDesc}
-            className="pipeline-chart-card--wide"
-          >
-            <SemanticSpanTimeline
-              rows={filteredRows}
-              locale={locale}
-              emptyLabel={overviewCopy.empty}
-              inspectHandlers={inspectHandlers}
-            />
-          </PipelineChartPanel>
-          <PipelineChartPanel title={overviewCopy.labelBars} subtitle={overviewCopy.labelBarsDesc}>
-            <SemanticLabelBars rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
-          </PipelineChartPanel>
-        </div>
-      </section>
 
-      <section className="pipeline-chart-section">
-        <div className="pipeline-chart-section__head">
-          <h3>{overviewCopy.coverageSection}</h3>
-        </div>
-        <div className="pipeline-chart-grid">
-          <PipelineChartPanel title={overviewCopy.coverage} subtitle={overviewCopy.coverageDesc}>
-            <CoverageStackedBar rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
-          </PipelineChartPanel>
-          <PipelineChartPanel title={overviewCopy.prototype} subtitle={overviewCopy.prototypeDesc}>
-            <PrototypeClusterChart
-              clusters={prototypeResults?.clusters || []}
-              emptyLabel={overviewCopy.empty}
-              inspectHandlers={inspectHandlers}
-            />
-          </PipelineChartPanel>
-          <PipelineChartPanel title={overviewCopy.scatter} subtitle={overviewCopy.scatterDesc}>
-            <QualityDtwScatter
-              rows={filteredRows}
-              emptyLabel={overviewCopy.empty}
-              inspectHandlers={inspectHandlers}
-            />
-          </PipelineChartPanel>
+        <div className="pipeline-stack-card">
+          <div className="pipeline-stack-card__head">
+            <div>
+              <h3>{overviewCopy.coverageSection}</h3>
+              <p>{overviewCopy.coverageDesc}</p>
+            </div>
+          </div>
+          <div className="pipeline-stack-card__grid">
+            <PipelineChartPanel
+              title={overviewCopy.coverage}
+              subtitle={overviewCopy.coverageDesc}
+              className="pipeline-chart-card--flat"
+            >
+              <CoverageStackedBar rows={filteredRows} locale={locale} emptyLabel={overviewCopy.empty} />
+            </PipelineChartPanel>
+            <PipelineChartPanel
+              title={overviewCopy.prototype}
+              subtitle={overviewCopy.prototypeDesc}
+              className="pipeline-chart-card--flat"
+            >
+              <PrototypeClusterChart
+                clusters={prototypeResults?.clusters || []}
+                emptyLabel={overviewCopy.empty}
+                inspectHandlers={inspectHandlers}
+              />
+            </PipelineChartPanel>
+            <PipelineChartPanel
+              title={overviewCopy.scatter}
+              subtitle={overviewCopy.scatterDesc}
+              className="pipeline-chart-card--flat"
+            >
+              <QualityDtwScatter
+                rows={filteredRows}
+                emptyLabel={overviewCopy.empty}
+                inspectHandlers={inspectHandlers}
+              />
+            </PipelineChartPanel>
+          </div>
         </div>
       </section>
 

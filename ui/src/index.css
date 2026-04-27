@@ -3857,6 +3857,60 @@ a {
   gap: 8px;
 }
 
+.pipeline-stacked-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pipeline-stack-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(47, 111, 228, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  overflow: hidden;
+}
+
+.pipeline-stack-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pipeline-stack-card__head h3 {
+  margin: 0;
+  color: var(--tx);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.pipeline-stack-card__head p {
+  margin: 3px 0 0;
+  color: var(--tx2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pipeline-stack-card__body {
+  min-width: 0;
+}
+
+.pipeline-stack-card__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.pipeline-stack-card__grid--semantic {
+  grid-template-columns: minmax(230px, 0.78fr) minmax(360px, 1.44fr) minmax(230px, 0.78fr);
+}
+
 .pipeline-chart-section__head {
   display: flex;
   align-items: center;
@@ -3888,6 +3942,25 @@ a {
   overflow: hidden;
 }
 
+.pipeline-chart-card--stacked-active,
+.pipeline-chart-card--flat {
+  grid-column: auto;
+  min-height: 0;
+}
+
+.pipeline-chart-card--stacked-active {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.pipeline-chart-card--flat {
+  padding: 10px;
+  border-color: rgba(47, 111, 228, 0.09);
+  background: rgba(248, 251, 255, 0.58);
+}
+
 .pipeline-chart-card--wide {
   grid-column: span 8;
 }
@@ -3900,6 +3973,10 @@ a {
   grid-column: 1 / -1;
   min-height: 0;
   overflow: visible;
+}
+
+.pipeline-stack-card__grid .pipeline-chart-card--wide {
+  grid-column: auto;
 }
 
 .pipeline-chart-card__head {
@@ -4691,6 +4768,11 @@ a {
 }
 
 @media (max-width: 1200px) {
+  .pipeline-stack-card__grid,
+  .pipeline-stack-card__grid--semantic {
+    grid-template-columns: 1fr;
+  }
+
   .pipeline-chart-card,
   .pipeline-chart-card--wide {
     grid-column: span 6;
@@ -4707,6 +4789,22 @@ a {
 }
 
 @media (max-width: 760px) {
+  .pipeline-stack-card {
+    padding: 10px;
+  }
+
+  .pipeline-stack-card__head {
+    flex-direction: column;
+  }
+
+  .pipeline-stack-card__head .pipeline-segmented-control {
+    width: 100%;
+  }
+
+  .pipeline-stack-card__head .pipeline-segmented-control button {
+    flex: 1;
+  }
+
   .pipeline-chart-card,
   .pipeline-chart-card--wide,
   .pipeline-chart-card--full,
