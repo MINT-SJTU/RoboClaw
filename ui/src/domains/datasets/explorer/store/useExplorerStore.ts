@@ -113,6 +113,113 @@ export interface ExplorerPageState {
   activeDatasetRef: ExplorerDatasetRef | null
 }
 
+const EXPLORER_SESSION_KEY = 'roboclaw.dataset_explorer_session'
+
+function createDefaultExplorerPageState(): ExplorerPageState {
+  return {
+    source: 'remote',
+    datasetIdInput: '',
+    remoteDatasetSelected: '',
+    localDatasetInput: '',
+    localDatasetPathInput: '',
+    localDatasetPathSelected: '',
+    localPathDatasetLabel: '',
+    prepareStatus: '',
+    prepareError: '',
+    preparingForQuality: false,
+    activeDatasetRef: null,
+  }
+}
+
+function normalizeExplorerSource(value: unknown): ExplorerSource {
+  return value === 'local' || value === 'path' ? value : 'remote'
+}
+
+function normalizeString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function normalizeStoredDatasetRef(value: unknown): ExplorerDatasetRef | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const record = value as Record<string, unknown>
+  const source = normalizeExplorerSource(record.source)
+  const dataset = normalizeString(record.dataset).trim()
+  const path = normalizeString(record.path).trim()
+  if (source === 'path') {
+    if (!path) {
+      return null
+    }
+    return {
+      source,
+      dataset: dataset || undefined,
+      path,
+    }
+  }
+  if (!dataset) {
+    return null
+  }
+  return { source, dataset }
+}
+
+function normalizeStoredExplorerPageState(value: unknown): ExplorerPageState {
+  const fallback = createDefaultExplorerPageState()
+  if (!value || typeof value !== 'object') {
+    return fallback
+  }
+  const record = value as Record<string, unknown>
+  return {
+    source: normalizeExplorerSource(record.source),
+    datasetIdInput: normalizeString(record.datasetIdInput),
+    remoteDatasetSelected: normalizeString(record.remoteDatasetSelected),
+    localDatasetInput: normalizeString(record.localDatasetInput),
+    localDatasetPathInput: normalizeString(record.localDatasetPathInput),
+    localDatasetPathSelected: normalizeString(record.localDatasetPathSelected),
+    localPathDatasetLabel: normalizeString(record.localPathDatasetLabel),
+    prepareStatus: normalizeString(record.prepareStatus),
+    prepareError: '',
+    preparingForQuality: false,
+    activeDatasetRef: normalizeStoredDatasetRef(record.activeDatasetRef),
+  }
+}
+
+function getStoredExplorerPageState(): ExplorerPageState {
+  if (typeof window === 'undefined') {
+    return createDefaultExplorerPageState()
+  }
+  const raw = window.localStorage.getItem(EXPLORER_SESSION_KEY)
+  if (!raw) {
+    return createDefaultExplorerPageState()
+  }
+  try {
+    return normalizeStoredExplorerPageState(JSON.parse(raw))
+  } catch {
+    window.localStorage.removeItem(EXPLORER_SESSION_KEY)
+    return createDefaultExplorerPageState()
+  }
+}
+
+function persistExplorerPageState(state: ExplorerPageState): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  const stored: ExplorerPageState = {
+    source: state.source,
+    datasetIdInput: state.datasetIdInput,
+    remoteDatasetSelected: state.remoteDatasetSelected,
+    localDatasetInput: state.localDatasetInput,
+    localDatasetPathInput: state.localDatasetPathInput,
+    localDatasetPathSelected: state.localDatasetPathSelected,
+    localPathDatasetLabel: state.localPathDatasetLabel,
+    prepareStatus: state.preparingForQuality ? '' : state.prepareStatus,
+    prepareError: '',
+    preparingForQuality: false,
+    activeDatasetRef: normalizeStoredDatasetRef(state.activeDatasetRef),
+  }
+  window.localStorage.setItem(EXPLORER_SESSION_KEY, JSON.stringify(stored))
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -200,17 +307,7 @@ function buildExplorerQuery(ref: ExplorerDatasetRef): string {
 }
 
 export const useExplorer = create<ExplorerStore>((set) => ({
-  source: 'remote',
-  datasetIdInput: '',
-  remoteDatasetSelected: '',
-  localDatasetInput: '',
-  localDatasetPathInput: '',
-  localDatasetPathSelected: '',
-  localPathDatasetLabel: '',
-  prepareStatus: '',
-  prepareError: '',
-  preparingForQuality: false,
-  activeDatasetRef: null,
+  ...getStoredExplorerPageState(),
   summary: null,
   summaryLoading: false,
   summaryError: '',
@@ -225,8 +322,26 @@ export const useExplorer = create<ExplorerStore>((set) => ({
   episodeLoading: false,
   episodeError: '',
 
-  setPageState: (patch) => set(patch),
-  setActiveDatasetRef: (ref) => set({ activeDatasetRef: ref }),
+  setPageState: (patch) => {
+    set((state) => {
+      const nextPageState = normalizeStoredExplorerPageState({
+        ...state,
+        ...patch,
+      })
+      persistExplorerPageState(nextPageState)
+      return patch
+    })
+  },
+  setActiveDatasetRef: (ref) => {
+    set((state) => {
+      const nextPageState = normalizeStoredExplorerPageState({
+        ...state,
+        activeDatasetRef: ref,
+      })
+      persistExplorerPageState(nextPageState)
+      return { activeDatasetRef: ref }
+    })
+  },
 
   loadSummary: async (ref: ExplorerDatasetRef) => {
     set({

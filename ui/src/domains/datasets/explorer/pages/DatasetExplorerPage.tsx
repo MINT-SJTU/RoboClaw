@@ -1250,7 +1250,10 @@ export default function DatasetExplorerView() {
       return
     }
     const loadedKey = buildExplorerRefKey(activeDatasetRef)
-    if (requestedDatasetKeyRef.current === requestKey || loadedKey === requestKey) {
+    const hasLoadedActiveDataset =
+      loadedKey === requestKey
+      && Boolean(summaryForSource || dashboardForSource || episodePageForSource)
+    if (requestedDatasetKeyRef.current === requestKey || hasLoadedActiveDataset) {
       return
     }
     void loadDataset(datasetRef)
@@ -1262,6 +1265,9 @@ export default function DatasetExplorerView() {
     localPathDatasetLabel,
     currentDataset,
     activeDatasetRef,
+    summaryForSource,
+    dashboardForSource,
+    episodePageForSource,
     loadSummary,
     loadDashboard,
     loadEpisodePage,
