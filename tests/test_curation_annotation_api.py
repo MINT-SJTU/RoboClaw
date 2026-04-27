@@ -315,6 +315,81 @@ def test_annotation_workspace_returns_video_and_joint_payload(
     assert payload["annotations"]["version_number"] == 0
 
 
+def test_annotation_workspace_uses_shared_video_clip_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "datasets"
+    dataset_path = dataset_root / "demo"
+    video_path = (
+        dataset_path
+        / "videos"
+        / "observation.images.front"
+        / "chunk-000"
+        / "file-000.mp4"
+    )
+    video_path.parent.mkdir(parents=True)
+    video_path.write_bytes(b"")
+    info = {
+        "fps": 30,
+        "robot_type": "so101",
+        "features": {
+            "action": {"names": ["gripper.pos"]},
+            "observation.state": {"names": ["gripper.pos"]},
+            "observation.images.front": {"dtype": "video"},
+        },
+    }
+    episode_meta = {
+        "episode_index": 1,
+        "task": "pick",
+        "videos/observation.images.front/from_timestamp": 25.633333333333333,
+        "videos/observation.images.front/to_timestamp": 51.4,
+    }
+
+    monkeypatch.setattr(curation_routes, "datasets_root", lambda: dataset_root)
+    monkeypatch.setattr(
+        curation_serializers,
+        "load_episode_data",
+        lambda _dataset_path, _episode_index: {
+            "info": info,
+            "episode_meta": episode_meta,
+            "rows": [
+                {
+                    "timestamp": 0.0,
+                    "frame_index": 0,
+                    "action": [1.0],
+                    "observation.state": [1.0],
+                    "task": "pick",
+                },
+                {
+                    "timestamp": 1.0,
+                    "frame_index": 30,
+                    "action": [2.0],
+                    "observation.state": [2.0],
+                    "task": "pick",
+                },
+            ],
+            "video_files": [video_path],
+        },
+    )
+
+    app = FastAPI()
+    curation_routes.register_curation_routes(app)
+    response = TestClient(app).get(
+        "/api/curation/annotation-workspace",
+        params={"dataset": "demo", "episode_index": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["videos"][0]["path"] == (
+        "videos/observation.images.front/chunk-000/file-000.mp4"
+    )
+    assert payload["videos"][0]["stream"] == "front"
+    assert payload["videos"][0]["from_timestamp"] == 25.633333333333333
+    assert payload["videos"][0]["to_timestamp"] == 51.4
+
+
 def test_workflow_result_endpoints_serialize_ui_shapes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

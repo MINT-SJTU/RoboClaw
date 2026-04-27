@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -23,7 +23,7 @@ from roboclaw.data.curation.state import (
     load_propagation_results,
     load_quality_results,
 )
-from roboclaw.data.curation.validators import load_episode_data
+from roboclaw.data.curation.validators import load_episode_data, safe_float
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +65,87 @@ def derive_task_value(data: dict[str, Any]) -> str:
             return str(value)
 
     return ""
+
+
+def video_feature_keys(info: dict[str, Any]) -> list[str]:
+    """Return LeRobot feature keys that point to video streams."""
+    features = info.get("features", {})
+    keys: list[str] = []
+    for name, config in features.items():
+        if isinstance(config, dict) and config.get("dtype") == "video":
+            keys.append(str(name))
+    return keys
+
+
+def video_key_from_relative_path(relative_path: str, info: dict[str, Any]) -> str | None:
+    """Resolve the LeRobot video feature key represented by a repo-relative path."""
+    normalized_path = relative_path.replace("\\", "/")
+    for video_key in sorted(video_feature_keys(info), key=len, reverse=True):
+        if normalized_path.startswith(f"videos/{video_key}/"):
+            return video_key
+
+    parts = PurePosixPath(normalized_path).parts
+    if len(parts) >= 2 and parts[0] == "videos":
+        candidate = parts[1]
+        if not candidate.startswith(("chunk-", "episode_")):
+            return candidate
+    return None
+
+
+def stream_name_from_video_key(video_key: str | None, relative_path: str) -> str:
+    """Build a concise stream label from a video key or legacy video path."""
+    if video_key:
+        if video_key.startswith("observation.images."):
+            return video_key.split("observation.images.", 1)[1]
+        if "." in video_key:
+            return video_key.rsplit(".", 1)[-1]
+        return video_key
+    return Path(relative_path).stem
+
+
+def video_clip_bounds(
+    episode_meta: dict[str, Any],
+    video_key: str | None,
+    duration_s: float,
+) -> tuple[float, float | None]:
+    """Return absolute video clip bounds for the episode's stream."""
+    from_timestamp = None
+    to_timestamp = None
+    if video_key:
+        prefix = f"videos/{video_key}/"
+        from_timestamp = safe_float(episode_meta.get(f"{prefix}from_timestamp"))
+        to_timestamp = safe_float(episode_meta.get(f"{prefix}to_timestamp"))
+
+    if from_timestamp is None:
+        from_timestamp = safe_float(episode_meta.get("video_from_timestamp"))
+    if to_timestamp is None:
+        to_timestamp = safe_float(episode_meta.get("video_to_timestamp"))
+
+    clip_start = from_timestamp if from_timestamp is not None else 0.0
+    clip_end = to_timestamp
+    if clip_end is None and duration_s > 0:
+        clip_end = clip_start + duration_s
+
+    return clip_start, clip_end
+
+
+def serialize_workspace_video(
+    dataset: str,
+    info: dict[str, Any],
+    episode_meta: dict[str, Any],
+    relative_path: str,
+    duration_s: float,
+) -> dict[str, Any]:
+    """Serialize one episode video with its absolute shared-video clip window."""
+    video_key = video_key_from_relative_path(relative_path, info)
+    clip_start, clip_end = video_clip_bounds(episode_meta, video_key, duration_s)
+    return {
+        "path": relative_path,
+        "url": f"/api/curation/video/{quote(relative_path, safe='/')}?dataset={quote(dataset, safe='')}",
+        "stream": stream_name_from_video_key(video_key, relative_path),
+        "from_timestamp": clip_start,
+        "to_timestamp": clip_end,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +258,7 @@ def build_workspace_payload(
     """Assemble the full annotation-workspace payload for a single episode."""
     data = load_episode_data(dataset_path, episode_index)
     info = data.get("info", {})
+    episode_meta = data.get("episode_meta") or {}
     rows = data.get("rows", [])
     start_timestamp, end_timestamp = episode_time_bounds(rows)
     duration_s = 0.0
@@ -247,13 +329,13 @@ def build_workspace_payload(
             else None,
         },
         "videos": [
-            {
-                "path": relative_path,
-                "url": f"/api/curation/video/{quote(relative_path, safe='/')}?dataset={quote(dataset, safe='')}",
-                "stream": Path(relative_path).stem,
-                "from_timestamp": 0,
-                "to_timestamp": duration_s if duration_s > 0 else None,
-            }
+            serialize_workspace_video(
+                dataset,
+                info,
+                episode_meta,
+                relative_path,
+                duration_s,
+            )
             for relative_path in relative_videos
         ],
         "joint_trajectory": joint_trajectory,
