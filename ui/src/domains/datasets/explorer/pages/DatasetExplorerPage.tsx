@@ -26,6 +26,7 @@ import {
   shouldLoopVideo,
   type EpisodeVideo,
 } from './datasetExplorerPlayback'
+import { DatasetInsightStack } from '../components/DatasetInsightStack'
 
 // ---------------------------------------------------------------------------
 // Modality chips
@@ -1758,88 +1759,69 @@ export default function DatasetExplorerView() {
       )}
 
       {currentDataset && (datasetSummary || dashboardForSource || episodePageForSource) && (
-        <div className="quality-layout">
-          <div className="quality-layout__main">
-            {/* KPIs */}
-            <div className="quality-kpis pipeline-metric-strip">
-              <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
-              <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
-              <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
-              <MetricCard label={t('parquetFiles')} value={dashboardForSource?.files.parquet_files ?? '--'} accent="teal" />
-              <MetricCard label={t('videoFiles')} value={dashboardForSource?.files.video_files ?? '--'} accent="coral" />
-            </div>
-
-            {/* Modality chips */}
-            <GlassPanel className="explorer-section">
-              <h3>{t('modalities')}</h3>
-              {dashboardLoading && !dashboard ? (
-                <div className="explorer-empty">{t('running')}...</div>
-              ) : dashboardForSource ? (
-                <ModalityChips items={dashboardForSource.modality_summary} />
-              ) : (
-                <div className="explorer-empty">{dashboardError || t('noStats')}</div>
-              )}
-            </GlassPanel>
-
-            {/* Feature stats table */}
-            <GlassPanel className="explorer-section">
-              <h3>{t('featureStats')}</h3>
-              {dashboardForSource ? (
-                <>
-                  <p className="explorer-section__sub">
-                    {dashboardForSource.feature_names.length} features
-                    {dashboardForSource.dataset_stats.features_with_stats > 0 &&
-                      ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
-                  </p>
-                  <FeatureStatsTable stats={dashboardForSource.feature_stats} />
-                </>
-              ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
-              )}
-            </GlassPanel>
+        <>
+          <div className="quality-kpis pipeline-metric-strip">
+            <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
+            <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
+            <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
+            <MetricCard label={t('parquetFiles')} value={dashboardForSource?.files.parquet_files ?? '--'} accent="teal" />
+            <MetricCard label={t('videoFiles')} value={dashboardForSource?.files.video_files ?? '--'} accent="coral" />
           </div>
 
-          {/* Sidebar */}
-          <GlassPanel className="quality-layout__sidebar">
-            <div className="quality-sidebar__section">
-              <h3>{t('episodeBrowser')}</h3>
-              <EpisodeBrowser datasetRef={datasetRef} />
-            </div>
-
-            <div className="quality-sidebar__section">
-              <h3>{t('fileInventory')}</h3>
-              {dashboardForSource ? (
-                <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('otherFiles')}</span> <span>{dashboardForSource.files.other_files}</span></div>
-                </div>
-              ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
-              )}
-            </div>
-
-            <div className="quality-sidebar__section">
-              <h3>{t('featureType')}</h3>
-              {dashboardForSource ? (
-                <TypeDistribution items={dashboardForSource.feature_type_distribution} />
-              ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
-              )}
-            </div>
-
-            {dashboardForSource?.dataset_stats.row_count != null && (
-              <div className="quality-sidebar__section">
-                <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">Total rows</span> <span>{dashboardForSource.dataset_stats.row_count.toLocaleString()}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('vectorFeatures')}</span> <span>{dashboardForSource.dataset_stats.vector_features}</span></div>
-                </div>
+          <DatasetInsightStack
+            summary={datasetSummary}
+            dashboard={dashboardForSource}
+            episodePage={episodePageForSource}
+            dashboardLoading={dashboardLoading}
+            dashboardError={dashboardError}
+            episodesNode={<EpisodeBrowser datasetRef={datasetRef} />}
+            modalitiesNode={
+              <div className="explorer-section">
+                <h3>{t('modalities')}</h3>
+                {dashboardForSource ? (
+                  <ModalityChips items={dashboardForSource.modality_summary} />
+                ) : (
+                  <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                )}
               </div>
-            )}
-          </GlassPanel>
-        </div>
+            }
+            featureStatsNode={
+              <div className="explorer-section">
+                <h3>{t('featureStats')}</h3>
+                {dashboardForSource ? (
+                  <>
+                    <p className="explorer-section__sub">
+                      {dashboardForSource.feature_names.length} features
+                      {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+                        ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
+                    </p>
+                    <FeatureStatsTable stats={dashboardForSource.feature_stats} />
+                  </>
+                ) : (
+                  <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                )}
+              </div>
+            }
+            typeDistributionNode={
+              <div className="explorer-section">
+                <h3>{t('featureType')}</h3>
+                {dashboardForSource ? (
+                  <>
+                    <TypeDistribution items={dashboardForSource.feature_type_distribution} />
+                    <div className="explorer-sidebar-stats dataset-stack-file-stats">
+                      <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
+                      <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
+                      <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
+                      <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
+                )}
+              </div>
+            }
+          />
+        </>
       )}
     </div>
   )
