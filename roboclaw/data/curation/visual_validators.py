@@ -210,7 +210,7 @@ def validate_visual_assets(
         check_name="video_count",
         passed=len(video_files) >= min_video_count,
         message=f"Video file count {len(video_files)}",
-        level="major" if not video_files else "minor",
+        level="major" if len(video_files) < min_video_count else "minor",
         value={"video_count": len(video_files)},
     ))
 
@@ -244,23 +244,46 @@ def validate_visual_assets(
             width = width or meta_width
             height = height or meta_height
         sampled_frames = frames
+        min_width = thresholds["visual_min_resolution_width"]
+        min_height = thresholds["visual_min_resolution_height"]
         if width and height:
+            resolution_passed = width >= min_width and height >= min_height
             issues.append(make_issue(
                 operator_name=operator_name,
                 check_name="video_resolution",
-                passed=width >= thresholds["visual_min_resolution_width"] and height >= thresholds["visual_min_resolution_height"],
-                message=f"{width}x{height} (min {int(thresholds['visual_min_resolution_width'])}x{int(thresholds['visual_min_resolution_height'])})",
+                passed=resolution_passed,
+                message=f"{width}x{height} (min {int(min_width)}x{int(min_height)})",
                 level="major",
                 value={"width": width, "height": height},
             ))
+        elif min_width > 0 or min_height > 0:
+            issues.append(make_issue(
+                operator_name=operator_name,
+                check_name="video_resolution",
+                passed=False,
+                message=f"Video resolution unavailable (min {int(min_width)}x{int(min_height)})",
+                level="major",
+                value={"width": None, "height": None},
+            ))
+
+        min_fps = thresholds["visual_min_frame_rate"]
         if fps > 0:
             issues.append(make_issue(
                 operator_name=operator_name,
                 check_name="video_fps",
-                passed=fps >= thresholds["visual_min_frame_rate"],
-                message=f"{fps:.1f} Hz (min {thresholds['visual_min_frame_rate']:.1f} Hz)",
+                passed=fps >= min_fps,
+                message=f"{fps:.1f} Hz (min {min_fps:.1f} Hz)",
                 level="major",
                 value={"fps": fps},
+            ))
+        elif min_fps > 0:
+            issues.append(make_issue(
+                operator_name=operator_name,
+                check_name="video_fps",
+                passed=False,
+                message=f"Video frame rate unavailable (min {min_fps:.1f} Hz)",
+                level="major",
+                value={"fps": None},
             ))
 
     if not sampled_frames:
@@ -399,6 +422,18 @@ def validate_depth_assets(
             level="major",
             value={"invalid_ratio": avg_invalid},
         ))
+    elif thresholds["depth_invalid_pixel_max"] < 1.0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="depth_invalid_ratio",
+            passed=False,
+            message=(
+                "Depth invalid-pixel ratio unavailable "
+                f"(max {thresholds['depth_invalid_pixel_max'] * 100:.0f}%)"
+            ),
+            level="major",
+            value={"invalid_ratio": None},
+        ))
 
     if continuity_ratios:
         avg_continuity = statistics.fmean(continuity_ratios)
@@ -409,6 +444,15 @@ def validate_depth_assets(
             message=f"Depth continuity {avg_continuity * 100:.1f}% (min {thresholds['depth_continuity_min'] * 100:.0f}%)",
             level="major",
             value={"continuity": avg_continuity},
+        ))
+    elif thresholds["depth_continuity_min"] > 0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="depth_continuity",
+            passed=False,
+            message=f"Depth continuity unavailable (min {thresholds['depth_continuity_min'] * 100:.0f}%)",
+            level="major",
+            value={"continuity": None},
         ))
 
     return finalize_validator(operator_name, issues, details={"depth_streams": len(depth_files)})

@@ -1102,7 +1102,7 @@ def validate_ee_trajectory(
         check_name="grasp_event_count",
         passed=len(spans) >= int(thresholds["ee_min_event_count"]),
         message=f"Detected grasp/place events {len(spans)}",
-        level="minor",
+        level="major",
         value={"event_count": len(spans)},
     ))
 
@@ -1117,8 +1117,17 @@ def validate_ee_trajectory(
             check_name="gripper_motion_span",
             passed=span >= thresholds["ee_min_gripper_span"],
             message=f"Gripper span {span:.3f}",
-            level="minor",
+            level="major",
             value={"gripper_span": span},
+        ))
+    elif thresholds["ee_min_gripper_span"] > 0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="gripper_motion_span",
+            passed=False,
+            message=f"Gripper span unavailable (min {thresholds['ee_min_gripper_span']:.3f})",
+            level="major",
+            value={"gripper_span": None},
         ))
 
     return finalize_validator(operator_name, issues, details={"event_count": len(spans)})
