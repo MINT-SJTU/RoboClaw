@@ -7,18 +7,10 @@ from typing import Any
 
 from .bridge import read_parquet_rows
 from .state import load_dataset_info
+from .task_descriptions import payload_has_task_description
 from .validators import QUALITY_THRESHOLD_DEFAULTS, safe_float
 
 VALIDATOR_ORDER = ["metadata", "timing", "action", "visual", "depth", "ee_trajectory"]
-
-TASK_DESCRIPTION_KEYS = (
-    "task",
-    "task_label",
-    "instruction",
-    "language_instruction",
-    "language_instruction_2",
-    "language_instruction_3",
-)
 
 
 def build_quality_defaults(dataset_path: Path, dataset_name: str | None = None) -> dict[str, Any]:
@@ -182,7 +174,7 @@ def _first_episode_meta(dataset_path: Path) -> dict[str, Any]:
             if isinstance(payload, dict):
                 return payload
     episodes_dir = dataset_path / "meta" / "episodes"
-    for path in sorted(episodes_dir.glob("*.parquet"))[:1]:
+    for path in sorted(episodes_dir.rglob("*.parquet"))[:1]:
         rows = read_parquet_rows(path)
         if rows:
             return rows[0]
@@ -192,7 +184,7 @@ def _first_episode_meta(dataset_path: Path) -> dict[str, Any]:
 def _episode_metadata_present(dataset_path: Path) -> bool:
     return (
         (dataset_path / "meta" / "episodes.jsonl").is_file()
-        or any((dataset_path / "meta" / "episodes").glob("*.parquet"))
+        or any((dataset_path / "meta" / "episodes").rglob("*.parquet"))
     )
 
 
@@ -249,20 +241,12 @@ def _duration_default(median_duration_s: float) -> float:
 
 
 def _has_task_description(dataset_path: Path, episode_meta: dict[str, Any]) -> bool:
-    if _has_text_value(episode_meta, TASK_DESCRIPTION_KEYS):
+    if payload_has_task_description(episode_meta):
         return True
     task_index = episode_meta.get("task_index")
     if task_index is not None and _task_lookup_has_description(dataset_path, task_index):
         return True
     return _tasks_file_has_any_description(dataset_path)
-
-
-def _has_text_value(payload: dict[str, Any], keys: tuple[str, ...]) -> bool:
-    for key in keys:
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
 
 
 def _task_lookup_has_description(dataset_path: Path, task_index: Any) -> bool:
@@ -304,18 +288,4 @@ def _task_rows(dataset_path: Path) -> list[dict[str, Any]]:
 
 
 def _row_has_task_text(row: dict[str, Any]) -> bool:
-    if _has_text_value(row, TASK_DESCRIPTION_KEYS):
-        return True
-    for key, value in row.items():
-        if not _is_task_description_key(key):
-            continue
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
-
-
-def _is_task_description_key(key: Any) -> bool:
-    key_lower = str(key).lower()
-    if key_lower in {"task_index", "task_id", "task_uid"}:
-        return False
-    return any(needle in key_lower for needle in ("task", "instruction", "language"))
+    return payload_has_task_description(row)

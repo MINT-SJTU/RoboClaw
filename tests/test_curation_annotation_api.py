@@ -10,11 +10,10 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.http.routes import curation as curation_routes
+from roboclaw.data.curation import bridge as curation_bridge
 from roboclaw.data.curation import exports as curation_exports
 from roboclaw.data.curation import serializers as curation_serializers
 from roboclaw.data.curation import service as curation_service
-from roboclaw.data import dataset_sessions
 from roboclaw.data.curation.state import (
     load_workflow_state,
     save_prototype_results,
@@ -23,6 +22,7 @@ from roboclaw.data.curation.state import (
     set_stage_pause_requested,
 )
 from roboclaw.data.curation.validators import validate_metadata
+from roboclaw.http.routes import curation as curation_routes
 
 
 def _write_demo_dataset(root: Path, total_episodes: int = 1) -> Path:
@@ -199,6 +199,97 @@ def test_metadata_validator_checks_task_description(tmp_path: Path) -> None:
 
     issues = {issue["check_name"]: issue for issue in result["issues"]}
     assert issues["task_description"]["passed"] is False
+
+
+def test_metadata_validator_accepts_episode_tasks_list(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "demo"
+    dataset_path.mkdir()
+    parquet_path = dataset_path / "data.parquet"
+    parquet_path.write_bytes(b"placeholder")
+
+    result = validate_metadata(
+        {
+            "dataset_path": dataset_path,
+            "info": {
+                "fps": 30,
+                "robot_type": "so101",
+                "features": {"action": {"names": ["joint"]}},
+            },
+            "episode_meta": {
+                "episode_index": 0,
+                "length": 2.0,
+                "tasks": ["pick the yellow cube"],
+            },
+            "rows": [],
+            "parquet_path": parquet_path,
+            "video_files": [],
+        },
+        threshold_overrides={"metadata_require_videos": 0.0},
+    )
+
+    issues = {issue["check_name"]: issue for issue in result["issues"]}
+    assert issues["task_description"]["passed"] is True
+
+
+def test_quality_defaults_accept_task_descriptions_from_episode_tasks_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "datasets"
+    dataset_root.mkdir()
+    dataset_path = _write_demo_dataset(dataset_root)
+    (dataset_path / "meta" / "episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_index": 0,
+                "length": 1.0,
+                "tasks": ["pick the yellow cube"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(curation_routes, "datasets_root", lambda: dataset_root)
+
+    app = FastAPI()
+    curation_routes.register_curation_routes(app)
+    client = TestClient(app)
+    response = client.get("/api/curation/quality-defaults", params={"dataset": "demo"})
+
+    assert response.status_code == 200
+    assert response.json()["checks"]["task_descriptions_present"] is True
+
+
+def test_quality_defaults_reads_nested_episode_parquet_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "datasets"
+    dataset_root.mkdir()
+    dataset_path = _write_demo_dataset(dataset_root)
+    (dataset_path / "meta" / "episodes.jsonl").unlink()
+    episode_parquet = dataset_path / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    curation_bridge.write_parquet_rows(
+        episode_parquet,
+        [
+            {
+                "episode_index": 0,
+                "length": 30,
+                "tasks": ["pick the yellow cube"],
+            }
+        ],
+    )
+    monkeypatch.setattr(curation_routes, "datasets_root", lambda: dataset_root)
+
+    app = FastAPI()
+    curation_routes.register_curation_routes(app)
+    client = TestClient(app)
+    response = client.get("/api/curation/quality-defaults", params={"dataset": "demo"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["checks"]["episode_metadata_present"] is True
+    assert payload["checks"]["task_descriptions_present"] is True
 
 
 def test_annotation_workspace_returns_video_and_joint_payload(

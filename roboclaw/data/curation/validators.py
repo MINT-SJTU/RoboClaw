@@ -9,15 +9,16 @@ from typing import Any, Callable
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
+import numpy as np
 from huggingface_hub import hf_hub_download
 from loguru import logger
-import numpy as np
 
 from roboclaw.data.dataset_sessions import (
     is_session_handle,
     parse_session_handle,
     read_session_metadata,
 )
+
 from .bridge import read_parquet_rows
 from .features import percentile, resolve_task_value
 from .propagation import (
@@ -26,6 +27,7 @@ from .propagation import (
     detect_grasp_place_events,
 )
 from .state import load_dataset_info
+from .task_descriptions import payload_has_task_description, value_has_task_description
 
 QUALITY_THRESHOLD_DEFAULTS: dict[str, float] = {
     "metadata_require_info_json": 1.0,
@@ -460,8 +462,7 @@ def _list_video_files(video_dir: Path) -> list[Path]:
     return sorted(video_dir.glob("*.mp4"))
 
 
-from .visual_validators import validate_depth_assets, validate_visual_assets
-
+from .visual_validators import validate_depth_assets, validate_visual_assets  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Metadata validator
@@ -583,17 +584,8 @@ def _check_task_description(
 
 def _has_task_description(data: dict[str, Any]) -> bool:
     episode_meta = data.get("episode_meta") or {}
-    for key in (
-        "task",
-        "task_label",
-        "instruction",
-        "language_instruction",
-        "language_instruction_2",
-        "language_instruction_3",
-    ):
-        value = episode_meta.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
+    if payload_has_task_description(episode_meta):
+        return True
 
     task_index = episode_meta.get("task_index")
     dataset_path = data.get("dataset_path")
@@ -603,7 +595,7 @@ def _has_task_description(data: dict[str, Any]) -> bool:
 
     for row in data.get("rows", [])[:20]:
         value = resolve_task_value(row)
-        if isinstance(value, str) and value.strip():
+        if value_has_task_description(value):
             return True
         row_task_index = row.get("task_index")
         if row_task_index is not None and isinstance(dataset_path, Path):
@@ -647,19 +639,7 @@ def _load_task_rows(dataset_path: Path) -> list[dict[str, Any]]:
 
 
 def _task_row_has_description(row: dict[str, Any]) -> bool:
-    for key, value in row.items():
-        if not _is_task_description_key(key):
-            continue
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
-
-
-def _is_task_description_key(key: Any) -> bool:
-    key_lower = str(key).lower()
-    if key_lower in {"task_index", "task_id", "task_uid"}:
-        return False
-    return any(needle in key_lower for needle in ("task", "instruction", "language"))
+    return payload_has_task_description(row)
 
 
 def _check_duration(
