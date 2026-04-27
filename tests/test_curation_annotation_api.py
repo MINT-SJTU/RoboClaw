@@ -876,6 +876,103 @@ def test_alignment_overview_combines_quality_and_alignment_results(
     assert rows[1]["propagation_spans"][0]["duration_delta_s"] == -0.2
 
 
+def test_alignment_overview_recovers_saved_propagated_annotations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, dataset_path = _build_client(tmp_path, monkeypatch)
+
+    save_quality_results(
+        dataset_path,
+        {
+            "total": 2,
+            "passed": 2,
+            "failed": 0,
+            "overall_score": 100.0,
+            "episodes": [
+                {
+                    "episode_index": 0,
+                    "passed": True,
+                    "score": 100.0,
+                    "validators": {"metadata": {"passed": True, "score": 100.0}},
+                    "issues": [],
+                },
+                {
+                    "episode_index": 1,
+                    "passed": True,
+                    "score": 100.0,
+                    "validators": {"metadata": {"passed": True, "score": 100.0}},
+                    "issues": [],
+                },
+            ],
+        },
+    )
+    curation_service.save_annotations(
+        dataset_path,
+        0,
+        {
+            "episode_index": 0,
+            "task_context": {"label": "Pick", "text": "pick object"},
+            "annotations": [
+                {
+                    "id": "ann-1",
+                    "label": "Pick",
+                    "startTime": 1.0,
+                    "endTime": 2.0,
+                    "text": "pick object",
+                    "source": "user",
+                }
+            ],
+        },
+    )
+    curation_service.save_annotations(
+        dataset_path,
+        1,
+        {
+            "episode_index": 1,
+            "task_context": {
+                "source": "propagation",
+                "source_episode_index": 0,
+            },
+            "annotations": [
+                {
+                    "id": "ann-1",
+                    "label": "Pick",
+                    "startTime": 1.25,
+                    "endTime": 2.5,
+                    "text": "pick object",
+                    "source": "dtw_propagated",
+                    "propagated": True,
+                    "prototype_score": 0.5,
+                }
+            ],
+        },
+    )
+    curation_service.save_propagation_results(
+        dataset_path,
+        {
+            "source_episode_index": 0,
+            "source_episode_indices": [0],
+            "target_count": 0,
+            "propagated": [],
+        },
+    )
+
+    response = client.get(
+        "/api/curation/alignment-overview",
+        params={"dataset": "demo"},
+    )
+
+    assert response.status_code == 200
+    rows = {row["episode_index"]: row for row in response.json()["rows"]}
+    assert rows[1]["alignment_status"] == "propagated"
+    assert rows[1]["propagated_count"] == 1
+    assert rows[1]["propagation_source_episode_index"] == 0
+    assert rows[1]["propagation_alignment_method"] == "dtw"
+    assert rows[1]["propagation_spans"][0]["dtw_start_delay_s"] == 0.25
+    assert rows[1]["propagation_spans"][0]["dtw_end_delay_s"] == 0.5
+
+
 def test_quality_batch_can_pause_and_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

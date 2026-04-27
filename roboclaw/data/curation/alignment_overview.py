@@ -23,6 +23,7 @@ def build_alignment_overview(dataset_path: Path) -> dict[str, Any]:
     quality_rows = quality.get("episodes", []) or []
     annotated_lookup = _build_annotation_lookup(dataset_path)
     propagated_lookup = _build_propagation_lookup(dataset_path, propagation)
+    _merge_saved_propagation_annotations(dataset_path, annotated_lookup, propagated_lookup)
 
     issue_distribution: dict[str, int] = {}
     rows: list[dict[str, Any]] = []
@@ -79,6 +80,7 @@ def _build_annotation_lookup(dataset_path: Path) -> dict[int, dict[str, Any]]:
         annotated_lookup[episode_index] = {
             "annotation_count": len(spans),
             "annotation_spans": _simplify_spans(spans),
+            "raw_spans": [span for span in spans if isinstance(span, dict)],
             "task_context": task_context,
             "updated_at": payload.get("updated_at") or payload.get("created_at") or "",
             "has_manual_annotation": len(spans) > 0,
@@ -117,6 +119,56 @@ def _build_propagation_lookup(dataset_path: Path, propagation: dict[str, Any]) -
             "spans": _simplify_propagated_spans(spans, item_source_spans),
         }
     return propagated_lookup
+
+
+def _merge_saved_propagation_annotations(
+    dataset_path: Path,
+    annotated_lookup: dict[int, dict[str, Any]],
+    propagated_lookup: dict[int, dict[str, Any]],
+) -> None:
+    for episode_index, annotation_meta in annotated_lookup.items():
+        existing = propagated_lookup.get(episode_index)
+        if existing and int(existing.get("propagated_count", 0) or 0) > 0:
+            continue
+
+        raw_spans = annotation_meta.get("raw_spans", [])
+        if not isinstance(raw_spans, list):
+            continue
+        propagated_spans = [
+            span
+            for span in raw_spans
+            if isinstance(span, dict) and _is_saved_propagated_span(span)
+        ]
+        if not propagated_spans:
+            continue
+
+        task_context = annotation_meta.get("task_context", {})
+        if not isinstance(task_context, dict):
+            task_context = {}
+        source_episode_index = coerce_int(task_context.get("source_episode_index"))
+        source_spans = _load_source_spans(dataset_path, source_episode_index)
+        simplified_spans = _simplify_propagated_spans(propagated_spans, source_spans)
+        propagated_lookup[episode_index] = {
+            "propagated_count": len(simplified_spans),
+            "prototype_score": _first_prototype_score(propagated_spans),
+            "source_episode_index": source_episode_index,
+            "alignment_method": _infer_alignment_method(propagated_spans),
+            "spans": simplified_spans,
+        }
+
+
+def _is_saved_propagated_span(span: dict[str, Any]) -> bool:
+    if span.get("propagated") is True:
+        return True
+    return str(span.get("source") or "") in {"dtw_propagated", "duration_scaled"}
+
+
+def _first_prototype_score(spans: list[dict[str, Any]]) -> float | None:
+    for span in spans:
+        score = _coerce_float(span.get("prototype_score"))
+        if score is not None:
+            return score
+    return None
 
 
 def _load_source_spans(dataset_path: Path, episode_index: int | None) -> list[dict[str, Any]]:
