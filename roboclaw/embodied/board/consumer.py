@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from roboclaw.embodied.board.constants import Command
+
+_FALSE_VALUES = {"", "0", "false", "no", "off"}
 
 if TYPE_CHECKING:
     from roboclaw.embodied.board.board import Board
@@ -125,6 +128,7 @@ class InputConsumer(Consumer):
                 while (cmd := self.board.poll_command()) is not None:
                     data = self.translate(cmd)
                     if data:
+                        self._log_command_delivery(cmd, data)
                         self._stdin.write(data)
                         await self._stdin.drain()
         except (OSError, ConnectionError, asyncio.CancelledError):
@@ -133,3 +137,20 @@ class InputConsumer(Consumer):
     def translate(self, command: str) -> bytes | None:
         """Command string -> stdin bytes. Subclasses can override."""
         return self._KEYMAP.get(command)
+
+    def _log_command_delivery(self, command: str, data: bytes) -> None:
+        if not _record_diagnostics_enabled():
+            return
+        state = self.board.state
+        session_state = state.get("state", "")
+        episode_phase = state.get("episode_phase", "")
+        self.board.log(
+            "[roboclaw.input] "
+            f"command={command} bytes=0x{data.hex()} "
+            f"state={session_state} phase={episode_phase}"
+        )
+
+
+def _record_diagnostics_enabled() -> bool:
+    value = os.environ.get("ROBOCLAW_RECORD_DIAGNOSTICS", "").strip().lower()
+    return value not in _FALSE_VALUES

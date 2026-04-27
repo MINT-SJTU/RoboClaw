@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import sys
 
-from roboclaw.embodied.command.headless_patch import apply_headless_patch
+from roboclaw.embodied.command.headless_patch import (
+    apply_headless_patch,
+    apply_motor_read_retry_patch,
+    apply_record_loop_patch,
+)
 
 _HEADLESS_PATCH_ACTIONS = frozenset({"record", "replay"})
 
@@ -47,6 +51,9 @@ def _run(action: str, argv: list[str] | None = None) -> None:
         sys.argv = [f"lerobot-{action}", *args]
         if action == "record":
             from lerobot.scripts import lerobot_record as module
+
+            apply_record_loop_patch(module)
+            apply_motor_read_retry_patch()
         elif action == "replay":
             from lerobot.scripts import lerobot_replay as module
         elif action == "teleoperate":
