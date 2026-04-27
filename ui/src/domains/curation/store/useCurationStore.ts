@@ -25,7 +25,10 @@ export interface WorkflowState {
   stages: {
     quality_validation: QualityStage
     prototype_discovery: PrototypeStage
-    annotation: StageState & { annotated_episodes: number[] }
+    annotation: StageState & {
+      annotated_episodes: number[]
+      propagated_source_episodes?: number[]
+    }
   }
 }
 
@@ -115,6 +118,7 @@ export interface PropagationResultItem {
 
 export interface PropagationResults {
   source_episode_index: number | null
+  source_episode_indices: number[]
   target_count: number
   propagated: PropagationResultItem[]
   published_parquet_path?: string
@@ -417,6 +421,7 @@ function normalizePropagationResults(
   if (!payload) return null
   return {
     source_episode_index: payload.source_episode_index ?? null,
+    source_episode_indices: payload.source_episode_indices ?? [],
     target_count: payload.target_count ?? 0,
     propagated: payload.propagated ?? [],
     published_parquet_path:

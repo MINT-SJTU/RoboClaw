@@ -16,6 +16,7 @@ from .exports import (
     workflow_quality_parquet_path,
 )
 from .features import resolve_timestamp
+from . import propagation_history
 from .propagation import propagate_annotation_spans
 from .prototypes import discover_grouped_prototypes
 from .quality_defaults import build_quality_defaults
@@ -399,7 +400,16 @@ class CurationService:
 
     def get_workflow_state(self, dataset_path: Path) -> dict[str, Any]:
         state = load_workflow_state(dataset_path)
-        return self.reconcile_stale_state(dataset_path, state)
+        propagation_results = load_propagation_results(dataset_path)
+        changed = propagation_history.reconcile_propagated_source_episodes(
+            dataset_path,
+            state,
+            propagation_results,
+        )
+        state = self.reconcile_stale_state(dataset_path, state)
+        if changed:
+            save_workflow_state(dataset_path, state)
+        return state
 
     def delete_quality_results(
         self,
@@ -726,7 +736,7 @@ class _LegacyCurationService:
         source_duration = _load_episode_duration(self.dataset_path, source_episode_index)
         source_entry = build_propagation_entry(self.dataset_path, source_episode_index)
         prototype_results = load_prototype_results(self.dataset_path)
-        targets = _collect_propagation_targets(
+        targets = propagation_history.collect_propagation_targets(
             prototype_results, source_episode_index,
         )
 
@@ -754,26 +764,35 @@ class _LegacyCurationService:
                     "progress_percent": round(((position + 1) / max(total, 1)) * 100, 1),
                 })
 
+        previous_results = load_propagation_results(self.dataset_path)
+        state = load_workflow_state(self.dataset_path)
+        annotation_stage = state["stages"]["annotation"]
+        propagated_source_episodes = propagation_history.collect_propagated_source_episodes(
+            annotation_stage,
+            previous_results,
+            source_episode_index,
+        )
         results = {
             "source_episode_index": source_episode_index,
+            "source_episode_indices": propagated_source_episodes,
             "target_count": len(propagated),
             "propagated": propagated,
         }
         save_propagation_results(self.dataset_path, results)
-        state = load_workflow_state(self.dataset_path)
-        annotation_stage = state["stages"]["annotation"]
         existing_targets = {
             int(value)
             for value in annotation_stage.get("annotated_episodes", [])
             if isinstance(value, int) or str(value).isdigit()
         }
         annotation_stage["annotated_episodes"] = sorted(existing_targets | persisted_annotation_targets)
+        annotation_stage["propagated_source_episodes"] = propagated_source_episodes
         save_workflow_state(self.dataset_path, state)
         _update_stage_summary(
             self.dataset_path,
             "annotation",
             {
                 "source_episode_index": source_episode_index,
+                "propagated_source_episodes": propagated_source_episodes,
                 "target_count": len(propagated),
                 "annotated_count": len(annotation_stage["annotated_episodes"]),
             },
@@ -945,50 +964,35 @@ def _propagate_single_target(
     return result, True
 
 
-def _collect_propagation_targets(
-    prototype_results: dict[str, Any] | None,
-    source_episode_index: int,
-) -> list[dict[str, Any]]:
-    """Find cluster members sharing a cluster with the source episode."""
-    if prototype_results is None:
-        return []
-
-    refinement = prototype_results.get("refinement", {})
-    clusters = refinement.get("clusters", [])
-    if not clusters:
-        clusters = prototype_results.get("clustering", {}).get("clusters", [])
-
-    targets: list[dict[str, Any]] = []
-    source_key = str(source_episode_index)
-    for cluster in clusters:
-        member_keys = [str(m.get("record_key", "")) for m in cluster.get("members", [])]
-        if source_key not in member_keys:
-            continue
-        for member in cluster.get("members", []):
-            member_key = str(member.get("record_key", ""))
-            if member_key == source_key:
-                continue
-            targets.append({
-                "episode_index": int(member_key),
-                "prototype_score": 1.0 - float(member.get("distance_to_barycenter", member.get("distance_to_prototype", 0.0))),
-            })
-    return targets
-
-
 def _finish_propagation_empty(
     dataset_path: Path,
     source_episode_index: int,
 ) -> dict[str, Any]:
+    previous_results = load_propagation_results(dataset_path)
+    state = load_workflow_state(dataset_path)
+    annotation_stage = state["stages"]["annotation"]
+    propagated_source_episodes = propagation_history.collect_propagated_source_episodes(
+        annotation_stage,
+        previous_results,
+        source_episode_index,
+    )
     results: dict[str, Any] = {
         "source_episode_index": source_episode_index,
+        "source_episode_indices": propagated_source_episodes,
         "target_count": 0,
         "propagated": [],
     }
     save_propagation_results(dataset_path, results)
+    annotation_stage["propagated_source_episodes"] = propagated_source_episodes
+    save_workflow_state(dataset_path, state)
     _update_stage_summary(
         dataset_path,
         "annotation",
-        {"source_episode_index": source_episode_index, "target_count": 0},
+        {
+            "source_episode_index": source_episode_index,
+            "propagated_source_episodes": propagated_source_episodes,
+            "target_count": 0,
+        },
     )
     logger.warning("Semantic propagation: no annotations found for episode {}", source_episode_index)
     return results

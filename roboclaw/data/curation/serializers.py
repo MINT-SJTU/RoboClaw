@@ -239,10 +239,21 @@ def serialize_propagation_results(results: dict[str, Any] | None) -> dict[str, A
     if not results:
         return {
             "source_episode_index": None,
+            "source_episode_indices": [],
             "target_count": 0,
             "propagated": [],
         }
-    return results
+    payload = dict(results)
+    source_episode_indices = [
+        index
+        for value in payload.get("source_episode_indices", [])
+        if (index := coerce_int(value)) is not None
+    ]
+    source_episode_index = coerce_int(payload.get("source_episode_index"))
+    if source_episode_index is not None and source_episode_index not in source_episode_indices:
+        source_episode_indices.append(source_episode_index)
+    payload["source_episode_indices"] = sorted(source_episode_indices)
+    return payload
 
 
 # ---------------------------------------------------------------------------

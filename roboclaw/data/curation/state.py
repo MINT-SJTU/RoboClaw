@@ -73,6 +73,7 @@ def init_workflow_state(dataset_path: Path) -> dict[str, Any]:
             "annotation": {
                 "status": "idle",
                 "annotated_episodes": [],
+                "propagated_source_episodes": [],
                 "propagation_run": None,
                 "summary": None,
             },
@@ -110,6 +111,7 @@ def _normalize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     annotation_stage = stages.setdefault("annotation", {})
     annotation_stage.setdefault("status", "idle")
     annotation_stage.setdefault("annotated_episodes", [])
+    annotation_stage.setdefault("propagated_source_episodes", [])
     annotation_stage.setdefault("propagation_run", None)
     annotation_stage.setdefault("summary", None)
 

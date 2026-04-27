@@ -893,6 +893,13 @@ export default function AnnotationPanel() {
 
   const anchorItems = useMemo(() => {
     const annotatedSet = new Set(workflowState?.stages.annotation.annotated_episodes || [])
+    const propagatedSourceSet = new Set([
+      ...(workflowState?.stages.annotation.propagated_source_episodes || []),
+      ...(propagationResults?.source_episode_indices || []),
+      ...(propagationResults?.source_episode_index !== null && propagationResults?.source_episode_index !== undefined
+        ? [propagationResults.source_episode_index]
+        : []),
+    ])
     return (prototypeResults?.clusters || [])
       .map((cluster) => {
         const episodeIndex = Number(cluster.anchor_record_key)
@@ -907,7 +914,7 @@ export default function AnnotationPanel() {
           qualityScore: anchorMember?.quality?.score ?? null,
           qualityPassed: anchorMember?.quality?.passed ?? null,
           annotated: annotatedSet.has(episodeIndex),
-          propagated: propagationResults?.source_episode_index === episodeIndex,
+          propagated: propagatedSourceSet.has(episodeIndex),
         }
       })
       .filter((item): item is NonNullable<typeof item> => item !== null)

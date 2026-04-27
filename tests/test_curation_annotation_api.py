@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from roboclaw.data.curation import bridge as curation_bridge
 from roboclaw.data.curation import exports as curation_exports
+from roboclaw.data.curation import propagation_history
 from roboclaw.data.curation import serializers as curation_serializers
 from roboclaw.data.curation import service as curation_service
 from roboclaw.data.curation.state import (
@@ -144,6 +145,18 @@ def test_annotation_save_versions_and_updates_state(
     assert stage["annotated_episodes"] == [0]
     assert stage["summary"]["annotated_count"] == 1
     assert stage["summary"]["last_saved_episode_index"] == 0
+
+
+def test_legacy_propagation_result_serializes_source_history() -> None:
+    payload = curation_serializers.serialize_propagation_results(
+        {
+            "source_episode_index": 2,
+            "target_count": 0,
+            "propagated": [],
+        },
+    )
+
+    assert payload["source_episode_indices"] == [2]
 
 
 def test_quality_defaults_adapt_to_dataset_metadata(
@@ -623,6 +636,107 @@ def test_duplicate_propagation_run_keeps_existing_task(
         assert completed_state["stages"]["annotation"]["status"] == "completed"
 
     asyncio.run(_run())
+
+
+def test_propagation_source_history_accumulates_across_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _run() -> None:
+        dataset_path = _write_demo_dataset(tmp_path)
+        service = curation_service.CurationService()
+        calls: list[int] = []
+
+        async def _fake_to_thread(
+            _function: object,
+            source_episode_index: int,
+        ) -> dict[str, object]:
+            calls.append(source_episode_index)
+            previous_results = curation_service.load_propagation_results(dataset_path)
+            state = load_workflow_state(dataset_path)
+            annotation_stage = state["stages"]["annotation"]
+            source_history = propagation_history.collect_propagated_source_episodes(
+                annotation_stage,
+                previous_results,
+                source_episode_index,
+            )
+            curation_service.save_propagation_results(
+                dataset_path,
+                {
+                    "source_episode_index": source_episode_index,
+                    "source_episode_indices": source_history,
+                    "target_count": 0,
+                    "propagated": [],
+                },
+            )
+            annotation_stage["propagated_source_episodes"] = source_history
+            save_workflow_state(dataset_path, state)
+            curation_service._update_stage_summary(
+                dataset_path,
+                "annotation",
+                {
+                    "source_episode_index": source_episode_index,
+                    "propagated_source_episodes": source_history,
+                    "target_count": 0,
+                },
+            )
+            return {"source_episode_index": source_episode_index}
+
+        monkeypatch.setattr(curation_service.asyncio, "to_thread", _fake_to_thread)
+
+        first = await service.start_propagation_run(dataset_path, "demo", 1)
+        assert first == {"status": "started"}
+        first_task = service._active_stage_task(dataset_path, "annotation")
+        assert first_task is not None
+        await asyncio.wait_for(first_task, timeout=1)
+
+        second = await service.start_propagation_run(dataset_path, "demo", 2)
+        assert second == {"status": "started"}
+        second_task = service._active_stage_task(dataset_path, "annotation")
+        assert second_task is not None
+        await asyncio.wait_for(second_task, timeout=1)
+
+        state = load_workflow_state(dataset_path)
+        results = curation_service.load_propagation_results(dataset_path)
+        assert calls == [1, 2]
+        assert state["stages"]["annotation"]["propagated_source_episodes"] == [1, 2]
+        assert results is not None
+        assert results["source_episode_indices"] == [1, 2]
+
+    asyncio.run(_run())
+
+
+def test_workflow_state_recovers_propagated_sources_from_saved_annotations(
+    tmp_path: Path,
+) -> None:
+    dataset_path = _write_demo_dataset(tmp_path, total_episodes=2)
+    curation_service.save_annotations(
+        dataset_path,
+        1,
+        {
+            "episode_index": 1,
+            "task_context": {
+                "source": "propagation",
+                "source_episode_index": 0,
+            },
+            "annotations": [
+                {
+                    "id": "ann-1",
+                    "label": "Pick",
+                    "startTime": 0.0,
+                    "endTime": 0.5,
+                    "source": "dtw_propagated",
+                },
+            ],
+        },
+    )
+
+    state = curation_service.CurationService().get_workflow_state(dataset_path)
+
+    assert state["stages"]["annotation"]["propagated_source_episodes"] == [0]
+    assert load_workflow_state(dataset_path)["stages"]["annotation"][
+        "propagated_source_episodes"
+    ] == [0]
 
 
 def test_quality_pause_request_marks_state(
