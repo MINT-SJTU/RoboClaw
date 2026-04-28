@@ -234,7 +234,7 @@ export function DatasetInsightStack({
   typeDistributionNode,
 }: DatasetInsightStackProps) {
   const [collapsed, setCollapsed] = useState<Set<StackCardId>>(
-    () => new Set<StackCardId>(['frames']),
+    () => new Set<StackCardId>(['statistics', 'filtering', 'frames', 'action-insights']),
   )
   const actionFeatures = useMemo(() => getActionFeatures(dashboard), [dashboard])
   const averageFrames =
