@@ -283,7 +283,6 @@ function EpisodePlaybackSurface({
   const timeRange = timeMax - timeMin || 1
 
   useEffect(() => {
-    videoRefs.current = []
     lastTimelineTimeRef.current = -1
     if (timelineFrameRef.current != null) {
       window.cancelAnimationFrame(timelineFrameRef.current)
@@ -366,7 +365,7 @@ function EpisodePlaybackSurface({
       }
       const tick = () => {
         const leader = videoRefs.current[timelineLeaderIndex]
-        if (!leader || leader.paused || !playVideo) {
+        if (!leader || leader.paused) {
           timelineFrameRef.current = null
           return
         }
@@ -482,7 +481,7 @@ function EpisodePlaybackSurface({
         if (syncLockRef.current) return
         const meta = getVideoMeta(index)
         const absoluteTime = syncVideoIntoClipWindow(video, meta, {
-          loopToStart: playVideo,
+          loopToStart: !video.paused,
           forceSeek: false,
         })
         updateTimelineFrom(index, absoluteTime)
@@ -518,6 +517,18 @@ function EpisodePlaybackSurface({
         video.removeEventListener('loadedmetadata', handleLoadedMetadata)
       })
     })
+
+    const leader = videoRefs.current[timelineLeaderIndex]
+    if (leader) {
+      const leaderMeta = getVideoMeta(timelineLeaderIndex)
+      const absoluteTime = syncVideoIntoClipWindow(leader, leaderMeta, {
+        loopToStart: !leader.paused,
+      })
+      updateTimelineFrom(timelineLeaderIndex, absoluteTime, { force: true })
+      if (!leader.paused) {
+        startTimelineLoop()
+      }
+    }
 
     return () => {
       listeners.forEach((cleanup) => cleanup())
