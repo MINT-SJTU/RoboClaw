@@ -21,10 +21,12 @@ function App() {
           <Route index element={<Navigate to="/control" replace />} />
           <Route path="control" element={<ControlPage />} />
           <Route path="recovery" element={<RecoveryCenterPage />} />
-          <Route path="datasets" element={<DatasetsPage />} />
-          <Route path="datasets/explorer" element={<DatasetExplorerPage />} />
+          <Route path="datasets" element={<Navigate to="/curation/datasets" replace />} />
+          <Route path="datasets/explorer" element={<Navigate to="/curation/datasets" replace />} />
           <Route path="training" element={<TrainingCenterPage />} />
-          <Route path="curation" element={<Navigate to="/curation/quality" replace />} />
+          <Route path="curation" element={<Navigate to="/curation/datasets" replace />} />
+          <Route path="curation/datasets" element={<DatasetsPage />} />
+          <Route path="curation/datasets/explorer" element={<DatasetExplorerPage />} />
           <Route path="curation/quality" element={<QualityValidationPage />} />
           <Route path="curation/text-alignment" element={<TextAlignmentPage />} />
           <Route path="settings" element={<SettingsOverviewPage />} />
