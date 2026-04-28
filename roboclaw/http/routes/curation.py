@@ -18,7 +18,9 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel
 
+from roboclaw.data import dataset_sessions
 from roboclaw.data.datasets import DatasetCatalog
+from roboclaw.data.explorer import remote as remote_explorer
 from roboclaw.data.curation.exports import (
     export_quality_csv,
     publish_quality_metadata_parquet,
@@ -87,7 +89,76 @@ class DatasetPublishRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _dataset_ref_from_session_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    dataset_id = str(summary.get("name") or "")
+    label = str(summary.get("display_name") or dataset_id)
+    slug = dataset_id.rsplit("/", 1)[-1] if dataset_id else ""
+    if ":" in dataset_id:
+        slug = dataset_id.split(":")[-1]
+    return {
+        "id": dataset_id,
+        "kind": "local",
+        "label": label,
+        "slug": slug,
+        "source_dataset": str(summary.get("source_dataset") or dataset_id),
+        "stats": {
+            "total_episodes": int(summary.get("total_episodes", 0) or 0),
+            "total_frames": int(summary.get("total_frames", 0) or 0),
+            "fps": int(summary.get("fps", 0) or 0),
+            "robot_type": str(summary.get("robot_type") or ""),
+            "features": list(summary.get("features") or []),
+            "episode_lengths": list(summary.get("episode_lengths") or []),
+        },
+        "capabilities": {
+            "can_replay": False,
+            "can_train": False,
+            "can_delete": False,
+            "can_push": False,
+            "can_pull": False,
+            "can_curate": True,
+        },
+        "runtime": None,
+        "name": dataset_id,
+        "display_name": label,
+        "source_kind": str(summary.get("source_kind") or "session"),
+    }
+
+
+def _dataset_ref_from_remote_summary(summary: dict[str, Any], dataset_id: str) -> dict[str, Any]:
+    dataset_name = str(summary.get("name") or dataset_id)
+    return {
+        "id": dataset_name,
+        "kind": "remote",
+        "label": dataset_name,
+        "slug": dataset_id.rsplit("/", 1)[-1],
+        "source_dataset": str(summary.get("source_dataset") or dataset_id),
+        "stats": {
+            "total_episodes": int(summary.get("total_episodes", 0) or 0),
+            "total_frames": int(summary.get("total_frames", 0) or 0),
+            "fps": int(summary.get("fps", 0) or 0),
+            "robot_type": str(summary.get("robot_type") or ""),
+            "features": list(summary.get("features") or []),
+            "episode_lengths": list(summary.get("episode_lengths") or []),
+        },
+        "capabilities": {
+            "can_replay": False,
+            "can_train": False,
+            "can_delete": False,
+            "can_push": False,
+            "can_pull": True,
+            "can_curate": False,
+        },
+        "runtime": None,
+    }
+
+
 def _ensure_dataset_workspace(dataset_id: str) -> Path:
+    if dataset_sessions.is_session_handle(dataset_id):
+        try:
+            return dataset_sessions.resolve_session_dataset_path(dataset_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     try:
         dataset = _catalog.require_local_dataset(dataset_id)
     except ValueError as exc:
@@ -113,7 +184,14 @@ def register_curation_routes(app: FastAPI) -> None:
     async def workflow_datasets_list() -> list[dict]:
         """List available datasets."""
         datasets = await asyncio.to_thread(_catalog.list_local_datasets)
-        return [dataset.to_dict() for dataset in datasets]
+        session_datasets = await asyncio.to_thread(
+            dataset_sessions.list_session_dataset_summaries,
+            include_remote=True,
+            include_local_directory=True,
+        )
+        return [dataset.to_dict() for dataset in datasets] + [
+            _dataset_ref_from_session_summary(summary) for summary in session_datasets
+        ]
 
     @app.post("/api/curation/datasets/import-hf")
     async def workflow_import_hf_dataset(
@@ -152,6 +230,20 @@ def register_curation_routes(app: FastAPI) -> None:
         are captured as a single parameter.  This route is registered after
         the fixed-prefix ``/datasets/import-*`` routes to avoid shadowing them.
         """
+        if dataset_sessions.is_session_handle(dataset_id):
+            try:
+                summary = await asyncio.to_thread(dataset_sessions.get_dataset_summary, dataset_id)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found: {exc}") from exc
+            return _dataset_ref_from_session_summary(summary)
+
+        if "/" in dataset_id and not dataset_id.startswith("local/"):
+            try:
+                summary = await asyncio.to_thread(remote_explorer.build_remote_dataset_info, dataset_id)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found: {exc}") from exc
+            return _dataset_ref_from_remote_summary(summary, dataset_id)
+
         try:
             dataset = await asyncio.to_thread(_catalog.resolve_dataset, dataset_id)
         except Exception as exc:
