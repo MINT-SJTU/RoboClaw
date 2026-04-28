@@ -7,7 +7,7 @@ import {
   type FeatureStat,
 } from '@/domains/datasets/explorer/store/useExplorerStore'
 
-type StackCardId = 'episodes' | 'statistics' | 'filtering' | 'frames' | 'action-insights'
+type StackCardId = 'statistics' | 'filtering' | 'frames' | 'action-insights'
 
 interface StackCardDefinition {
   id: StackCardId
@@ -25,7 +25,6 @@ interface DatasetInsightStackProps {
   episodePage: ExplorerEpisodePage | null | undefined
   dashboardLoading: boolean
   dashboardError: string
-  episodesNode: ReactNode
   featureStatsNode: ReactNode
   modalitiesNode: ReactNode
   typeDistributionNode: ReactNode
@@ -230,7 +229,6 @@ export function DatasetInsightStack({
   episodePage,
   dashboardLoading,
   dashboardError,
-  episodesNode,
   featureStatsNode,
   modalitiesNode,
   typeDistributionNode,
@@ -239,7 +237,6 @@ export function DatasetInsightStack({
     () => new Set<StackCardId>(['frames']),
   )
   const actionFeatures = useMemo(() => getActionFeatures(dashboard), [dashboard])
-  const sampledEpisodes = episodePage?.episodes.length ?? 0
   const averageFrames =
     episodePage && episodePage.episodes.length > 0
       ? Math.round(
@@ -249,15 +246,6 @@ export function DatasetInsightStack({
       : null
 
   const cards: StackCardDefinition[] = [
-    {
-      id: 'episodes',
-      title: 'Episodes',
-      eyebrow: 'Browse',
-      summary: 'Playable episode index with synchronized video and joint traces.',
-      metric: formatNumber(episodePage?.total_episodes ?? summary?.total_episodes),
-      detail: sampledEpisodes > 0 ? `${sampledEpisodes} loaded` : 'waiting',
-      body: episodesNode,
-    },
     {
       id: 'statistics',
       title: 'Statistics',

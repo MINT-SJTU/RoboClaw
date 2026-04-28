@@ -17,7 +17,7 @@ import {
 } from '@/domains/datasets/explorer/store/useExplorerStore'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
 import { cn } from '@/shared/lib/cn'
-import { ActionButton, GlassPanel, MetricCard } from '@/shared/ui'
+import { ActionButton, GlassPanel } from '@/shared/ui'
 import {
   clampAbsolutePlaybackTime,
   formatClipWindowLabel,
@@ -1767,16 +1767,7 @@ export default function DatasetExplorerView() {
         )}
       </div>
 
-      {/* Info bar */}
-      {currentDataset && datasetSummary ? (
-        <div className="workflow-view__info-bar">
-          <span>{prepareStatus || summaryForSource!.dataset}</span>
-          <span>{datasetSummary.total_episodes} {t('episodes')}</span>
-          <span>{datasetSummary.fps} fps</span>
-          <span>{datasetSummary.robot_type}</span>
-          {datasetSummary.codebase_version && <span>{datasetSummary.codebase_version}</span>}
-        </div>
-      ) : summaryErrorForSource ? (
+      {summaryErrorForSource ? (
         <GlassPanel className="quality-view__empty">
           <span className="quality-sidebar__error">{summaryErrorForSource}</span>
         </GlassPanel>
@@ -1791,69 +1782,83 @@ export default function DatasetExplorerView() {
       )}
 
       {currentDataset && (datasetSummary || dashboardForSource || episodePageForSource) && (
-        <>
-          <div className="quality-kpis pipeline-metric-strip">
-            <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
-            <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
-            <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
-            <MetricCard label={t('parquetFiles')} value={dashboardForSource?.files.parquet_files ?? '--'} accent="teal" />
-            <MetricCard label={t('videoFiles')} value={dashboardForSource?.files.video_files ?? '--'} accent="coral" />
+        <div className="dataset-explorer-workspace">
+          <div className="dataset-explorer-workspace__main">
+            {datasetSummary && (
+              <div className="dataset-explorer-summary-strip" aria-label="Dataset summary">
+                <span>{prepareStatus || summaryForSource!.dataset}</span>
+                <span>{datasetSummary.total_episodes} {t('episodes')}</span>
+                <span>{datasetSummary.total_frames.toLocaleString()} frames</span>
+                <span>{datasetSummary.fps} fps</span>
+                {datasetSummary.robot_type && <span>{datasetSummary.robot_type}</span>}
+                {dashboardForSource && (
+                  <span>{dashboardForSource.files.parquet_files} parquet / {dashboardForSource.files.video_files} videos</span>
+                )}
+              </div>
+            )}
+            <DatasetInsightStack
+              summary={datasetSummary}
+              dashboard={dashboardForSource}
+              episodePage={episodePageForSource}
+              dashboardLoading={dashboardLoadingForSource}
+              dashboardError={dashboardErrorForSource}
+              modalitiesNode={
+                <div className="explorer-section">
+                  <h3>{t('modalities')}</h3>
+                  {dashboardForSource ? (
+                    <ModalityChips items={dashboardForSource.modality_summary} />
+                  ) : (
+                    <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
+                  )}
+                </div>
+              }
+              featureStatsNode={
+                <div className="explorer-section">
+                  <h3>{t('featureStats')}</h3>
+                  {dashboardForSource ? (
+                    <>
+                      <p className="explorer-section__sub">
+                        {dashboardForSource.feature_names.length} features
+                        {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+                          ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
+                      </p>
+                      <FeatureStatsTable stats={dashboardForSource.feature_stats} />
+                    </>
+                  ) : (
+                    <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
+                  )}
+                </div>
+              }
+              typeDistributionNode={
+                <div className="explorer-section">
+                  <h3>{t('featureType')}</h3>
+                  {dashboardForSource ? (
+                    <>
+                      <TypeDistribution items={dashboardForSource.feature_type_distribution} />
+                      <div className="explorer-sidebar-stats dataset-stack-file-stats">
+                        <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
+                        <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
+                        <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
+                        <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
+                  )}
+                </div>
+              }
+            />
           </div>
-
-          <DatasetInsightStack
-            summary={datasetSummary}
-            dashboard={dashboardForSource}
-            episodePage={episodePageForSource}
-            dashboardLoading={dashboardLoadingForSource}
-            dashboardError={dashboardErrorForSource}
-            episodesNode={<EpisodeBrowser datasetRef={datasetRef} />}
-            modalitiesNode={
-              <div className="explorer-section">
-                <h3>{t('modalities')}</h3>
-                {dashboardForSource ? (
-                  <ModalityChips items={dashboardForSource.modality_summary} />
-                ) : (
-                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
-                )}
-              </div>
-            }
-            featureStatsNode={
-              <div className="explorer-section">
-                <h3>{t('featureStats')}</h3>
-                {dashboardForSource ? (
-                  <>
-                    <p className="explorer-section__sub">
-                      {dashboardForSource.feature_names.length} features
-                      {dashboardForSource.dataset_stats.features_with_stats > 0 &&
-                        ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
-                    </p>
-                    <FeatureStatsTable stats={dashboardForSource.feature_stats} />
-                  </>
-                ) : (
-                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
-                )}
-              </div>
-            }
-            typeDistributionNode={
-              <div className="explorer-section">
-                <h3>{t('featureType')}</h3>
-                {dashboardForSource ? (
-                  <>
-                    <TypeDistribution items={dashboardForSource.feature_type_distribution} />
-                    <div className="explorer-sidebar-stats dataset-stack-file-stats">
-                      <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
-                      <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
-                      <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
-                      <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
-                )}
-              </div>
-            }
-          />
-        </>
+          <aside className="dataset-explorer-workspace__episodes" aria-label={t('episodeBrowser')}>
+            <div className="dataset-explorer-episodes__header">
+              <h3>{t('episodeBrowser')}</h3>
+              {episodePageForSource && (
+                <span>{episodePageForSource.total_episodes} total</span>
+              )}
+            </div>
+            <EpisodeBrowser datasetRef={datasetRef} />
+          </aside>
+        </div>
       )}
     </div>
   )

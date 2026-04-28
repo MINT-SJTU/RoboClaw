@@ -2878,13 +2878,97 @@ a {
   gap: 6px;
 }
 
-.explorer-episodes__list {
+.dataset-explorer-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 14px;
+  align-items: start;
+}
+
+.dataset-explorer-workspace__main {
+  min-width: 0;
+}
+
+.dataset-explorer-summary-strip {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  color: var(--tx2);
+  font-size: 12px;
+}
+
+.dataset-explorer-summary-strip span {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  border: 1px solid rgba(47, 111, 228, 0.1);
+  border-radius: 8px;
+  background: rgba(250, 252, 255, 0.86);
+  padding: 0 9px;
+}
+
+.dataset-explorer-summary-strip span:first-child {
+  max-width: min(520px, 100%);
+  overflow: hidden;
+  color: var(--tx);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dataset-explorer-workspace__episodes {
+  position: sticky;
+  top: 12px;
+  display: grid;
+  max-height: calc(100vh - 120px);
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid rgba(47, 111, 228, 0.14);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 255, 0.96)),
+    #fff;
+  box-shadow: 0 14px 30px rgba(47, 111, 228, 0.08);
+}
+
+.dataset-explorer-episodes__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(47, 111, 228, 0.1);
+}
+
+.dataset-explorer-episodes__header h3 {
+  margin: 0;
+  color: var(--tx);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.dataset-explorer-episodes__header span {
+  color: var(--tx2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dataset-explorer-workspace__episodes .explorer-episodes {
+  display: grid;
+  min-height: 0;
+  padding: 12px;
+}
+
+.explorer-episodes__list {
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 6px;
-  max-height: 160px;
+  max-height: 340px;
   overflow-y: auto;
   margin-bottom: 12px;
+  padding-right: 2px;
 }
 
 .explorer-episodes__toolbar {
@@ -2913,9 +2997,9 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 64px;
-  height: 34px;
-  border-radius: 999px;
+  min-width: 54px;
+  height: 30px;
+  border-radius: 8px;
   border: 1px solid rgba(47, 111, 228, 0.14);
   background: rgba(255, 255, 255, 0.84);
   color: var(--tx);
@@ -2937,15 +3021,19 @@ a {
 }
 
 .explorer-episode-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(58px, auto) minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid var(--bd);
   background: var(--sf);
   font-size: 12px;
   cursor: pointer;
+  text-align: left;
   transition: all 0.12s ease;
 }
 
@@ -2960,24 +3048,40 @@ a {
 }
 
 .explorer-episode-item__idx {
-  font-weight: 600;
+  color: var(--tx);
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
 }
 
 .explorer-episode-item__len {
+  overflow: hidden;
   color: var(--tx2);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .explorer-episode-detail {
   border-top: 1px solid var(--bd);
   padding-top: 12px;
+  min-width: 0;
+  overflow: auto;
 }
 
 .explorer-episode-detail__summary {
-  display: flex;
-  gap: 16px;
-  font-size: 13px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  font-size: 12px;
   color: var(--tx2);
   margin-bottom: 12px;
+}
+
+.explorer-episode-detail__summary span {
+  border: 1px solid rgba(47, 111, 228, 0.08);
+  border-radius: 8px;
+  background: rgba(250, 252, 255, 0.74);
+  padding: 5px 7px;
 }
 
 .explorer-episode-detail__section {
@@ -2988,6 +3092,22 @@ a {
   font-size: 13px;
   font-weight: 600;
   margin: 0 0 6px;
+}
+
+@media (max-width: 1180px) {
+  .dataset-explorer-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .dataset-explorer-workspace__episodes {
+    position: static;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .explorer-episodes__list {
+    max-height: 360px;
+  }
 }
 
 .explorer-video-list {
