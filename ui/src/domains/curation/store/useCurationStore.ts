@@ -3,6 +3,7 @@ import type { DatasetImportJob, DatasetRef } from '@/domains/datasets/types'
 
 type StageStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error'
 const CURRENT_DATASET_KEY = 'roboclaw.current_dataset'
+const WORKFLOW_REFRESH_INTERVAL_MS = 6000
 export interface StageState {
   status: StageStatus
   summary: Record<string, unknown> | null
@@ -992,7 +993,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (existing) return
     const interval = setInterval(() => {
       void get().refreshState()
-    }, 1200)
+    }, WORKFLOW_REFRESH_INTERVAL_MS)
     set({ pollInterval: interval })
   },
 
