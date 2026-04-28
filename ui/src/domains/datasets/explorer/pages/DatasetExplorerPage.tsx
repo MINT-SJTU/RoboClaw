@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
@@ -140,6 +140,88 @@ function formatAngle(value: number | null | undefined): string {
   return value.toFixed(3)
 }
 
+interface PreparedJointChart {
+  jointName: string
+  stateValues: number[]
+  actionValues: number[]
+  statePoints: string
+  actionPoints: string
+  yMaxLabel: string
+  yMidLabel: string
+  yMinLabel: string
+}
+
+function getNearestTrajectoryIndexForTime(
+  detail: EpisodeDetail,
+  relativeTime: number,
+): number {
+  const timeValues = detail.joint_trajectory.time_values
+  if (timeValues.length > 0) {
+    let low = 0
+    let high = timeValues.length - 1
+
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2)
+      if (timeValues[mid] < relativeTime) {
+        low = mid + 1
+      } else {
+        high = mid
+      }
+    }
+
+    const previous = Math.max(low - 1, 0)
+    return Math.abs(timeValues[previous] - relativeTime) <= Math.abs(timeValues[low] - relativeTime)
+      ? previous
+      : low
+  }
+
+  const firstJoint = detail.joint_trajectory.joint_trajectories[0]
+  const totalPoints = Math.max(
+    firstJoint?.state_values.length ?? 0,
+    firstJoint?.action_values.length ?? 0,
+  )
+  if (totalPoints <= 1) return 0
+  const duration = detail.summary.duration_s || 1
+  const progress = Math.min(Math.max(relativeTime / duration, 0), 1)
+  return Math.round(progress * (totalPoints - 1))
+}
+
+function buildPreparedJointCharts(
+  jointTrajectories: EpisodeDetail['joint_trajectory']['joint_trajectories'],
+): PreparedJointChart[] {
+  return jointTrajectories.map((joint) => {
+    const actionValues = joint.action_values.map((value) => value ?? 0)
+    const stateValues = joint.state_values.map((value) => value ?? 0)
+    const allValues = [...actionValues, ...stateValues]
+    const minValue = allValues.length > 0 ? Math.min(...allValues) : 0
+    const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1
+    const padding = (maxValue - minValue || 1) * 0.1
+    const yMin = minValue - padding
+    const yMax = maxValue + padding
+    const yRange = yMax - yMin || 1
+
+    const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
+    const buildPolyline = (values: number[]) =>
+      values
+        .map((value, index) => {
+          const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
+          return `${x},${toY(value)}`
+        })
+        .join(' ')
+
+    return {
+      jointName: joint.joint_name,
+      stateValues,
+      actionValues,
+      statePoints: buildPolyline(stateValues),
+      actionPoints: buildPolyline(actionValues),
+      yMaxLabel: yMax.toFixed(2),
+      yMidLabel: ((yMax + yMin) / 2).toFixed(2),
+      yMinLabel: yMin.toFixed(2),
+    }
+  })
+}
+
 function syncVideoIntoClipWindow(
   element: HTMLVideoElement,
   video: EpisodeVideo | null | undefined,
@@ -170,32 +252,6 @@ function getTrajectoryTimeBounds(detail: EpisodeDetail): [number, number] {
   return [0, duration]
 }
 
-function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: number): number {
-  const timeValues = detail.joint_trajectory.time_values
-  if (timeValues.length > 0) {
-    let nearestIndex = 0
-    let nearestDistance = Number.POSITIVE_INFINITY
-    timeValues.forEach((value, index) => {
-      const distance = Math.abs(value - videoCurrentTime)
-      if (distance < nearestDistance) {
-        nearestDistance = distance
-        nearestIndex = index
-      }
-    })
-    return nearestIndex
-  }
-
-  const firstJoint = detail.joint_trajectory.joint_trajectories[0]
-  const totalPoints = Math.max(
-    firstJoint?.state_values.length ?? 0,
-    firstJoint?.action_values.length ?? 0,
-  )
-  if (totalPoints <= 1) return 0
-  const duration = detail.summary.duration_s || 1
-  const progress = Math.min(Math.max(videoCurrentTime / duration, 0), 1)
-  return Math.round(progress * (totalPoints - 1))
-}
-
 function hasTrajectoryData(detail: EpisodeDetail | null | undefined): boolean {
   if (!detail) return false
   return (
@@ -207,32 +263,81 @@ function hasTrajectoryData(detail: EpisodeDetail | null | undefined): boolean {
 function EpisodePlaybackSurface({
   detail,
   playVideo,
-  videoCurrentTime,
-  onVideoTimeUpdate,
   emptyLabel,
 }: {
   detail: EpisodeDetail
   playVideo: boolean
-  videoCurrentTime: number
-  onVideoTimeUpdate: (seconds: number) => void
   emptyLabel: string
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const syncLockRef = useRef(false)
   const lastTimelineTimeRef = useRef<number>(-1)
+  const timelineFrameRef = useRef<number | null>(null)
   const jointTrajectories = detail.joint_trajectory.joint_trajectories
+  const preparedJointCharts = useMemo(
+    () => buildPreparedJointCharts(jointTrajectories),
+    [jointTrajectories],
+  )
   const [timeMin, timeMax] = getTrajectoryTimeBounds(detail)
   const timeRange = timeMax - timeMin || 1
-  const currentIndex = getNearestTrajectoryIndex(detail, videoCurrentTime)
-  const currentTimePercent = Math.min(
-    Math.max(((videoCurrentTime - timeMin) / timeRange) * 100, 0),
-    100,
-  )
 
   useEffect(() => {
     videoRefs.current = []
     lastTimelineTimeRef.current = -1
+    if (timelineFrameRef.current != null) {
+      window.cancelAnimationFrame(timelineFrameRef.current)
+      timelineFrameRef.current = null
+    }
   }, [detail.episode_index])
+
+  useEffect(() => {
+    return () => {
+      if (timelineFrameRef.current != null) {
+        window.cancelAnimationFrame(timelineFrameRef.current)
+      }
+    }
+  }, [])
+
+  const paintTimeline = (relativeTime: number, options: { force?: boolean } = {}) => {
+    if (
+      !options.force &&
+      lastTimelineTimeRef.current >= 0 &&
+      Math.abs(relativeTime - lastTimelineTimeRef.current) < 0.008
+    ) {
+      return
+    }
+    lastTimelineTimeRef.current = relativeTime
+
+    const root = rootRef.current
+    if (!root) return
+
+    const currentTimePercent = Math.min(
+      Math.max(((relativeTime - timeMin) / timeRange) * 100, 0),
+      100,
+    )
+    root
+      .querySelectorAll<SVGLineElement>('[data-trajectory-cursor]')
+      .forEach((line) => {
+        line.setAttribute('x1', String(currentTimePercent))
+        line.setAttribute('x2', String(currentTimePercent))
+      })
+
+    const currentIndex = getNearestTrajectoryIndexForTime(detail, relativeTime)
+    preparedJointCharts.forEach((joint, index) => {
+      const currentNode = root.querySelector<HTMLElement>(
+        `[data-trajectory-current="${index}"]`,
+      )
+      if (!currentNode) return
+      const currentState = joint.stateValues[Math.min(currentIndex, joint.stateValues.length - 1)]
+      const currentAction = joint.actionValues[Math.min(currentIndex, joint.actionValues.length - 1)]
+      currentNode.textContent = `S ${formatAngle(currentState)} / A ${formatAngle(currentAction)}`
+    })
+  }
+
+  useEffect(() => {
+    paintTimeline(0, { force: true })
+  }, [detail, preparedJointCharts])
 
   useEffect(() => {
     const timelineLeaderIndex = 0
@@ -245,18 +350,34 @@ function EpisodePlaybackSurface({
         return
       }
       const relativeTime = getRelativePlaybackTime(getVideoMeta(index), absoluteTime)
-      if (
-        !options.force &&
-        lastTimelineTimeRef.current >= 0 &&
-        Math.abs(relativeTime - lastTimelineTimeRef.current) < 0.033
-      ) {
-        return
-      }
-      lastTimelineTimeRef.current = relativeTime
-      onVideoTimeUpdate(relativeTime)
+      paintTimeline(relativeTime, options)
     }
 
     const getVideoMeta = (index: number): EpisodeVideo | null => detail.videos[index] ?? null
+    const stopTimelineLoop = () => {
+      if (timelineFrameRef.current != null) {
+        window.cancelAnimationFrame(timelineFrameRef.current)
+        timelineFrameRef.current = null
+      }
+    }
+    const startTimelineLoop = () => {
+      if (timelineFrameRef.current != null) {
+        return
+      }
+      const tick = () => {
+        const leader = videoRefs.current[timelineLeaderIndex]
+        if (!leader || leader.paused || !playVideo) {
+          timelineFrameRef.current = null
+          return
+        }
+        const absoluteTime = syncVideoIntoClipWindow(leader, getVideoMeta(timelineLeaderIndex), {
+          loopToStart: true,
+        })
+        updateTimelineFrom(timelineLeaderIndex, absoluteTime)
+        timelineFrameRef.current = window.requestAnimationFrame(tick)
+      }
+      timelineFrameRef.current = window.requestAnimationFrame(tick)
+    }
     const syncFromSource = (
       sourceIndex: number,
       options: { forceSeek?: boolean } = {},
@@ -325,6 +446,9 @@ function EpisodePlaybackSurface({
         const absoluteTime = syncVideoIntoClipWindow(video, meta, { loopToStart: true })
         updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
+        if (index === timelineLeaderIndex) {
+          startTimelineLoop()
+        }
       }
       const handlePause = () => {
         if (syncLockRef.current) return
@@ -332,6 +456,9 @@ function EpisodePlaybackSurface({
         const absoluteTime = syncVideoIntoClipWindow(video, meta)
         updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index)
+        if (index === timelineLeaderIndex) {
+          stopTimelineLoop()
+        }
       }
       const handleSeeking = () => {
         if (syncLockRef.current) return
@@ -363,6 +490,7 @@ function EpisodePlaybackSurface({
           return
         }
         syncFromSource(index)
+        startTimelineLoop()
       }
       const handleLoadedMetadata = () => {
         if (syncLockRef.current) return
@@ -393,8 +521,9 @@ function EpisodePlaybackSurface({
 
     return () => {
       listeners.forEach((cleanup) => cleanup())
+      stopTimelineLoop()
     }
-  }, [detail, onVideoTimeUpdate, playVideo])
+  }, [detail, paintTimeline, playVideo])
 
   useEffect(() => {
     const videos = videoRefs.current.filter((video): video is HTMLVideoElement => Boolean(video))
@@ -501,7 +630,7 @@ function EpisodePlaybackSurface({
   }, [detail, playVideo])
 
   return (
-    <div className="explorer-hover-preview__body explorer-episode-playback">
+    <div ref={rootRef} className="explorer-hover-preview__body explorer-episode-playback">
       <div className="explorer-hover-preview__video-grid">
         {detail.videos.length > 0 ? (
           detail.videos.map((video, index) => {
@@ -541,65 +670,47 @@ function EpisodePlaybackSurface({
           </div>
 
           <div className="explorer-hover-preview__charts-grid">
-            {jointTrajectories.map((joint) => {
-              const actionValues = joint.action_values.map((value) => value ?? 0)
-              const stateValues = joint.state_values.map((value) => value ?? 0)
-              const allValues = [...actionValues, ...stateValues]
-              const minValue = Math.min(...allValues)
-              const maxValue = Math.max(...allValues)
-              const padding = (maxValue - minValue || 1) * 0.1
-              const yMin = minValue - padding
-              const yMax = maxValue + padding
-              const yRange = yMax - yMin || 1
-
-              const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
-              const buildPolyline = (values: number[]) =>
-                values
-                  .map((value, index) => {
-                    const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
-                    return `${x},${toY(value)}`
-                  })
-                  .join(' ')
-
-              const currentState = stateValues[Math.min(currentIndex, stateValues.length - 1)]
-              const currentAction = actionValues[Math.min(currentIndex, actionValues.length - 1)]
-
+            {preparedJointCharts.map((joint, index) => {
               return (
-                <div key={joint.joint_name} className="explorer-hover-preview__chart">
+                <div key={joint.jointName} className="explorer-hover-preview__chart">
                   <div className="explorer-hover-preview__chart-title-row">
-                    <div className="explorer-hover-preview__chart-title">{joint.joint_name}</div>
-                    <div className="explorer-hover-preview__chart-current">
-                      S {formatAngle(currentState)} / A {formatAngle(currentAction)}
+                    <div className="explorer-hover-preview__chart-title">{joint.jointName}</div>
+                    <div
+                      className="explorer-hover-preview__chart-current"
+                      data-trajectory-current={index}
+                    >
+                      S {formatAngle(joint.stateValues[0])} / A {formatAngle(joint.actionValues[0])}
                     </div>
                   </div>
 
                   <div className="explorer-hover-preview__chart-container">
                     <div className="explorer-hover-preview__chart-yaxis">
-                      <span>{yMax.toFixed(2)}</span>
-                      <span>{((yMax + yMin) / 2).toFixed(2)}</span>
-                      <span>{yMin.toFixed(2)}</span>
+                      <span>{joint.yMaxLabel}</span>
+                      <span>{joint.yMidLabel}</span>
+                      <span>{joint.yMinLabel}</span>
                     </div>
 
                     <div className="explorer-hover-preview__chart-svg-wrap">
                       <svg viewBox="0 0 100 60" preserveAspectRatio="none">
                         <polyline
-                          points={buildPolyline(stateValues)}
+                          points={joint.statePoints}
                           fill="none"
                           stroke="#2f6fe4"
                           strokeWidth="0.55"
                           vectorEffect="non-scaling-stroke"
                         />
                         <polyline
-                          points={buildPolyline(actionValues)}
+                          points={joint.actionPoints}
                           fill="none"
                           stroke="#f59e0b"
                           strokeWidth="0.55"
                           vectorEffect="non-scaling-stroke"
                         />
                         <line
-                          x1={currentTimePercent}
+                          data-trajectory-cursor
+                          x1="0"
                           y1="10"
-                          x2={currentTimePercent}
+                          x2="0"
                           y2="50"
                           stroke="#ef4444"
                           strokeWidth="0.35"
@@ -630,8 +741,6 @@ function EpisodeHoverPreview({
   trajectoryLoading,
   error,
   playVideo,
-  videoCurrentTime,
-  onVideoTimeUpdate,
   onClose,
   onMouseEnter,
   onMouseLeave,
@@ -641,8 +750,6 @@ function EpisodeHoverPreview({
   trajectoryLoading: boolean
   error: string
   playVideo: boolean
-  videoCurrentTime: number
-  onVideoTimeUpdate: (seconds: number) => void
   onClose: () => void
   onMouseEnter: () => void
   onMouseLeave: () => void
@@ -684,8 +791,6 @@ function EpisodeHoverPreview({
             <EpisodePlaybackSurface
               detail={detail}
               playVideo={playVideo}
-              videoCurrentTime={videoCurrentTime}
-              onVideoTimeUpdate={onVideoTimeUpdate}
               emptyLabel="No video stream available for this episode."
             />
 
@@ -743,8 +848,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
   const [hoveredPreviewTrajectoryLoading, setHoveredPreviewTrajectoryLoading] = useState(false)
   const [hoveredPreviewError, setHoveredPreviewError] = useState('')
   const [previewPlayReady, setPreviewPlayReady] = useState(false)
-  const [videoCurrentTime, setVideoCurrentTime] = useState(0)
-  const [detailVideoCurrentTime, setDetailVideoCurrentTime] = useState(0)
 
   useEffect(() => {
     previewCacheRef.current.clear()
@@ -761,13 +864,7 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
     setHoveredPreviewTrajectoryLoading(false)
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
-    setVideoCurrentTime(0)
-    setDetailVideoCurrentTime(0)
   }, [selectedDataset, datasetRef.path, datasetRef.source])
-
-  useEffect(() => {
-    setDetailVideoCurrentTime(0)
-  }, [episodeDetail?.episode_index])
 
   useEffect(() => {
     return () => {
@@ -845,7 +942,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
       setHoveredPreviewTrajectoryLoading(false)
       setHoveredPreviewError('')
       setPreviewPlayReady(false)
-      setVideoCurrentTime(0)
     }, 180)
   }
 
@@ -939,7 +1035,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
     })
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
-    setVideoCurrentTime(0)
     setHoveredPreviewTrajectoryLoading(false)
 
     hoverTimerRef.current = window.setTimeout(async () => {
@@ -1057,8 +1152,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
           loading={hoveredPreviewLoading}
           trajectoryLoading={hoveredPreviewTrajectoryLoading}
           error={hoveredPreviewError}
-          videoCurrentTime={videoCurrentTime}
-          onVideoTimeUpdate={setVideoCurrentTime}
           onClose={() => {
             setHoveredEpisodeIndex(null)
             setHoveredPreview(null)
@@ -1066,7 +1159,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
             setHoveredPreviewTrajectoryLoading(false)
             setHoveredPreviewError('')
             setPreviewPlayReady(false)
-            setVideoCurrentTime(0)
           }}
           playVideo={previewPlayReady}
           onMouseEnter={cancelClosePreview}
@@ -1101,8 +1193,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
               <EpisodePlaybackSurface
                 detail={episodeDetail}
                 playVideo
-                videoCurrentTime={detailVideoCurrentTime}
-                onVideoTimeUpdate={setDetailVideoCurrentTime}
                 emptyLabel="No video stream available for this episode."
               />
             </div>
