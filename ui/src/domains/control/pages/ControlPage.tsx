@@ -6,6 +6,7 @@ import { useDatasetsStore } from '@/domains/datasets/store/useDatasetsStore'
 import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
 import { useI18n } from '@/i18n'
 import { CameraPreviewPanel } from '@/domains/control/components/CameraPreviewPanel'
+import { fetchControlRecordConfig, saveControlRecordConfig } from '@/domains/control/api/controlConfigApi'
 import { ServoPanel } from '@/domains/hardware/components/ServoPanel'
 
 const blockedCapability: OperationCapability = { ready: false, missing: [] }
@@ -138,6 +139,8 @@ export default function ControlPage() {
   const [useCameras, setUseCameras] = useState(true)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [inferCheckpoint, setInferCheckpoint] = useState('')
+  const [manageMode, setManageMode] = useState(false)
+  const [recordConfigReady, setRecordConfigReady] = useState(false)
   // Replay
   const [replayDataset, setReplayDataset] = useState('')
   const [replayEpisode, setReplayEpisode] = useState(0)
@@ -161,6 +164,57 @@ export default function ControlPage() {
     }, 5000)
     return () => clearInterval(pollInterval)
   }, [fetchHardwareStatus, fetchSessionStatus, loadDatasets, loadPolicies])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadRecordConfig() {
+      try {
+        const config = await fetchControlRecordConfig()
+        if (cancelled) return
+        setTask(config.task)
+        setNumEp(config.num_episodes)
+        setEpisodeTime(config.episode_time_s)
+        setResetTime(config.reset_time_s)
+        setDatasetName(config.dataset_name)
+        setFps(config.fps)
+        setUseCameras(config.use_cameras)
+      } catch (error) {
+        console.error('Failed to load control record config', error)
+      } finally {
+        if (!cancelled) {
+          setRecordConfigReady(true)
+        }
+      }
+    }
+    void loadRecordConfig()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!recordConfigReady) return
+    void saveControlRecordConfig({
+      task,
+      num_episodes: numEp,
+      episode_time_s: episodeTime,
+      reset_time_s: resetTime,
+      dataset_name: datasetName,
+      fps,
+      use_cameras: useCameras,
+    })
+  }, [datasetName, episodeTime, fps, numEp, recordConfigReady, resetTime, task, useCameras])
+
+  useEffect(() => {
+    if (!manageMode) {
+      if (mode !== 'record') {
+        setMode('record')
+      }
+      if (showAdvanced) {
+        setShowAdvanced(false)
+      }
+    }
+  }, [manageMode, mode, showAdvanced])
 
   const stateLabel: Record<string, string> = {
     preparing: t('hwInitializing'),
@@ -211,6 +265,21 @@ export default function ControlPage() {
       fps,
       use_cameras: useCameras,
     })
+  }
+
+  function handleManageModeToggle() {
+    if (manageMode) {
+      setManageMode(false)
+      return
+    }
+    const password = window.prompt(t('enterManagePassword'))
+    if (password === 'zhaobo666') {
+      setManageMode(true)
+      return
+    }
+    if (password !== null) {
+      window.alert(t('managePasswordError'))
+    }
   }
   const busyReason = busy ? `${stateLabel[state] || state}${owner ? ` (${owner})` : ''}` : ''
   const capabilityReason = (capability: OperationCapability) =>
@@ -336,7 +405,9 @@ export default function ControlPage() {
               {(['record', 'infer'] as const).map((m) => {
                 const label = m === 'record' ? t('recording') : t('inference')
                 const active = mode === m
-                const locked = (m === 'record' && state === 'inferring') || (m === 'infer' && state === 'recording')
+                const locked = !manageMode
+                  ? m === 'infer'
+                  : (m === 'record' && state === 'inferring') || (m === 'infer' && state === 'recording')
                 return (
                   <button key={m} disabled={locked}
                     onClick={() => setMode(m)}
@@ -347,6 +418,15 @@ export default function ControlPage() {
                   </button>
                 )
               })}
+              <button
+                type="button"
+                onClick={handleManageModeToggle}
+                className={`ml-auto px-3 py-1.5 text-xs rounded-md border transition-colors font-medium
+                  ${manageMode ? 'border-yl bg-yl/10 text-yl' : 'border-bd/50 text-tx2 hover:border-yl/50'}`}
+                title={t('manageMode')}
+              >
+                {t('manageModel')}
+              </button>
             </div>
 
             {/* Mode-specific input */}
@@ -354,9 +434,11 @@ export default function ControlPage() {
               <input
                 value={task}
                 onChange={(e) => { setTask(e.target.value); setTaskError(false) }}
+                readOnly={!manageMode}
                 placeholder="Pick up the red block"
                 className={`w-full bg-sf2 border text-tx px-3 py-2 rounded-lg text-sm
                   focus:outline-none focus:border-ac focus:shadow-glow-ac placeholder:text-tx3 mb-3
+                  ${!manageMode ? 'opacity-70 cursor-not-allowed' : ''}
                   ${taskError ? 'border-rd animate-shake' : 'border-bd'}`}
               />
             ) : (
@@ -379,17 +461,20 @@ export default function ControlPage() {
               <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[72px]">
                 {t('numEpisodes')}
                 <input type="number" value={numEp} onChange={(e) => setNumEp(Number(e.target.value) || 10)} min={1}
+                  readOnly={!manageMode}
                   className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
               </label>
               <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[80px]">
                 {t('epTime')}
                 <input type="number" value={episodeTime} onChange={(e) => setEpisodeTime(Number(e.target.value) || 300)} min={1}
+                  readOnly={!manageMode}
                   className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
               </label>
               {mode === 'record' && (
                 <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[80px]">
                   {t('resetTime')}
                   <input type="number" value={resetTime} onChange={(e) => setResetTime(Number(e.target.value) || 10)} min={0}
+                    readOnly={!manageMode}
                     className="bg-sf2 border border-bd text-tx px-2 py-1.5 rounded text-sm font-mono focus:outline-none focus:border-ac" />
                 </label>
               )}
@@ -398,9 +483,14 @@ export default function ControlPage() {
             {/* Collapsible advanced options */}
             <button
               type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
+              onClick={() => {
+                if (manageMode) {
+                  setShowAdvanced(!showAdvanced)
+                }
+              }}
+              disabled={!manageMode}
               className="flex items-center gap-1.5 text-2xs text-tx3 font-mono uppercase tracking-widest
-                hover:text-tx2 transition-colors my-2"
+                hover:text-tx2 transition-colors my-2 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <svg
                 className={`w-3 h-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}

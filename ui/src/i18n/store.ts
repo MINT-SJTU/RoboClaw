@@ -308,6 +308,10 @@ const translations = {
     warnings: '个警告',
     epTime: '时长 (s)',
     resetTime: '重置 (s)',
+    manageMode: '管理模式',
+    manageModel: '管理模型',
+    enterManagePassword: '请输入管理密码',
+    managePasswordError: '密码错误',
 
     // Setup Wizard
     setup: '硬件设置',
@@ -784,6 +788,10 @@ const translations = {
     warnings: 'warnings',
     epTime: 'Time (s)',
     resetTime: 'Reset (s)',
+    manageMode: 'Manage Mode',
+    manageModel: 'Manage Model',
+    enterManagePassword: 'Enter admin password',
+    managePasswordError: 'Incorrect password',
 
     // Setup Wizard
     setup: 'Setup',

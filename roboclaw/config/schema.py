@@ -159,6 +159,24 @@ class HuggingFaceConfig(Base):
     proxy: str = ""  # Hub-only proxy URL, e.g. "http://127.0.0.1:7890"
 
 
+class ControlRecordConfig(Base):
+    """Persisted control-center recording form values."""
+
+    task: str = ""
+    num_episodes: int = 10
+    episode_time_s: int = 300
+    reset_time_s: int = 10
+    dataset_name: str = ""
+    fps: int = 30
+    use_cameras: bool = True
+
+
+class ControlCenterConfig(Base):
+    """Persisted control-center UI configuration."""
+
+    record: ControlRecordConfig = Field(default_factory=ControlRecordConfig)
+
+
 class Config(BaseSettings):
     """Root configuration for roboclaw."""
 
@@ -168,6 +186,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
+    control_center: ControlCenterConfig = Field(default_factory=ControlCenterConfig)
 
     @property
     def workspace_path(self) -> Path:
