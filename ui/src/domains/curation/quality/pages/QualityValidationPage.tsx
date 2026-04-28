@@ -538,6 +538,7 @@ export default function QualityValidationView() {
   const qStage = workflowState?.stages.quality_validation
   const isRunning = qualityRunning || qStage?.status === 'running'
   const isPaused = qStage?.status === 'paused'
+  const isPauseRequested = isRunning && Boolean(qStage?.pause_requested)
   const controlsLocked = isRunning || isPaused
   const datasetIsWorkflowReady = Boolean(workflowState) || selectedDatasetIsRemotePrepared
   const episodes = qualityResults?.episodes || []
@@ -996,6 +997,46 @@ export default function QualityValidationView() {
               </div>
 
               <div className="quality-sidebar__section">
+                {!datasetIsWorkflowReady && selectedDataset && (
+                  <div className="quality-sidebar__error">{t('qualityRequiresImportedDataset')}</div>
+                )}
+                <ActionButton
+                  type="button"
+                  disabled={
+                    !selectedDataset
+                    || isRunning
+                    || (!isPaused && selectedValidators.length === 0)
+                  }
+                  onClick={() => void handleRunQualityAction()}
+                  className="w-full justify-center"
+                >
+                  {isRunning ? t('running') : isPaused ? t('resumeQuality') : t('runQuality')}
+                </ActionButton>
+                {isRunning && (
+                  <ActionButton
+                    type="button"
+                    variant="warning"
+                    disabled={!selectedDataset || isPauseRequested}
+                    onClick={() => void pauseQualityValidation()}
+                    className="mt-3 w-full justify-center"
+                  >
+                    {isPauseRequested ? t('pauseRequested') : t('pauseQuality')}
+                  </ActionButton>
+                )}
+                {isPauseRequested && (
+                  <div className="quality-sidebar__path">{t('pauseRequestedHint')}</div>
+                )}
+                {isPaused && (
+                  <div className="quality-sidebar__path">
+                    {t('paused')}
+                    {typeof qStage?.summary?.['completed'] === 'number' && typeof qStage?.summary?.['total'] === 'number'
+                      ? ` · ${qStage.summary['completed']} / ${qStage.summary['total']}`
+                      : ''}
+                  </div>
+                )}
+              </div>
+
+              <div className="quality-sidebar__section">
                 <div className="quality-sidebar__label">{t('validators')}</div>
                 <div className="quality-threshold-groups">
                   {thresholdGroups.map((group) => {
@@ -1075,43 +1116,6 @@ export default function QualityValidationView() {
                     )
                   })}
                 </div>
-              </div>
-
-              <div className="quality-sidebar__section">
-                {!datasetIsWorkflowReady && selectedDataset && (
-                  <div className="quality-sidebar__error">{t('qualityRequiresImportedDataset')}</div>
-                )}
-                <ActionButton
-                  type="button"
-                  disabled={
-                    !selectedDataset
-                    || isRunning
-                    || (!isPaused && selectedValidators.length === 0)
-                  }
-                  onClick={() => void handleRunQualityAction()}
-                  className="w-full justify-center"
-                >
-                  {isRunning ? t('running') : isPaused ? t('resumeQuality') : t('runQuality')}
-                </ActionButton>
-                {isRunning && (
-                  <ActionButton
-                    type="button"
-                    variant="warning"
-                    disabled={!selectedDataset}
-                    onClick={() => void pauseQualityValidation()}
-                    className="mt-3 w-full justify-center"
-                  >
-                    {t('pauseQuality')}
-                  </ActionButton>
-                )}
-                {isPaused && (
-                  <div className="quality-sidebar__path">
-                    {t('paused')}
-                    {typeof qStage?.summary?.['completed'] === 'number' && typeof qStage?.summary?.['total'] === 'number'
-                      ? ` · ${qStage.summary['completed']} / ${qStage.summary['total']}`
-                      : ''}
-                  </div>
-                )}
               </div>
 
               <div className="quality-sidebar__section">

@@ -11,6 +11,7 @@ export interface StageState {
 
 interface QualityStage extends StageState {
   selected_validators: string[]
+  pause_requested?: boolean
 }
 
 export type QualityFilterMode = 'passed' | 'failed' | 'all'
@@ -682,6 +683,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset: selectedDataset }),
     })
+    await get().refreshState()
     get().startPolling()
   },
 
