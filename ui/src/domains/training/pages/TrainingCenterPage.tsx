@@ -4,6 +4,7 @@ import { useSessionStore } from '@/domains/session/store/useSessionStore'
 import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
 import { useHubTransferStore } from '@/domains/hub/store/useHubTransferStore'
 import { LossCurvePanel } from '@/domains/training/components/LossCurvePanel'
+import { TrainingProgressPanel } from '@/domains/training/components/TrainingProgressPanel'
 import { useI18n } from '@/i18n'
 
 const POLICY_TYPES = [
@@ -34,7 +35,6 @@ export default function TrainingCenterPage() {
   const doTrainStart = useTrainingStore((state) => state.doTrainStart)
   const doTrainStop = useTrainingStore((state) => state.doTrainStop)
   const currentTrainJobId = useTrainingStore((state) => state.currentTrainJobId)
-  const trainJobMessage = useTrainingStore((state) => state.trainJobMessage)
   const trainingLoading = useTrainingStore((state) => state.trainingLoading)
   const trainingStopLoading = useTrainingStore((state) => state.trainingStopLoading)
   const hubLoading = useHubTransferStore((state) => state.hubLoading)
@@ -69,81 +69,72 @@ export default function TrainingCenterPage() {
       </div>
 
       <div className="flex-1 p-6 grid grid-cols-2 gap-6 items-start max-[1100px]:grid-cols-1">
-        <div className="space-y-6">
-          <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-yl">
-            <h3 className="text-sm font-bold text-tx uppercase tracking-wide mb-4">{t('training')}</h3>
-            <select
-              value={trainDataset}
-              onChange={(e) => setTrainDataset(e.target.value)}
-              className="w-full bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm mb-3
-                focus:outline-none focus:border-ac"
+        <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-yl">
+          <h3 className="text-sm font-bold text-tx uppercase tracking-wide mb-4">{t('training')}</h3>
+          <select
+            value={trainDataset}
+            onChange={(e) => setTrainDataset(e.target.value)}
+            className="w-full bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm mb-3
+              focus:outline-none focus:border-ac"
+          >
+            <option value="">{t('selectDataset')}</option>
+            {runtimeDatasets.map(d => (
+              <option key={d.id} value={d.runtime!.name}>{d.label}</option>
+            ))}
+          </select>
+          <div className="flex gap-3 mb-3 max-[700px]:flex-col">
+            <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1">
+              {t('policyType')}
+              <select
+                value={policyType}
+                onChange={(e) => setPolicyType(e.target.value)}
+                className="bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-ac"
+              >
+                {POLICY_TYPES.map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1">
+              {t('steps')}
+              <input type="number" value={trainSteps} onChange={(e) => setTrainSteps(Number(e.target.value) || 100000)}
+                className="bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm font-mono focus:outline-none focus:border-ac" />
+            </label>
+            <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[90px]">
+              {t('device')}
+              <select value={trainDevice} onChange={(e) => setTrainDevice(e.target.value)}
+                className="bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-ac">
+                <option value="cuda">cuda</option>
+                <option value="cpu">cpu</option>
+              </select>
+            </label>
+          </div>
+          <div className="flex gap-3 max-[520px]:flex-col">
+            <button
+              disabled={(session.state !== 'idle' && session.state !== 'error') || !trainDataset || !!trainingLoading}
+              onClick={() => {
+                void doTrainStart({
+                  dataset_name: trainDataset,
+                  policy_type: policyType,
+                  steps: trainSteps,
+                  device: trainDevice,
+                })
+              }}
+              className="flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-ac hover:bg-ac2 shadow-glow-ac
+                transition-all active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed disabled:shadow-none"
             >
-              <option value="">{t('selectDataset')}</option>
-              {runtimeDatasets.map(d => (
-                <option key={d.id} value={d.runtime!.name}>{d.label}</option>
-              ))}
-            </select>
-            <div className="flex gap-3 mb-3 max-[700px]:flex-col">
-              <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1">
-                {t('policyType')}
-                <select
-                  value={policyType}
-                  onChange={(e) => setPolicyType(e.target.value)}
-                  className="bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-ac"
-                >
-                  {POLICY_TYPES.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono flex-1">
-                {t('steps')}
-                <input type="number" value={trainSteps} onChange={(e) => setTrainSteps(Number(e.target.value) || 100000)}
-                  className="bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm font-mono focus:outline-none focus:border-ac" />
-              </label>
-              <label className="flex flex-col gap-1 text-2xs text-tx3 font-mono w-[90px]">
-                {t('device')}
-                <select value={trainDevice} onChange={(e) => setTrainDevice(e.target.value)}
-                  className="bg-bg border border-bd text-tx px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-ac">
-                  <option value="cuda">cuda</option>
-                  <option value="cpu">cpu</option>
-                </select>
-              </label>
-            </div>
-            <div className="flex gap-3 max-[520px]:flex-col">
-              <button
-                disabled={(session.state !== 'idle' && session.state !== 'error') || !trainDataset || !!trainingLoading}
-                onClick={() => {
-                  void doTrainStart({
-                    dataset_name: trainDataset,
-                    policy_type: policyType,
-                    steps: trainSteps,
-                    device: trainDevice,
-                  })
-                }}
-                className="flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-ac hover:bg-ac2 shadow-glow-ac
-                  transition-all active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed disabled:shadow-none"
-              >
-                {trainingLoading ? t('startingTraining') : t('startTraining')}
-              </button>
-              <button
-                disabled={!currentTrainJobId || !!trainingStopLoading}
-                onClick={() => { void doTrainStop() }}
-                className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-rd hover:bg-rd/90
-                  transition-all active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed"
-              >
-                {trainingStopLoading ? t('stoppingTraining') : t('stopTraining')}
-              </button>
-            </div>
-            {trainJobMessage && (
-              <div className="mt-3 text-xs text-tx2 font-mono bg-bg rounded-lg p-2.5 break-all">
-                {trainJobMessage}
-              </div>
-            )}
-          </section>
-
-          <LossCurvePanel />
-        </div>
+              {trainingLoading ? t('startingTraining') : t('startTraining')}
+            </button>
+            <button
+              disabled={!currentTrainJobId || !!trainingStopLoading}
+              onClick={() => { void doTrainStop() }}
+              className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-rd hover:bg-rd/90
+                transition-all active:scale-[0.97] disabled:opacity-25 disabled:cursor-not-allowed"
+            >
+              {trainingStopLoading ? t('stoppingTraining') : t('stopTraining')}
+            </button>
+          </div>
+        </section>
 
         <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-gn">
           <div className="flex items-center justify-between mb-4">
@@ -215,6 +206,9 @@ export default function TrainingCenterPage() {
             </div>
           )}
         </section>
+
+        <LossCurvePanel />
+        <TrainingProgressPanel />
       </div>
     </div>
   )
