@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from loguru import logger
 
@@ -108,15 +109,98 @@ def _configure_quality_stage(
     *,
     status: str,
     selected_validators: list[str],
+    active_run_id: str | None = None,
 ) -> None:
     state = load_workflow_state(dataset_path)
     stage = state["stages"]["quality_validation"]
     stage["status"] = status
     stage["selected_validators"] = list(selected_validators)
+    stage["active_run_id"] = active_run_id
     stage["pause_requested"] = False
     if status == "running":
         stage["summary"] = None
     save_workflow_state(dataset_path, state)
+
+
+def _quality_run_is_current(dataset_path: Path, run_id: str | None) -> bool:
+    if run_id is None:
+        return True
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    return stage.get("active_run_id") == run_id
+
+
+def _quality_summary_from_results(
+    dataset_path: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    results = load_quality_results(dataset_path) or {}
+    episodes = results.get("episodes", [])
+    if not isinstance(episodes, list):
+        episodes = []
+
+    total = coerce_int(results.get("total"))
+    if total is None:
+        existing_summary = state["stages"]["quality_validation"].get("summary")
+        if isinstance(existing_summary, dict):
+            total = coerce_int(existing_summary.get("total"))
+    if total is None:
+        total = coerce_int(_load_info(dataset_path).get("total_episodes")) or len(episodes)
+
+    passed = coerce_int(results.get("passed"))
+    if passed is None:
+        passed = sum(1 for episode in episodes if episode.get("passed"))
+
+    failed = coerce_int(results.get("failed"))
+    if failed is None:
+        failed = max(len(episodes) - passed, 0)
+
+    overall_score = results.get("overall_score", 0.0)
+    completed = len(episodes)
+    return {
+        "total": total,
+        "completed": completed,
+        "remaining": max(total - completed, 0),
+        "passed": passed,
+        "failed": failed,
+        "overall_score": overall_score,
+        "progress_percent": round((completed / max(total, 1)) * 100, 1),
+        "quality_parquet_path": None,
+    }
+
+
+def _mark_quality_stage_paused(
+    dataset_path: Path,
+    *,
+    pause_requested: bool,
+) -> dict[str, Any]:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    stage["status"] = "paused"
+    stage["summary"] = _quality_summary_from_results(dataset_path, state)
+    stage["pause_requested"] = pause_requested
+    stage["active_run_id"] = None
+    save_workflow_state(dataset_path, state)
+    return state
+
+
+def _finish_quality_stage(
+    dataset_path: Path,
+    *,
+    status: str,
+    summary: dict[str, Any],
+    run_id: str | None,
+) -> bool:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    if run_id is not None and stage.get("active_run_id") != run_id:
+        return False
+    stage["status"] = status
+    stage["summary"] = summary
+    stage["pause_requested"] = False
+    stage["active_run_id"] = None
+    save_workflow_state(dataset_path, state)
+    return True
 
 
 def _load_episode_duration(dataset_path: Path, episode_index: int) -> float:
@@ -189,8 +273,10 @@ class CurationService:
         except asyncio.CancelledError:
             if self._active_tasks.get(task_key) is current_task:
                 state = load_workflow_state(dataset_path)
-                state["stages"][stage_key]["status"] = "error"
-                save_workflow_state(dataset_path, state)
+                stage = state["stages"][stage_key]
+                if stage.get("status") != "paused" and not stage.get("pause_requested"):
+                    stage["status"] = "error"
+                    save_workflow_state(dataset_path, state)
             raise
         except Exception:
             logger.exception("Background workflow task failed")
@@ -233,6 +319,9 @@ class CurationService:
             if active_task is not None and not active_task.done():
                 continue
             stage["status"] = "error"
+            if stage_key == "quality_validation":
+                stage["active_run_id"] = None
+                stage["pause_requested"] = False
             summary = stage.get("summary")
             if not isinstance(summary, dict):
                 summary = {}
@@ -256,6 +345,7 @@ class CurationService:
         threshold_overrides: dict[str, float] | None,
     ) -> dict[str, str]:
         svc = _LegacyCurationService(dataset_path, dataset_name)
+        run_id = uuid4().hex
 
         async def _task() -> None:
             await asyncio.to_thread(
@@ -263,11 +353,36 @@ class CurationService:
                 selected_validators,
                 episode_indices,
                 threshold_overrides,
+                None,
+                False,
+                run_id,
             )
 
         self._register_workflow_task(dataset_path, "quality_validation", _task())
         logger.info("Quality run queued for dataset '{}'", dataset_name)
         return {"status": "started"}
+
+    def pause_quality_run(
+        self,
+        dataset_path: Path,
+        dataset_name: str,
+    ) -> dict[str, Any]:
+        state = load_workflow_state(dataset_path)
+        quality_stage = state["stages"]["quality_validation"]
+        if quality_stage.get("status") != "running":
+            raise ValueError("Quality validation is not running")
+
+        active_task = self._active_stage_task(dataset_path, "quality_validation")
+        pause_requested = (
+            active_task is not None
+            and not active_task.done()
+            and quality_stage.get("active_run_id") is None
+        )
+        _mark_quality_stage_paused(dataset_path, pause_requested=pause_requested)
+        if active_task is not None and not active_task.done():
+            active_task.cancel()
+        logger.info("Quality pause applied for dataset '{}'", dataset_name)
+        return {"status": "paused", "pause_requested": pause_requested}
 
     async def start_quality_resume(
         self,
@@ -300,6 +415,7 @@ class CurationService:
         svc = _LegacyCurationService(dataset_path, dataset_name)
         resolved_validators = existing.get("selected_validators") or selected_validators
         resolved_overrides = existing.get("threshold_overrides") or threshold_overrides
+        run_id = uuid4().hex
 
         async def _task() -> None:
             await asyncio.to_thread(
@@ -309,6 +425,7 @@ class CurationService:
                 resolved_overrides,
                 None,
                 True,
+                run_id,
             )
 
         self._register_workflow_task(dataset_path, "quality_validation", _task())
@@ -438,6 +555,7 @@ class CurationService:
         quality_stage["status"] = "idle"
         quality_stage["selected_validators"] = []
         quality_stage["latest_run"] = None
+        quality_stage["active_run_id"] = None
         quality_stage["pause_requested"] = False
         quality_stage["summary"] = None
         save_workflow_state(dataset_path, state)
@@ -516,6 +634,7 @@ class _LegacyCurationService:
         threshold_overrides: dict[str, float] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         resume_existing: bool = False,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         """Run quality validation across episodes.
 
@@ -525,6 +644,7 @@ class _LegacyCurationService:
             self.dataset_path,
             status="running",
             selected_validators=selected_validators,
+            active_run_id=run_id,
         )
         logger.info("Quality batch started for {}", self.dataset_path.name)
 
@@ -556,7 +676,19 @@ class _LegacyCurationService:
             except (TypeError, ValueError):
                 total = len(per_episode) + len(indices)
 
+        def current_or_saved_results() -> dict[str, Any]:
+            return load_quality_results(self.dataset_path) or aggregate_quality_results(
+                per_episode,
+                selected_validators,
+                passed_count,
+                failed_count,
+                total,
+                threshold_overrides,
+            )
+
         def finalize_quality_run(stage_status: str) -> dict[str, Any]:
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             aggregated = aggregate_quality_results(
                 per_episode,
                 selected_validators,
@@ -587,13 +719,14 @@ class _LegacyCurationService:
                 "progress_percent": round((len(per_episode) / max(total, 1)) * 100, 1),
                 "quality_parquet_path": parquet_path,
             }
-            _update_stage_summary(
+            finished = _finish_quality_stage(
                 self.dataset_path,
-                "quality_validation",
-                summary,
                 status=stage_status,
+                summary=summary,
+                run_id=run_id,
             )
-            set_stage_pause_requested(self.dataset_path, "quality_validation", False)
+            if not finished:
+                return load_quality_results(self.dataset_path) or aggregated
             if stage_status == "paused":
                 logger.info(
                     "Quality batch paused after {}/{} episodes",
@@ -610,6 +743,8 @@ class _LegacyCurationService:
             return aggregated
 
         for position, ep_idx in enumerate(indices):
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             if is_stage_pause_requested(self.dataset_path, "quality_validation"):
                 return finalize_quality_run("paused")
             logger.info("Validating episode {}/{}", initial_completed + position + 1, total)
@@ -620,6 +755,8 @@ class _LegacyCurationService:
                 threshold_overrides=threshold_overrides,
                 runner=run_quality_validators,
             )
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             entry = {
                 "episode_index": ep_idx,
                 "passed": result["passed"],
@@ -661,12 +798,16 @@ class _LegacyCurationService:
                 })
 
         if include_trajectory_dtw:
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             append_trajectory_dtw_results(
                 self.dataset_path,
                 per_episode,
                 threshold_overrides=threshold_overrides,
                 progress_callback=progress_callback,
             )
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             passed_count = sum(1 for episode in per_episode if episode.get("passed"))
             failed_count = max(len(per_episode) - passed_count, 0)
 

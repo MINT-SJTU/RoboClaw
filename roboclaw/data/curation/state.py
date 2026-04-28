@@ -60,6 +60,7 @@ def init_workflow_state(dataset_path: Path) -> dict[str, Any]:
                 "status": "idle",
                 "selected_validators": [],
                 "latest_run": None,
+                "active_run_id": None,
                 "pause_requested": False,
                 "summary": None,
             },
@@ -98,6 +99,7 @@ def _normalize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     quality_stage.setdefault("status", "idle")
     quality_stage.setdefault("selected_validators", [])
     quality_stage.setdefault("latest_run", None)
+    quality_stage.setdefault("active_run_id", None)
     quality_stage.setdefault("pause_requested", False)
     quality_stage.setdefault("summary", None)
 

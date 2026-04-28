@@ -17,6 +17,7 @@ from roboclaw.data.curation import propagation_history
 from roboclaw.data.curation import serializers as curation_serializers
 from roboclaw.data.curation import service as curation_service
 from roboclaw.data.curation.state import (
+    load_quality_results,
     load_workflow_state,
     save_prototype_results,
     save_quality_results,
@@ -750,17 +751,138 @@ def test_quality_pause_request_marks_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, dataset_path = _build_client(tmp_path, monkeypatch)
+    save_quality_results(
+        dataset_path,
+        {
+            "total": 3,
+            "passed": 1,
+            "failed": 0,
+            "overall_score": 100.0,
+            "episodes": [
+                {
+                    "episode_index": 0,
+                    "passed": True,
+                    "score": 100.0,
+                    "validators": {"metadata": {"passed": True, "score": 100.0}},
+                    "issues": [],
+                },
+            ],
+            "selected_validators": ["metadata"],
+        },
+    )
 
     state = load_workflow_state(dataset_path)
     state["stages"]["quality_validation"]["status"] = "running"
+    state["stages"]["quality_validation"]["selected_validators"] = ["metadata"]
+    state["stages"]["quality_validation"]["active_run_id"] = "run-1"
     save_workflow_state(dataset_path, state)
 
     response = client.post("/api/curation/quality-pause", json={"dataset": "demo"})
     assert response.status_code == 200
-    assert response.json()["status"] == "pause_requested"
+    assert response.json()["status"] == "paused"
 
     updated = load_workflow_state(dataset_path)
-    assert updated["stages"]["quality_validation"]["pause_requested"] is True
+    quality_stage = updated["stages"]["quality_validation"]
+    assert quality_stage["status"] == "paused"
+    assert quality_stage["pause_requested"] is False
+    assert quality_stage["active_run_id"] is None
+    assert quality_stage["summary"]["completed"] == 1
+    assert quality_stage["summary"]["remaining"] == 2
+
+
+def test_quality_pause_cancels_active_task_without_error(tmp_path: Path) -> None:
+    dataset_path = _write_demo_dataset(tmp_path, total_episodes=2)
+    service = curation_service.CurationService()
+
+    async def _run() -> None:
+        started = asyncio.Event()
+
+        async def _task() -> None:
+            state = load_workflow_state(dataset_path)
+            stage = state["stages"]["quality_validation"]
+            stage["status"] = "running"
+            stage["active_run_id"] = "run-1"
+            save_workflow_state(dataset_path, state)
+            started.set()
+            await asyncio.sleep(30)
+
+        service._register_workflow_task(dataset_path, "quality_validation", _task())
+        await started.wait()
+        task = service._active_stage_task(dataset_path, "quality_validation")
+        assert task is not None
+
+        response = service.pause_quality_run(dataset_path, "demo")
+        assert response == {"status": "paused", "pause_requested": False}
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        updated = load_workflow_state(dataset_path)
+        quality_stage = updated["stages"]["quality_validation"]
+        assert quality_stage["status"] == "paused"
+        assert quality_stage["pause_requested"] is False
+        assert quality_stage["active_run_id"] is None
+
+    asyncio.run(_run())
+
+
+def test_stale_quality_run_does_not_overwrite_paused_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_path = _write_demo_dataset(tmp_path, total_episodes=2)
+    service = curation_service.CurationService()
+    legacy = curation_service._LegacyCurationService(dataset_path, "demo")
+    save_quality_results(
+        dataset_path,
+        {
+            "total": 2,
+            "passed": 1,
+            "failed": 0,
+            "overall_score": 100.0,
+            "episodes": [
+                {
+                    "episode_index": 0,
+                    "passed": True,
+                    "score": 100.0,
+                    "validators": {"metadata": {"passed": True, "score": 100.0}},
+                    "issues": [],
+                },
+            ],
+            "selected_validators": ["metadata"],
+        },
+    )
+
+    def _fake_run_quality_validators(
+        target_dataset_path: Path,
+        episode_index: int,
+        *,
+        selected_validators: list[str] | None = None,
+        threshold_overrides: dict[str, float] | None = None,
+    ) -> dict[str, object]:
+        service.pause_quality_run(target_dataset_path, "demo")
+        return {
+            "passed": False,
+            "score": 10.0,
+            "validators": {"metadata": {"passed": False, "score": 10.0}},
+            "issues": [{"check_name": "metadata", "passed": False}],
+        }
+
+    monkeypatch.setattr(curation_service, "run_quality_validators", _fake_run_quality_validators)
+
+    result = legacy.run_quality_batch(
+        ["metadata"],
+        episode_indices=[1],
+        resume_existing=True,
+        run_id="run-1",
+    )
+
+    assert [episode["episode_index"] for episode in result["episodes"]] == [0]
+    updated = load_workflow_state(dataset_path)
+    quality_stage = updated["stages"]["quality_validation"]
+    assert quality_stage["status"] == "paused"
+    assert quality_stage["active_run_id"] is None
+    assert quality_stage["summary"]["completed"] == 1
+    assert load_quality_results(dataset_path)["episodes"][0]["episode_index"] == 0
 
 
 def test_alignment_overview_combines_quality_and_alignment_results(

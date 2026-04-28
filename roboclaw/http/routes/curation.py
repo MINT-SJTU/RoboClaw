@@ -32,12 +32,7 @@ from roboclaw.data.curation.exports import (
 )
 from roboclaw.data.curation.paths import datasets_root
 from roboclaw.data.curation.service import CurationService
-from roboclaw.data.curation.state import (
-    load_annotations,
-    load_workflow_state,
-    save_workflow_state,
-    set_stage_pause_requested,
-)
+from roboclaw.data.curation.state import load_annotations
 
 # Module-level service singleton
 _service = CurationService()
@@ -360,15 +355,12 @@ def register_curation_routes(app: FastAPI) -> None:
 
     @app.post("/api/curation/quality-pause")
     async def quality_pause(body: DatasetPublishRequest) -> dict[str, Any]:
-        """Request that a running quality-validation task pause after the current episode."""
+        """Pause a running quality-validation task and keep partial results."""
         dataset_path = _ensure_dataset_workspace(body.dataset)
-        state = load_workflow_state(dataset_path)
-        quality_stage = state["stages"]["quality_validation"]
-        if quality_stage.get("status") != "running":
-            raise HTTPException(status_code=409, detail="Quality validation is not running")
-        set_stage_pause_requested(dataset_path, "quality_validation", True)
-        logger.info("Quality pause requested for dataset '{}'", body.dataset)
-        return {"status": "pause_requested"}
+        try:
+            return _service.pause_quality_run(dataset_path, body.dataset)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/curation/quality-resume")
     async def quality_resume(body: QualityRunRequest) -> dict[str, str]:
