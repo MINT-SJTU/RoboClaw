@@ -28,6 +28,7 @@ _CHECK_INTERVAL_SECONDS = 5
 
 class FaultType(str, Enum):
     ARM_DISCONNECTED = "arm_disconnected"
+    ARM_MOTOR_DISCONNECTED = "arm_motor_disconnected"
     ARM_TIMEOUT = "arm_timeout"
     ARM_NOT_CALIBRATED = "arm_not_calibrated"
     CAMERA_DISCONNECTED = "camera_disconnected"
@@ -129,6 +130,34 @@ def _fault_key(fault: HardwareFault) -> str:
     return f"{fault.fault_type.value}:{fault.device_alias}"
 
 
+def _pretty_motor_name(name: str) -> str:
+    return name.replace("_", " ")
+
+
+def get_missing_arm_motors(arm: ArmBinding) -> list[str]:
+    from roboclaw.embodied.embodiment.arm.registry import (
+        get_model,
+        get_probe_config,
+        get_runtime_spec,
+    )
+    from roboclaw.embodied.embodiment.hardware.motors import _motor_config_from_arm
+    from roboclaw.embodied.embodiment.hardware.probers import get_prober
+
+    if get_model(arm.arm_type) != "so101" or not arm.port:
+        return []
+
+    runtime_spec = get_runtime_spec(arm.arm_type)
+    motor_config = _motor_config_from_arm(arm, runtime_spec)
+    probe_cfg = get_probe_config(arm.arm_type)
+    prober = get_prober(probe_cfg.protocol)
+    found_id_set = set(prober.probe(arm.port, probe_cfg.baudrate, list(probe_cfg.motor_ids)))
+    return [
+        _pretty_motor_name(name)
+        for name, (motor_id, _) in motor_config.items()
+        if motor_id not in found_id_set
+    ]
+
+
 class HardwareMonitor:
     """Periodically checks hardware health and emits fault events."""
 
@@ -147,27 +176,41 @@ class HardwareMonitor:
     def active_faults(self) -> list[HardwareFault]:
         return list(self._active_faults.values())
 
+    async def report_fault(self, fault: HardwareFault) -> None:
+        key = _fault_key(fault)
+        existing_fault = self._active_faults.get(key)
+        self._active_faults[key] = fault
+        if existing_fault is not None:
+            return
+        logger.warning("Hardware fault detected: {} — {}", key, fault.message)
+        if self._board is not None:
+            await self._board.emit(CH_FAULT_DETECTED, {
+                "fault_type": fault.fault_type.value,
+                "device_alias": fault.device_alias,
+                "message": fault.message,
+                "timestamp": fault.timestamp,
+            })
+
+    async def resolve_fault(self, fault_type: FaultType, device_alias: str) -> None:
+        key = f"{fault_type.value}:{device_alias}"
+        resolved_fault = self._active_faults.pop(key, None)
+        if resolved_fault is None:
+            return
+        logger.info("Hardware fault resolved: {}", key)
+        if self._board is not None:
+            await self._board.emit(CH_FAULT_RESOLVED, {
+                "fault_type": resolved_fault.fault_type.value,
+                "device_alias": resolved_fault.device_alias,
+                "timestamp": time.time(),
+            })
+
     def set_recording_active(self, active: bool) -> None:
         self._recording_active = active
 
     def stop(self) -> None:
         self._stop_event.set()
 
-    async def run(self) -> None:
-        """Main loop: check hardware every N seconds until stopped."""
-        logger.info("Hardware monitor started")
-        while not self._stop_event.is_set():
-            await self._tick()
-            try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=_CHECK_INTERVAL_SECONDS
-                )
-                break  # stop_event was set
-            except asyncio.TimeoutError:
-                pass  # normal interval elapsed
-        logger.info("Hardware monitor stopped")
-
-    async def _tick(self) -> None:
+    async def run_check_once(self) -> None:
         """Run one check cycle, diff against active faults, emit events."""
         current_faults = self.check_hardware()
         current_keys = {_fault_key(f): f for f in current_faults}
@@ -217,7 +260,7 @@ class HardwareMonitor:
 def _check_arms(
     arms: list[ArmBinding], now: float, faults: list[HardwareFault],
 ) -> None:
-    """Check arm connectivity and calibration state."""
+    """Check arm connectivity, calibration state, and motor wiring."""
     for arm in arms:
         status = check_arm_status(arm)
         if arm.port and not status.connected:
@@ -233,6 +276,14 @@ def _check_arms(
                 fault_type=FaultType.ARM_NOT_CALIBRATED,
                 device_alias=status.alias,
                 message=f"Arm '{status.alias}' is not calibrated",
+                timestamp=now,
+            ))
+        missing_motors = get_missing_arm_motors(arm)
+        if missing_motors:
+            faults.append(HardwareFault(
+                fault_type=FaultType.ARM_MOTOR_DISCONNECTED,
+                device_alias=status.alias,
+                message=", ".join(missing_motors),
                 timestamp=now,
             ))
 
