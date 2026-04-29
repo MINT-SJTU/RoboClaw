@@ -20,11 +20,11 @@ export interface RecoveryGuide {
 interface RecoveryStore {
   faults: RecoveryFault[]
   guides: Record<string, RecoveryGuide> | null
-  rechecking: boolean
   restarting: boolean
   fetchFaults: () => Promise<void>
   fetchGuides: () => Promise<void>
-  recheckHardware: () => Promise<RecoveryFault[]>
+  checkDevice: (kind: 'arm' | 'camera', alias: string) => Promise<{ ok: boolean; kind: string; alias: string }>
+  checkArmMotors: (alias: string) => Promise<{ ok: boolean; alias: string; missingMotors: string[] }>
   restartDashboard: () => Promise<void>
   handleDashboardEvent: (event: any) => void
 }
@@ -49,7 +49,6 @@ async function waitForDashboardRecovery(timeoutMs: number = 30000): Promise<void
 export const useRecoveryStore = create<RecoveryStore>((set) => ({
   faults: [],
   guides: null,
-  rechecking: false,
   restarting: false,
 
   fetchFaults: async () => {
@@ -61,16 +60,23 @@ export const useRecoveryStore = create<RecoveryStore>((set) => ({
     set({ guides: await api(`${RECOVERY}/guides`) })
   },
 
-  recheckHardware: async () => {
-    set({ rechecking: true })
-    try {
-      const data = await postJson(`${RECOVERY}/recheck`)
-      const faults = Array.isArray(data.faults) ? data.faults : []
-      set({ faults })
-      await useHardwareStore.getState().fetchHardwareStatus()
-      return faults
-    } finally {
-      set({ rechecking: false })
+  checkDevice: async (kind, alias) => {
+    const data = await postJson(`${RECOVERY}/check-device`, { kind, alias })
+    await useHardwareStore.getState().fetchHardwareStatus()
+    return {
+      ok: Boolean(data.ok),
+      kind: String(data.kind || kind),
+      alias: String(data.alias || alias),
+    }
+  },
+
+  checkArmMotors: async (alias) => {
+    const data = await postJson(`${RECOVERY}/check-arm-motors`, { alias })
+    await useHardwareStore.getState().fetchHardwareStatus()
+    return {
+      ok: Boolean(data.ok),
+      alias: String(data.alias || alias),
+      missingMotors: Array.isArray(data.missing_motors) ? data.missing_motors.map(String) : [],
     }
   },
 
