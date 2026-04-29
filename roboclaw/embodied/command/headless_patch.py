@@ -70,6 +70,10 @@ class TTYKeyboardListener:
 
     def _consume_pending(self, pending: str) -> str:
         while pending:
+            if pending[0].lower() == "p":
+                self._on_press("p")
+                pending = pending[1:]
+                continue
             if pending.startswith("\x1b[C"):
                 self._on_press("right")
                 pending = pending[3:]
@@ -115,22 +119,23 @@ def apply_headless_patch() -> None:
             "exit_early": False,
             "rerecord_episode": False,
             "stop_recording": False,
+            "skip_reset": False,
         }
 
         def on_press(key: str) -> None:
             if key == "right":
-                print("Right arrow key pressed. Exiting loop...")
                 events["exit_early"] = True
                 return
             if key == "left":
-                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
                 events["rerecord_episode"] = True
                 events["exit_early"] = True
                 return
             if key == "esc":
-                print("Escape key pressed. Stopping data recording...")
                 events["stop_recording"] = True
                 events["exit_early"] = True
+                return
+            if key == "p":
+                events["skip_reset"] = True
 
         listener = TTYKeyboardListener(on_press)
         listener.start()

@@ -103,7 +103,7 @@ class InputConsumer(Consumer):
     _KEYMAP: dict[str, bytes] = {
         Command.SAVE_EPISODE: b"\x1b[C",       # right arrow
         Command.DISCARD_EPISODE: b"\x1b[D",    # left arrow
-        Command.SKIP_RESET: b"\x1b[C",         # right arrow
+        Command.SKIP_RESET: b"p",
         Command.STOP: b"\x1b",                 # ESC
         Command.CONFIRM: b"\n",                # Enter
     }

@@ -22,7 +22,8 @@ from roboclaw.embodied.board.constants import SessionState
 
 IDLE_STATE: dict[str, Any] = {
     "state": SessionState.IDLE,
-    "episode_phase": "",
+    "record_phase": "idle",
+    "record_pending_command": "",
     "saved_episodes": 0,
     "current_episode": 0,
     "target_episodes": 0,

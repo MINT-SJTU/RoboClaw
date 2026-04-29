@@ -10,7 +10,7 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from roboclaw.http.routes import curation as curation_routes
+from roboclaw.data import dataset_sessions
 from roboclaw.data.curation import exports as curation_exports
 from roboclaw.data.curation import serializers as curation_serializers
 from roboclaw.data.curation import service as curation_service
@@ -21,6 +21,7 @@ from roboclaw.data.curation.state import (
     save_workflow_state,
     set_stage_pause_requested,
 )
+from roboclaw.http.routes import curation as curation_routes
 
 
 def _write_demo_dataset(root: Path, total_episodes: int = 1) -> Path:
@@ -477,6 +478,13 @@ def test_workflow_datasets_preserve_nested_hf_names(
         "datasets_root",
         lambda: dataset_root,
     )
+    monkeypatch.setattr(
+        curation_routes.DatasetCatalog,
+        "resolve_remote_dataset",
+        lambda _self, _dataset: pytest.fail(
+            "local nested datasets must not resolve through remote lookup"
+        ),
+    )
     app = FastAPI()
     curation_routes.register_curation_routes(app)
     client = TestClient(app)
@@ -491,6 +499,75 @@ def test_workflow_datasets_preserve_nested_hf_names(
     detail = client.get("/api/curation/datasets/cadene/droid_1.0.1")
     assert detail.status_code == 200
     assert detail.json()["id"] == "cadene/droid_1.0.1"
+    assert detail.json()["kind"] == "local"
+
+
+def test_workflow_accepts_dataset_session_handles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "datasets"
+    dataset_root.mkdir()
+    roboclaw_home = tmp_path / "home"
+    session_id = "remote-demo"
+    handle = dataset_sessions.make_session_handle("remote", session_id)
+    session_dir = roboclaw_home / "cache" / "dataset-sessions" / "remote" / session_id
+    dataset_path = session_dir / "dataset"
+    meta_path = dataset_path / "meta"
+    meta_path.mkdir(parents=True)
+    (meta_path / "info.json").write_text(
+        json.dumps(
+            {
+                "total_episodes": 2,
+                "total_frames": 20,
+                "fps": 10,
+                "robot_type": "aloha",
+                "features": {"action": {}, "observation.state": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (meta_path / "episodes.jsonl").write_text(
+        json.dumps({"episode_index": 0, "length": 8}) + "\n"
+        + json.dumps({"episode_index": 1, "length": 12}) + "\n",
+        encoding="utf-8",
+    )
+    (session_dir / "session.json").write_text(
+        json.dumps(
+            {
+                "handle": handle,
+                "kind": "remote",
+                "session_id": session_id,
+                "display_name": "cadene/droid_1.0.1",
+                "source_dataset": "cadene/droid_1.0.1",
+                "dataset_dir": str(dataset_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(curation_routes, "datasets_root", lambda: dataset_root)
+    monkeypatch.setattr(dataset_sessions, "get_roboclaw_home", lambda: roboclaw_home)
+    app = FastAPI()
+    curation_routes.register_curation_routes(app)
+    client = TestClient(app)
+
+    datasets = client.get("/api/curation/datasets")
+    assert datasets.status_code == 200
+    session_ref = next(item for item in datasets.json() if item["id"] == handle)
+    assert session_ref["label"] == "cadene/droid_1.0.1"
+    assert session_ref["source_kind"] == "remote_session"
+    assert session_ref["capabilities"]["can_curate"] is True
+
+    detail = client.get(f"/api/curation/datasets/{handle}")
+    assert detail.status_code == 200
+    assert detail.json()["stats"]["episode_lengths"] == [8, 12]
+
+    state = client.get("/api/curation/state", params={"dataset": handle})
+    assert state.status_code == 200
+
+    quality_results = client.get("/api/curation/quality-results", params={"dataset": handle})
+    assert quality_results.status_code == 200
 
 
 def test_resolve_dataset_path_rejects_traversal(

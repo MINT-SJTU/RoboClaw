@@ -15,6 +15,7 @@ from roboclaw.data.explorer.remote import (
     build_remote_explorer_payload,
     build_remote_explorer_summary,
     load_remote_episode_detail,
+    search_remote_datasets,
 )
 
 
@@ -22,9 +23,9 @@ def register_explorer_routes(app: FastAPI) -> None:
     """Register all explorer API routes on *app*."""
 
     @app.get("/api/explorer/datasets")
-    async def explorer_datasets() -> list[dict]:
-        """Dataset explorer is remote-first; no local catalog is maintained."""
-        return []
+    async def explorer_datasets(query: str = "", limit: int = 8) -> list[dict]:
+        """Return remote dataset suggestions for the explorer search box."""
+        return await asyncio.to_thread(search_remote_datasets, query, limit)
 
     @app.get("/api/explorer/dashboard")
     async def explorer_dashboard(dataset: str) -> dict[str, Any]:
@@ -65,9 +66,18 @@ def register_explorer_routes(app: FastAPI) -> None:
         return payload
 
     @app.get("/api/explorer/episode")
-    async def explorer_episode(dataset: str, episode_index: int) -> dict[str, Any]:
+    async def explorer_episode(
+        dataset: str,
+        episode_index: int,
+        preview_only: bool = False,
+    ) -> dict[str, Any]:
         """Return episode detail: sample rows, joint trajectory, video paths."""
-        payload = await asyncio.to_thread(load_remote_episode_detail, dataset, episode_index)
+        payload = await asyncio.to_thread(
+            load_remote_episode_detail,
+            dataset,
+            episode_index,
+            preview_only=preview_only,
+        )
         logger.info("Explorer episode loaded for '{}' #{}", dataset, episode_index)
         return payload
 

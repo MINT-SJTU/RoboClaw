@@ -87,7 +87,7 @@ build-backend = "hatchling.build"
 default-groups = ["dev"]
 
 [tool.uv.sources]
-lerobot = { path = "roboclaw/embodied/engine" }
+lerobot = { path = "roboclaw/embodied/engine", editable = true }
 
 [tool.hatch.build]
 include = [

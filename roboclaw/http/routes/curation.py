@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel
 
-from roboclaw.data.datasets import DatasetCatalog
+from roboclaw.data import dataset_sessions
 from roboclaw.data.curation.exports import (
     export_quality_csv,
     publish_quality_metadata_parquet,
@@ -29,9 +29,9 @@ from roboclaw.data.curation.service import CurationService
 from roboclaw.data.curation.state import (
     load_annotations,
     load_workflow_state,
-    save_workflow_state,
     set_stage_pause_requested,
 )
+from roboclaw.data.datasets import DatasetCatalog
 
 # Module-level service singleton
 _service = CurationService()
@@ -88,6 +88,12 @@ class DatasetPublishRequest(BaseModel):
 
 
 def _ensure_dataset_workspace(dataset_id: str) -> Path:
+    if dataset_sessions.is_session_handle(dataset_id):
+        try:
+            return dataset_sessions.resolve_session_dataset_path(dataset_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     try:
         dataset = _catalog.require_local_dataset(dataset_id)
     except ValueError as exc:
@@ -113,7 +119,15 @@ def register_curation_routes(app: FastAPI) -> None:
     async def workflow_datasets_list() -> list[dict]:
         """List available datasets."""
         datasets = await asyncio.to_thread(_catalog.list_local_datasets)
-        return [dataset.to_dict() for dataset in datasets]
+        session_datasets = await asyncio.to_thread(
+            dataset_sessions.list_session_dataset_summaries,
+            include_remote=True,
+            include_local_directory=True,
+        )
+        return [dataset.to_dict() for dataset in datasets] + [
+            dataset_sessions.session_summary_to_dataset_dict(summary)
+            for summary in session_datasets
+        ]
 
     @app.post("/api/curation/datasets/import-hf")
     async def workflow_import_hf_dataset(
@@ -152,9 +166,20 @@ def register_curation_routes(app: FastAPI) -> None:
         are captured as a single parameter.  This route is registered after
         the fixed-prefix ``/datasets/import-*`` routes to avoid shadowing them.
         """
+        if dataset_sessions.is_session_handle(dataset_id):
+            try:
+                summary = await asyncio.to_thread(dataset_sessions.get_dataset_summary, dataset_id)
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found: {exc}") from exc
+            return dataset_sessions.session_summary_to_dataset_dict(summary)
+
+        dataset = await asyncio.to_thread(_catalog.get_local_dataset, dataset_id)
+        if dataset is not None:
+            return dataset.to_dict()
+
         try:
             dataset = await asyncio.to_thread(_catalog.resolve_dataset, dataset_id)
-        except Exception as exc:
+        except ValueError as exc:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found: {exc}") from exc
         return dataset.to_dict()
 

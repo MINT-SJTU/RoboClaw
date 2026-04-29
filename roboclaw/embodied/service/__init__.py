@@ -7,12 +7,15 @@ import threading
 from typing import Any
 
 from roboclaw.data.datasets import DatasetCatalog, datasets_root_from_manifest
-from roboclaw.embodied.board import Board, Command, SessionState
+from roboclaw.embodied.board import Board
 from roboclaw.embodied.board.board import IDLE_STATE
 from roboclaw.embodied.calibration import AutoCalibrationBatch
-from roboclaw.embodied.command import CommandBuilder
+from roboclaw.embodied.command import ActionError, CommandBuilder
+from roboclaw.embodied.embodiment.doctor import DoctorService
 from roboclaw.embodied.embodiment.hardware.monitor import (
-    HardwareMonitor, check_arm_status, check_camera_status,
+    HardwareMonitor,
+    check_arm_status,
+    check_camera_status,
 )
 from roboclaw.embodied.embodiment.lock import EmbodimentBusyError, EmbodimentFileLock
 from roboclaw.embodied.embodiment.manifest import Manifest
@@ -20,12 +23,20 @@ from roboclaw.embodied.embodiment.manifest.binding import Binding
 from roboclaw.embodied.service.capabilities import build_hardware_snapshot
 from roboclaw.embodied.service.hub import HubService
 from roboclaw.embodied.service.session import (
-    InferSession, RecordSession, ReplaySession, Session,
-    TeleopSession, TrainSession,
+    InferSession,
+    RecordSession,
+    ReplaySession,
+    Session,
+    TeleopSession,
+    TrainSession,
 )
 from roboclaw.embodied.service.session.calibrate import CalibrationSession
-from roboclaw.embodied.embodiment.doctor import DoctorService
 from roboclaw.embodied.service.session.setup import SetupSession
+from roboclaw.embodied.service.verification import (
+    PreflightVerifier,
+    VerificationRequest,
+    Verifier,
+)
 
 
 class EmbodiedService:
@@ -41,6 +52,7 @@ class EmbodiedService:
         hardware_monitor: HardwareMonitor | None = None,
         board: Board | None = None,
         manifest: Manifest | None = None,
+        preflight_verifier: Verifier | None = None,
     ) -> None:
         self._monitor = hardware_monitor
         self.board = board or Board()
@@ -53,6 +65,7 @@ class EmbodiedService:
         self._active_operation: Any | None = None
         self._active_session: Session | None = None
         self._recording_started = False
+        self._preflight_verifier = preflight_verifier or PreflightVerifier()
 
         # Sub-services
         self.calibration = CalibrationSession(self)
@@ -193,6 +206,26 @@ class EmbodiedService:
         finally:
             self._finish_active_operation(session, owner)
 
+    def _verify_inference_preflight(
+        self,
+        *,
+        argv: list[str],
+        dataset: Any,
+        num_episodes: int,
+        episode_time_s: int,
+        use_cameras: bool,
+    ) -> None:
+        result = self._preflight_verifier.verify(VerificationRequest(
+            argv=argv,
+            manifest=self.manifest,
+            dataset=dataset,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+            use_cameras=use_cameras,
+        ))
+        if not result.ok:
+            raise ActionError(result.format_violations())
+
     # -- Operations (Web entry points) --
 
     async def start_teleop(self, *, fps: int = 30, arms: str = "") -> None:
@@ -272,6 +305,13 @@ class EmbodiedService:
             arms=arms,
             use_cameras=use_cameras,
         )
+        self._verify_inference_preflight(
+            argv=argv,
+            dataset=output_dataset.runtime,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+            use_cameras=use_cameras,
+        )
         await self._start_managed_session(self.infer, owner="inferring", argv=argv)
 
     async def run_replay(
@@ -319,6 +359,13 @@ class EmbodiedService:
             arms=arms,
             use_cameras=use_cameras,
         )
+        self._verify_inference_preflight(
+            argv=argv,
+            dataset=output_dataset.runtime,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+            use_cameras=use_cameras,
+        )
         return await self._run_managed_session(
             self.infer, owner="inferring", argv=argv, tty_handoff=tty_handoff,
         )
@@ -336,15 +383,15 @@ class EmbodiedService:
 
     async def save_episode(self) -> None:
         if self._active_operation is self.record:
-            self.board.post_command(Command.SAVE_EPISODE)
+            await self.record.request_save_episode()
 
     async def discard_episode(self) -> None:
         if self._active_operation is self.record:
-            self.board.post_command(Command.DISCARD_EPISODE)
+            await self.record.request_discard_episode()
 
     async def skip_reset(self) -> None:
         if self._active_operation is self.record:
-            self.board.post_command(Command.SKIP_RESET)
+            await self.record.request_skip_reset()
 
     # -- Calibration (web) --
 
@@ -471,13 +518,20 @@ class EmbodiedService:
         return self._hardware_snapshot(manifest)
 
     def read_servo_positions(self) -> dict[str, Any]:
-        if not self._file_lock.try_shared():
-            return {"error": "busy", "arms": {}}
-        try:
-            from roboclaw.embodied.embodiment.hardware.motors import read_servo_positions
-            return read_servo_positions(self.manifest.arms)
-        finally:
-            self._file_lock.release_shared()
+        # Hold the service lock through serial I/O. This keeps same-process
+        # recording starts from releasing this service's shared file-lock fd
+        # while a worker thread is still polling the servos.
+        with self._lock:
+            busy, _ = self._busy_state_unlocked()
+            if busy:
+                return {"error": "busy", "arms": {}}
+            if not self._file_lock.try_shared():
+                return {"error": "busy", "arms": {}}
+            try:
+                from roboclaw.embodied.embodiment.hardware.motors import read_servo_positions
+                return read_servo_positions(self.manifest.arms)
+            finally:
+                self._file_lock.release_shared()
 
     # -- Shutdown --
 

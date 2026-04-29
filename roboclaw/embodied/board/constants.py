@@ -1,4 +1,4 @@
-"""Constants for session state, commands, and episode phases."""
+"""Constants for session state and commands."""
 
 from enum import StrEnum
 
@@ -22,11 +22,3 @@ class Command(StrEnum):
     STOP = "stop"
     CONFIRM = "confirm"
     RECALIBRATE = "recalibrate"
-
-
-class EpisodePhase(StrEnum):
-    RECORDING = "recording"
-    SAVING = "saving"
-    RESETTING = "resetting"
-    STOPPING = "stopping"
-    DISCARDING = "discarding"

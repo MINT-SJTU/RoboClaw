@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from roboclaw.embodied.board import Board, EpisodePhase, SessionState
+from roboclaw.embodied.board import Board, SessionState
 from roboclaw.embodied.service.session.base import Session
 
 
@@ -67,18 +67,19 @@ async def test_stop_marks_board_stopping_before_process_exits() -> None:
 
     state = session.board.state
     assert state["state"] == SessionState.IDLE
-    assert state["episode_phase"] == ""
+    assert state["record_phase"] == "idle"
+    assert state["record_pending_command"] == ""
     assert state["prepare_stage"] == ""
 
 
 @pytest.mark.asyncio
-async def test_stop_marks_recording_phase_stopping_until_cleanup() -> None:
+async def test_stop_preserves_record_phase_until_cleanup() -> None:
     session = Session(Board())
     process = FakeProcess()
     session._process = process
     await session.board.update(
         state=SessionState.RECORDING,
-        episode_phase=EpisodePhase.RECORDING,
+        record_phase="recording",
         prepare_stage="warmup",
     )
 
@@ -87,7 +88,7 @@ async def test_stop_marks_recording_phase_stopping_until_cleanup() -> None:
 
     state = session.board.state
     assert state["state"] == SessionState.STOPPING
-    assert state["episode_phase"] == EpisodePhase.STOPPING
+    assert state["record_phase"] == "recording"
     assert state["prepare_stage"] == "warmup"
 
     process.finish()
@@ -95,18 +96,19 @@ async def test_stop_marks_recording_phase_stopping_until_cleanup() -> None:
 
     idle_state = session.board.state
     assert idle_state["state"] == SessionState.IDLE
-    assert idle_state["episode_phase"] == ""
+    assert idle_state["record_phase"] == "idle"
+    assert idle_state["record_pending_command"] == ""
     assert idle_state["prepare_stage"] == ""
 
 
 @pytest.mark.asyncio
-async def test_stop_preserves_saving_phase_until_record_session_finishes() -> None:
+async def test_stop_preserves_requested_record_phase_until_cleanup() -> None:
     session = Session(Board())
     process = FakeProcess()
     session._process = process
     await session.board.update(
         state=SessionState.RECORDING,
-        episode_phase=EpisodePhase.SAVING,
+        record_phase="save_requested",
     )
 
     stop_task = asyncio.create_task(session.stop())
@@ -114,7 +116,7 @@ async def test_stop_preserves_saving_phase_until_record_session_finishes() -> No
 
     state = session.board.state
     assert state["state"] == SessionState.STOPPING
-    assert state["episode_phase"] == EpisodePhase.SAVING
+    assert state["record_phase"] == "save_requested"
 
     process.finish()
     await asyncio.wait_for(stop_task, timeout=1)

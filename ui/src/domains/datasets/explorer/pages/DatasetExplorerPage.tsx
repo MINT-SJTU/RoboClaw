@@ -676,7 +676,7 @@ function EpisodeBrowser() {
       const requestToken = ++requestTokenRef.current
       try {
         const response = await fetch(
-          `/api/explorer/episode?dataset=${encodeURIComponent(selectedDataset)}&episode_index=${episodeIndex}`,
+          `/api/explorer/episode?dataset=${encodeURIComponent(selectedDataset)}&episode_index=${episodeIndex}&preview_only=true`,
         )
         if (!response.ok) {
           throw new Error(`Failed to load episode preview (${response.status})`)

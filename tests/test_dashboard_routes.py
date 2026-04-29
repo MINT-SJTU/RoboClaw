@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import time
-from unittest.mock import patch, PropertyMock
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from roboclaw.embodied.embodiment.hardware.monitor import (
-    ArmStatus, CameraStatus, FaultType, HardwareFault,
+    ArmStatus,
+    CameraStatus,
+    FaultType,
+    HardwareFault,
 )
-from roboclaw.embodied.service import EmbodiedService
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
+from roboclaw.embodied.service import EmbodiedService
+from roboclaw.embodied.service.session.record import RecordPhase
 from roboclaw.http.routes import hardware as hardware_routes
 from roboclaw.http.routes import recovery as recovery_routes
 from roboclaw.http.routes import register_all_routes
@@ -81,7 +85,8 @@ class TestSessionStatus:
         data = resp.json()
         for field in (
             "state",
-            "episode_phase",
+            "record_phase",
+            "record_pending_command",
             "saved_episodes",
             "target_episodes",
             "dataset",
@@ -119,6 +124,19 @@ class TestSessionLifecycle:
         resp = client.post("/api/record/episode/discard")
         assert resp.status_code == 200
         assert resp.json() == {"status": "episode_discarded"}
+
+    def test_record_episode_commands_validate_phase(self, client, app):
+        service = app.state.embodied_service
+        service._active_operation = service.record
+        service.board.set_field("record_phase", RecordPhase.RESETTING)
+
+        resp = client.post("/api/record/episode/save")
+        assert resp.status_code == 400
+        assert "record phase is resetting" in resp.json()["detail"]
+
+        resp = client.post("/api/record/episode/skip-reset")
+        assert resp.status_code == 200
+        assert service.board.poll_command() == "skip_reset"
 
     def test_auto_calibration_start_returns_409_when_no_arms_exist(self, client):
         resp = client.post("/api/calibration/auto/start")
