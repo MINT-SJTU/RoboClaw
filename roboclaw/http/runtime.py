@@ -147,8 +147,6 @@ class WebRuntime:
         self._tasks.append(asyncio.create_task(self.channel_manager.start_all(), name="roboclaw-channels"))
         self._tasks.append(asyncio.create_task(self.cron.start(), name="roboclaw-cron"))
         self._tasks.append(asyncio.create_task(self.heartbeat.start(), name="roboclaw-heartbeat"))
-        if self.hw_monitor is not None:
-            self._tasks.append(asyncio.create_task(self.hw_monitor.run(), name="roboclaw-hw-monitor"))
 
     async def shutdown(self) -> None:
         """Gracefully stop all services."""

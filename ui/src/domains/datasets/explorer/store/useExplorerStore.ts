@@ -310,7 +310,7 @@ export function buildExplorerRefKey(ref: ExplorerDatasetRef | null | undefined):
   return `${ref.source}|${ref.dataset?.trim() ?? ''}|${ref.path?.trim() ?? ''}`
 }
 
-function buildExplorerQuery(ref: ExplorerDatasetRef): string {
+export function buildExplorerQuery(ref: ExplorerDatasetRef): string {
   const params = new URLSearchParams()
   params.set('source', ref.source)
   if (ref.dataset) {

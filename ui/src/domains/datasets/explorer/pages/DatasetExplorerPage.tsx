@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
 import {
+  buildExplorerQuery,
   buildExplorerRefKey,
   listExplorerDatasets,
   searchDatasetSuggestions,
@@ -17,7 +18,7 @@ import {
 } from '@/domains/datasets/explorer/store/useExplorerStore'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
 import { ActionButton, GlassPanel } from '@/shared/ui'
-import { DatasetInsightStack } from '../components/DatasetInsightStack'
+import { DatasetInsightStack } from '@/domains/datasets/explorer/components/DatasetInsightStack'
 
 function cn(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
@@ -168,18 +169,6 @@ function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: numb
   const duration = detail.summary.duration_s || 1
   const progress = Math.min(Math.max(videoCurrentTime / duration, 0), 1)
   return Math.round(progress * (totalPoints - 1))
-}
-
-function buildExplorerQuery(ref: ExplorerDatasetRef): string {
-  const params = new URLSearchParams()
-  params.set('source', ref.source)
-  if (ref.dataset) {
-    params.set('dataset', ref.dataset)
-  }
-  if (ref.path) {
-    params.set('path', ref.path)
-  }
-  return params.toString()
 }
 
 function EpisodeHoverPreview({
@@ -697,13 +686,19 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
       const requestToken = ++requestTokenRef.current
       try {
         const response = await fetch(
-          `/api/explorer/episode?${buildExplorerQuery(datasetRef)}&episode_index=${episodeIndex}`,
+          `/api/explorer/episode?${buildExplorerQuery(datasetRef)}&episode_index=${episodeIndex}&preview=true`,
         )
         if (!response.ok) {
           throw new Error(`Failed to load episode preview (${response.status})`)
         }
         const detail: EpisodeDetail = await response.json()
         previewCacheRef.current.set(episodeIndex, detail)
+        if (previewCacheRef.current.size > 20) {
+          const oldestEpisodeIndex = previewCacheRef.current.keys().next().value
+          if (oldestEpisodeIndex !== undefined) {
+            previewCacheRef.current.delete(oldestEpisodeIndex)
+          }
+        }
         if (requestToken === requestTokenRef.current) {
           setHoveredPreview(detail)
         }
@@ -764,7 +759,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
               }
             }}
             onMouseEnter={() => scheduleHoverPreview(ep.episode_index)}
-            onMouseMove={() => scheduleHoverPreview(ep.episode_index)}
             onMouseLeave={scheduleClosePreview}
           >
             <span className="explorer-episode-item__idx">#{ep.episode_index}</span>
@@ -1096,6 +1090,7 @@ export default function DatasetExplorerView() {
     if (!nextRef.dataset && !nextRef.path) {
       return
     }
+    setPageState({ prepareError: '' })
     if (nextSource === 'remote' && nextRef.dataset) {
       setPageState({
         datasetIdInput: nextRef.dataset,
@@ -1116,8 +1111,14 @@ export default function DatasetExplorerView() {
     setDatasetSuggestions([])
     setHighlightedSuggestionIndex(-1)
     await loadDataset(nextRef)
-    if (nextRef.dataset) {
-      await selectDataset(nextRef.dataset).catch(() => {})
+    if (nextRef.source !== 'remote' && nextRef.dataset) {
+      try {
+        await selectDataset(nextRef.dataset)
+      } catch (error) {
+        setPageState({
+          prepareError: error instanceof Error ? error.message : t('qualityRunFailed'),
+        })
+      }
     }
   }
 
@@ -1218,6 +1219,34 @@ export default function DatasetExplorerView() {
   }
 
   const datasetSummary = summaryForSource?.summary
+  const modalitiesNode = dashboardLoadingForSource && !dashboardForSource ? (
+    <div className="explorer-empty">{t('running')}...</div>
+  ) : dashboardForSource ? (
+    <ModalityChips items={dashboardForSource.modality_summary} />
+  ) : (
+    <div className="explorer-empty">{dashboardErrorForSource || t('noStats')}</div>
+  )
+  const featureStatsNode = dashboardForSource ? (
+    <>
+      <p className="explorer-section__sub">
+        {dashboardForSource.feature_names.length} features
+        {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+          ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
+      </p>
+      <FeatureStatsTable stats={dashboardForSource.feature_stats} />
+    </>
+  ) : (
+    <div className="explorer-empty">
+      {dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}
+    </div>
+  )
+  const typeDistributionNode = dashboardForSource ? (
+    <TypeDistribution items={dashboardForSource.feature_type_distribution} />
+  ) : (
+    <div className="explorer-empty">
+      {dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}
+    </div>
+  )
 
   return (
     <div className="page-enter quality-view">
@@ -1476,51 +1505,9 @@ export default function DatasetExplorerView() {
               episodePage={episodePageForSource}
               dashboardLoading={dashboardLoadingForSource}
               dashboardError={dashboardErrorForSource}
-              modalitiesNode={
-                <div className="explorer-section">
-                  <h3>{t('modalities')}</h3>
-                  {dashboardForSource ? (
-                    <ModalityChips items={dashboardForSource.modality_summary} />
-                  ) : (
-                    <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
-                  )}
-                </div>
-              }
-              featureStatsNode={
-                <div className="explorer-section">
-                  <h3>{t('featureStats')}</h3>
-                  {dashboardForSource ? (
-                    <>
-                      <p className="explorer-section__sub">
-                        {dashboardForSource.feature_names.length} features
-                        {dashboardForSource.dataset_stats.features_with_stats > 0 &&
-                          ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
-                      </p>
-                      <FeatureStatsTable stats={dashboardForSource.feature_stats} />
-                    </>
-                  ) : (
-                    <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
-                  )}
-                </div>
-              }
-              typeDistributionNode={
-                <div className="explorer-section">
-                  <h3>{t('featureType')}</h3>
-                  {dashboardForSource ? (
-                    <>
-                      <TypeDistribution items={dashboardForSource.feature_type_distribution} />
-                      <div className="explorer-sidebar-stats dataset-stack-file-stats">
-                        <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
-                        <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
-                        <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
-                        <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
-                  )}
-                </div>
-              }
+              modalitiesNode={modalitiesNode}
+              featureStatsNode={featureStatsNode}
+              typeDistributionNode={typeDistributionNode}
             />
           </div>
           <aside className="dataset-explorer-workspace__episodes" aria-label={t('episodeBrowser')}>

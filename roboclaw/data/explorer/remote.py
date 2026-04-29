@@ -9,25 +9,23 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-_HF_HOME = Path(
-    os.getenv(
-        "ROBOCLAW_HF_HOME",
-        Path.home() / ".roboclaw" / "cache" / "huggingface",
-    )
-)
-os.environ.setdefault("HF_HOME", str(_HF_HOME))
-os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-
 import httpx
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi
+from huggingface_hub.errors import HfHubHTTPError, HFValidationError, RepositoryNotFoundError
+from lerobot.datasets.utils import DEFAULT_DATA_PATH, DEFAULT_VIDEO_PATH
 from loguru import logger
 
-from roboclaw.data.curation.features import build_joint_trajectory_payload, resolve_timestamp
+from roboclaw.data.curation.features import (
+    build_joint_trajectory_payload,
+    first_present_value,
+    resolve_timestamp,
+)
 from roboclaw.data.datasets import extract_action_names, extract_state_names
 from roboclaw.data.explorer.local import (
     build_explorer_episode_page_from_artifacts,
@@ -47,12 +45,22 @@ _HF_VIEWER_BASE = os.getenv(
 ).rstrip("/")
 _HF_TOKEN = os.getenv("HF_TOKEN", "")
 _VIEWER_TIMEOUT = 30
-_HF_CACHE_DIR = Path(
-    os.getenv(
-        "ROBOCLAW_HF_CACHE_DIR",
-        _HF_HOME / "hub",
-    )
-)
+_VIEWER_PAGE_SIZE = 100
+_VIEWER_RETRY_DELAYS = (0.3, 0.8)
+_EPISODE_META_INT_FIELDS = {
+    "episode_index": ("episode_index", "0"),
+    "length": ("length", "9"),
+    "data/chunk_index": ("data/chunk_index", "data_chunk_index", "1"),
+    "data/file_index": ("data/file_index", "data_file_index", "2"),
+    "dataset_from_index": ("dataset_from_index", "3"),
+    "dataset_to_index": ("dataset_to_index", "4"),
+    "video_chunk_index": ("video_chunk_index", "5"),
+    "video_file_index": ("video_file_index", "6"),
+}
+_EPISODE_META_FLOAT_FIELDS = {
+    "video_from_timestamp": ("video_from_timestamp", "7"),
+    "video_to_timestamp": ("video_to_timestamp", "8"),
+}
 
 
 def _pyarrow_modules() -> tuple[Any, Any]:
@@ -78,16 +86,15 @@ def search_remote_datasets(query: str, limit: int = 8) -> list[dict[str, Any]]:
             full=False,
             token=_HF_TOKEN or None,
         )
-    except Exception as exc:
+        for item in items:
+            dataset_id = str(getattr(item, "id", "") or "").strip()
+            if not dataset_id or dataset_id in seen:
+                continue
+            seen.add(dataset_id)
+            suggestions.append({"id": dataset_id})
+    except (HFValidationError, HfHubHTTPError, RepositoryNotFoundError) as exc:
         logger.warning("HF dataset suggestion lookup failed for '{}': {}", needle, exc)
         return []
-
-    for item in items:
-        dataset_id = str(getattr(item, "id", "") or "").strip()
-        if not dataset_id or dataset_id in seen:
-            continue
-        seen.add(dataset_id)
-        suggestions.append({"id": dataset_id})
     return suggestions
 
 
@@ -234,102 +241,14 @@ def _read_parquet_rows_from_bytes(raw: bytes, columns: list[str] | None = None) 
     return table.to_pylist()
 
 
-def _download_repo_file_to_cache(dataset: str, filename: str) -> Path | None:
-    try:
-        _HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        return Path(
-            hf_hub_download(
-                repo_id=dataset,
-                filename=filename,
-                repo_type="dataset",
-                cache_dir=str(_HF_CACHE_DIR),
-                token=_HF_TOKEN or None,
-            )
-        )
-    except Exception as exc:
-        logger.debug("HF cache download unavailable for '{}:{}': {}", dataset, filename, exc)
-        return None
-
-
-def _file_valid_columns(parquet_file: pq.ParquetFile, columns: list[str] | None) -> list[str] | None:
-    if columns is None:
-        return None
-    available_columns = parquet_file.schema_arrow.names
-    valid_columns = [column for column in columns if column in available_columns]
-    return valid_columns or None
-
-
-def _read_parquet_rows_from_file(
-    path: Path,
-    columns: list[str] | None = None,
-    *,
-    episode_meta: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    pa, pq = _pyarrow_modules()
-    parquet_file = pq.ParquetFile(path)
-    valid_columns = _file_valid_columns(parquet_file, columns)
-
-    start = _safe_int(episode_meta.get("dataset_from_index")) if episode_meta else None
-    stop = _safe_int(episode_meta.get("dataset_to_index")) if episode_meta else None
-    if start is None or stop is None or stop <= start:
-        table = parquet_file.read(columns=valid_columns)
-        return table.to_pylist()
-
-    index_preview = parquet_file.read_row_groups([0], columns=["index"]).slice(0, 1).to_pylist()
-    file_start_index = _safe_int(index_preview[0].get("index")) if index_preview else None
-    if file_start_index is None:
-        table = parquet_file.read(columns=valid_columns)
-        return table.to_pylist()
-
-    local_start = max(0, start - file_start_index)
-    local_stop = max(local_start, stop - file_start_index)
-    if local_stop <= local_start:
-        return []
-
-    row_group_tables: list[pa.Table] = []
-    offset = 0
-    for row_group_index in range(parquet_file.metadata.num_row_groups):
-        row_group_rows = parquet_file.metadata.row_group(row_group_index).num_rows
-        row_group_start = offset
-        row_group_stop = offset + row_group_rows
-        if row_group_stop <= local_start:
-            offset = row_group_stop
-            continue
-        if row_group_start >= local_stop:
-            break
-
-        group_table = parquet_file.read_row_groups([row_group_index], columns=valid_columns)
-        slice_start = max(0, local_start - row_group_start)
-        slice_stop = min(row_group_rows, local_stop - row_group_start)
-        row_group_tables.append(group_table.slice(slice_start, slice_stop - slice_start))
-        offset = row_group_stop
-
-    if not row_group_tables:
-        return []
-
-    if len(row_group_tables) == 1:
-        return row_group_tables[0].to_pylist()
-    return pa.concat_tables(row_group_tables).to_pylist()
-
-
 def _normalize_episode_meta_value(value: Any) -> Any:
     if isinstance(value, (bool, int, float, str)):
         return value
     if value is None:
         return None
     if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            return value
+        return value.item()
     return value
-
-
-def _first_present(row: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in row and row.get(key) is not None:
-            return row.get(key)
-    return None
 
 
 def _normalize_episode_meta_row(
@@ -341,45 +260,19 @@ def _normalize_episode_meta_row(
         for key, value in row.items()
     }
 
-    episode_index = _safe_int(_first_present(normalized, "episode_index", "0"))
-    if episode_index is not None:
-        normalized["episode_index"] = episode_index
+    int_values: dict[str, int | None] = {}
+    for field, aliases in _EPISODE_META_INT_FIELDS.items():
+        value = _safe_int(first_present_value(normalized, list(aliases)))
+        int_values[field] = value
+        if value is not None:
+            normalized[field] = value
 
-    length = _safe_int(_first_present(normalized, "length", "9"))
-    if length is not None:
-        normalized["length"] = length
-
-    data_chunk_index = _safe_int(_first_present(normalized, "data/chunk_index", "data_chunk_index", "1"))
-    if data_chunk_index is not None:
-        normalized["data/chunk_index"] = data_chunk_index
-
-    data_file_index = _safe_int(_first_present(normalized, "data/file_index", "data_file_index", "2"))
-    if data_file_index is not None:
-        normalized["data/file_index"] = data_file_index
-
-    dataset_from_index = _safe_int(_first_present(normalized, "dataset_from_index", "3"))
-    if dataset_from_index is not None:
-        normalized["dataset_from_index"] = dataset_from_index
-
-    dataset_to_index = _safe_int(_first_present(normalized, "dataset_to_index", "4"))
-    if dataset_to_index is not None:
-        normalized["dataset_to_index"] = dataset_to_index
-
-    video_chunk_index = _safe_int(_first_present(normalized, "video_chunk_index", "5"))
-    if video_chunk_index is not None:
-        normalized["video_chunk_index"] = video_chunk_index
-
-    video_file_index = _safe_int(_first_present(normalized, "video_file_index", "6"))
-    if video_file_index is not None:
-        normalized["video_file_index"] = video_file_index
-
-    video_from_timestamp = _safe_float(_first_present(normalized, "video_from_timestamp", "7"))
-    if video_from_timestamp is not None:
-        normalized["video_from_timestamp"] = video_from_timestamp
-
-    video_to_timestamp = _safe_float(_first_present(normalized, "video_to_timestamp", "8"))
-    if video_to_timestamp is not None:
-        normalized["video_to_timestamp"] = video_to_timestamp
+    float_values: dict[str, float | None] = {}
+    for field, aliases in _EPISODE_META_FLOAT_FIELDS.items():
+        value = _safe_float(first_present_value(normalized, list(aliases)))
+        float_values[field] = value
+        if value is not None:
+            normalized[field] = value
 
     for video_key in _video_feature_keys(info):
         prefix = f"videos/{video_key}/"
@@ -390,25 +283,25 @@ def _normalize_episode_meta_row(
 
         chunk_index = _safe_int(normalized.get(chunk_key))
         if chunk_index is None:
-            chunk_index = video_chunk_index
+            chunk_index = int_values.get("video_chunk_index")
         if chunk_index is not None:
             normalized[chunk_key] = chunk_index
 
         file_index = _safe_int(normalized.get(file_key))
         if file_index is None:
-            file_index = video_file_index
+            file_index = int_values.get("video_file_index")
         if file_index is not None:
             normalized[file_key] = file_index
 
         from_timestamp = _safe_float(normalized.get(from_key))
         if from_timestamp is None:
-            from_timestamp = video_from_timestamp
+            from_timestamp = float_values.get("video_from_timestamp")
         if from_timestamp is not None:
             normalized[from_key] = from_timestamp
 
         to_timestamp = _safe_float(normalized.get(to_key))
         if to_timestamp is None:
-            to_timestamp = video_to_timestamp
+            to_timestamp = float_values.get("video_to_timestamp")
         if to_timestamp is not None:
             normalized[to_key] = to_timestamp
 
@@ -435,7 +328,7 @@ def _fetch_optional_bytes(url: str) -> bytes | None:
         resp = httpx.get(url, headers=_viewer_headers(), timeout=_VIEWER_TIMEOUT, follow_redirects=True)
         resp.raise_for_status()
         return resp.content
-    except Exception:
+    except httpx.HTTPError:
         return None
 
 
@@ -445,9 +338,9 @@ def _get_remote_dataset_repo_index(dataset: str) -> dict[str, Any]:
     return {
         "dataset": str(info.id or dataset),
         "siblings": [
-        {"rfilename": item.rfilename}
-        for item in (info.siblings or [])
-        if getattr(item, "rfilename", None)
+            {"rfilename": item.rfilename}
+            for item in (info.siblings or [])
+            if getattr(item, "rfilename", None)
         ],
     }
 
@@ -568,23 +461,24 @@ def _viewer_headers() -> dict[str, str]:
 
 def _viewer_fetch_json(url: str) -> dict[str, Any]:
     """Fetch JSON from the HF Dataset Viewer API with retry."""
-    retries = [0.3, 0.8]
     last_exc: Exception | None = None
-    for attempt in range(1 + len(retries)):
+    for attempt in range(1 + len(_VIEWER_RETRY_DELAYS)):
         try:
             resp = httpx.get(url, headers=_viewer_headers(), timeout=_VIEWER_TIMEOUT)
-            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < len(retries):
-                import time
-                time.sleep(retries[attempt])
+            if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < len(
+                _VIEWER_RETRY_DELAYS
+            ):
+                time.sleep(_VIEWER_RETRY_DELAYS[attempt])
                 continue
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPError as exc:
             last_exc = exc
-            if attempt < len(retries):
-                import time
-                time.sleep(retries[attempt])
-    raise last_exc  # type: ignore[misc]
+            if attempt < len(_VIEWER_RETRY_DELAYS):
+                time.sleep(_VIEWER_RETRY_DELAYS[attempt])
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Viewer API request failed without an HTTP exception")
 
 
 @lru_cache(maxsize=32)
@@ -607,17 +501,38 @@ def _viewer_fetch_episode_rows(
     length: int = 500,
 ) -> list[dict[str, Any]]:
     """Fetch rows for a single episode via the Viewer /filter endpoint."""
+    remaining = max(0, int(length or 0))
+    if remaining == 0:
+        return []
+
     where = f'"episode_index"={episode_index}'
-    url = (
-        f"{_HF_VIEWER_BASE}/filter"
-        f"?dataset={quote(dataset, safe='')}"
-        f"&config={quote(config, safe='')}"
-        f"&split={quote(split, safe='')}"
-        f"&where={quote(where, safe='')}"
-        f"&offset=0&length={length}"
-    )
-    payload = _viewer_fetch_json(url)
-    return [entry.get("row", {}) for entry in payload.get("rows", [])]
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while remaining > 0:
+        page_size = min(_VIEWER_PAGE_SIZE, remaining)
+        url = (
+            f"{_HF_VIEWER_BASE}/filter"
+            f"?dataset={quote(dataset, safe='')}"
+            f"&config={quote(config, safe='')}"
+            f"&split={quote(split, safe='')}"
+            f"&where={quote(where, safe='')}"
+            f"&offset={offset}&length={page_size}"
+        )
+        payload = _viewer_fetch_json(url)
+        page_rows = [
+            entry.get("row", {})
+            for entry in payload.get("rows", [])
+            if isinstance(entry, dict)
+        ]
+        if not page_rows:
+            break
+        rows.extend(row for row in page_rows if isinstance(row, dict))
+        fetched = len(page_rows)
+        if fetched < page_size:
+            break
+        offset += fetched
+        remaining -= fetched
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +659,7 @@ def _resolve_shared_video_clips(
     if not episode_meta:
         return []
 
-    path_template = info.get("video_path")
+    path_template = info.get("video_path") or DEFAULT_VIDEO_PATH
     videos: list[dict[str, Any]] = []
     for video_key in _video_feature_keys(info):
         prefix = f"videos/{video_key}/"
@@ -764,7 +679,11 @@ def _resolve_shared_video_clips(
             file_index=file_index,
         )
         if not path:
-            path = f"videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4"
+            path = DEFAULT_VIDEO_PATH.format(
+                video_key=video_key,
+                chunk_index=chunk_index,
+                file_index=file_index,
+            )
 
         videos.append({
             "path": path,
@@ -795,19 +714,21 @@ def _resolve_shared_data_path(info: dict[str, Any], episode_meta: dict[str, Any]
         return None
 
     path = _render_repo_path(
-        info.get("data_path"),
+        info.get("data_path") or DEFAULT_DATA_PATH,
         chunk_index=chunk_index,
         file_index=file_index,
     )
     if path:
         return path
-    return f"data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
+    return DEFAULT_DATA_PATH.format(chunk_index=chunk_index, file_index=file_index)
 
 
 def _select_rows_for_episode(
     rows: list[dict[str, Any]],
     episode_index: int,
     episode_meta: dict[str, Any] | None,
+    *,
+    allow_unfiltered: bool = False,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -836,7 +757,7 @@ def _select_rows_for_episode(
     if filtered:
         return filtered
 
-    return rows
+    return rows if allow_unfiltered else []
 
 
 def load_remote_episode_detail(
@@ -857,29 +778,27 @@ def load_remote_episode_detail(
     # Try the Viewer API first (zero-download)
     try:
         config, split = _viewer_get_split(dataset)
-        rows = _viewer_fetch_episode_rows(dataset, config, split, episode_index)
+        expected_length = _safe_int(episode_meta.get("length")) if episode_meta else None
+        rows = _viewer_fetch_episode_rows(dataset, config, split, episode_index, expected_length or 500)
         if rows:
             logger.info("Viewer API returned {} rows for {}#{}", len(rows), dataset, episode_index)
             return _build_episode_payload(rows, info, episode_index, videos)
-    except Exception:
-        logger.debug("Viewer API unavailable for '{}', falling back to remote parquet bytes", dataset)
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.debug("Viewer API unavailable for '{}': {}", dataset, exc)
 
-    # Fallback: fetch the single episode parquet over HTTP and parse in-memory
-    parquet_path = _resolve_shared_data_path(info, episode_meta)
-    if not parquet_path:
-        chunk = f"{episode_index // chunks_size:03d}"
-        parquet_path = f"data/chunk-{chunk}/episode_{episode_index:06d}.parquet"
-    local_parquet = _download_repo_file_to_cache(dataset, parquet_path)
-    if local_parquet is not None:
-        rows = _read_parquet_rows_from_file(
-            local_parquet,
-            columns=_episode_data_columns(info),
-            episode_meta=episode_meta,
+    if _resolve_shared_data_path(info, episode_meta):
+        logger.debug(
+            "Viewer API unavailable for shared parquet episode '{}#{}'; returning metadata preview",
+            dataset,
+            episode_index,
         )
-    else:
-        parquet_bytes = _fetch_optional_bytes(_repo_file_url(dataset, parquet_path))
-        rows = _read_parquet_rows_from_bytes(parquet_bytes or b"", columns=_episode_data_columns(info))
-    rows = _select_rows_for_episode(rows, episode_index, episode_meta)
+        return _build_episode_preview_payload(info, episode_index, videos, episode_meta)
+
+    chunk = f"{episode_index // chunks_size:03d}"
+    parquet_path = f"data/chunk-{chunk}/episode_{episode_index:06d}.parquet"
+    parquet_bytes = _fetch_optional_bytes(_repo_file_url(dataset, parquet_path))
+    rows = _read_parquet_rows_from_bytes(parquet_bytes or b"", columns=_episode_data_columns(info))
+    rows = _select_rows_for_episode(rows, episode_index, episode_meta, allow_unfiltered=True)
 
     return _build_episode_payload(rows, info, episode_index, videos)
 
