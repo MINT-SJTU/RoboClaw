@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
@@ -17,6 +17,14 @@ import {
 } from '@/domains/datasets/explorer/store/useExplorerStore'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
 import { ActionButton, GlassPanel } from '@/shared/ui'
+import {
+  clampAbsolutePlaybackTime,
+  formatClipWindowLabel,
+  getClipStart,
+  getRelativePlaybackTime,
+  shouldLoopVideo,
+  type EpisodeVideo,
+} from './datasetExplorerPlayback'
 import { DatasetInsightStack } from '../components/DatasetInsightStack'
 
 function cn(...values: Array<string | false | null | undefined>) {
@@ -144,19 +152,39 @@ function getTrajectoryTimeBounds(detail: EpisodeDetail): [number, number] {
   return [0, duration]
 }
 
-function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: number): number {
+interface PreparedJointChart {
+  jointName: string
+  stateValues: number[]
+  actionValues: number[]
+  statePoints: string
+  actionPoints: string
+  yMaxLabel: string
+  yMidLabel: string
+  yMinLabel: string
+}
+
+function getNearestTrajectoryIndexForTime(
+  detail: EpisodeDetail,
+  relativeTime: number,
+): number {
   const timeValues = detail.joint_trajectory.time_values
   if (timeValues.length > 0) {
-    let nearestIndex = 0
-    let nearestDistance = Number.POSITIVE_INFINITY
-    timeValues.forEach((value, index) => {
-      const distance = Math.abs(value - videoCurrentTime)
-      if (distance < nearestDistance) {
-        nearestDistance = distance
-        nearestIndex = index
+    let low = 0
+    let high = timeValues.length - 1
+
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2)
+      if (timeValues[mid] < relativeTime) {
+        low = mid + 1
+      } else {
+        high = mid
       }
-    })
-    return nearestIndex
+    }
+
+    const previous = Math.max(low - 1, 0)
+    return Math.abs(timeValues[previous] - relativeTime) <= Math.abs(timeValues[low] - relativeTime)
+      ? previous
+      : low
   }
 
   const firstJoint = detail.joint_trajectory.joint_trajectories[0]
@@ -166,8 +194,65 @@ function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: numb
   )
   if (totalPoints <= 1) return 0
   const duration = detail.summary.duration_s || 1
-  const progress = Math.min(Math.max(videoCurrentTime / duration, 0), 1)
+  const progress = Math.min(Math.max(relativeTime / duration, 0), 1)
   return Math.round(progress * (totalPoints - 1))
+}
+
+function buildPreparedJointCharts(
+  jointTrajectories: EpisodeDetail['joint_trajectory']['joint_trajectories'],
+): PreparedJointChart[] {
+  return jointTrajectories.map((joint) => {
+    const actionValues = joint.action_values.map((value) => value ?? 0)
+    const stateValues = joint.state_values.map((value) => value ?? 0)
+    const allValues = [...actionValues, ...stateValues]
+    const minValue = allValues.length > 0 ? Math.min(...allValues) : 0
+    const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1
+    const padding = (maxValue - minValue || 1) * 0.1
+    const yMin = minValue - padding
+    const yMax = maxValue + padding
+    const yRange = yMax - yMin || 1
+
+    const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
+    const buildPolyline = (values: number[]) =>
+      values
+        .map((value, index) => {
+          const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
+          return `${x},${toY(value)}`
+        })
+        .join(' ')
+
+    return {
+      jointName: joint.joint_name,
+      stateValues,
+      actionValues,
+      statePoints: buildPolyline(stateValues),
+      actionPoints: buildPolyline(actionValues),
+      yMaxLabel: yMax.toFixed(2),
+      yMidLabel: ((yMax + yMin) / 2).toFixed(2),
+      yMinLabel: yMin.toFixed(2),
+    }
+  })
+}
+
+function syncVideoIntoClipWindow(
+  element: HTMLVideoElement,
+  video: EpisodeVideo | null | undefined,
+  options: { loopToStart?: boolean; forceSeek?: boolean } = {},
+): number {
+  const nextTime = clampAbsolutePlaybackTime(
+    video,
+    element.currentTime,
+    element.duration,
+    { loopToStart: options.loopToStart },
+  )
+  if (options.forceSeek || Math.abs(element.currentTime - nextTime) > 0.08) {
+    try {
+      element.currentTime = nextTime
+    } catch (_error) {
+      // Ignore currentTime assignment failures until metadata is ready.
+    }
+  }
+  return nextTime
 }
 
 function buildExplorerQuery(ref: ExplorerDatasetRef): string {
@@ -182,42 +267,123 @@ function buildExplorerQuery(ref: ExplorerDatasetRef): string {
   return params.toString()
 }
 
-function EpisodeHoverPreview({
+function EpisodePlaybackSurface({
   detail,
-  loading,
-  error,
   playVideo,
-  videoCurrentTime,
-  onVideoTimeUpdate,
-  onClose,
-  onMouseEnter,
-  onMouseLeave,
+  emptyLabel,
 }: {
-  detail: EpisodeDetail | null
-  loading: boolean
-  error: string
+  detail: EpisodeDetail
   playVideo: boolean
-  videoCurrentTime: number
-  onVideoTimeUpdate: (seconds: number) => void
-  onClose: () => void
-  onMouseEnter: () => void
-  onMouseLeave: () => void
+  emptyLabel: string
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const syncLockRef = useRef(false)
-  const jointTrajectories = detail?.joint_trajectory.joint_trajectories ?? []
-  const [timeMin, timeMax] = detail ? getTrajectoryTimeBounds(detail) : [0, 0]
+  const lastTimelineTimeRef = useRef<number>(-1)
+  const timelineFrameRef = useRef<number | null>(null)
+  const jointTrajectories = detail.joint_trajectory.joint_trajectories
+  const preparedJointCharts = useMemo(
+    () => buildPreparedJointCharts(jointTrajectories),
+    [jointTrajectories],
+  )
+  const [timeMin, timeMax] = getTrajectoryTimeBounds(detail)
   const timeRange = timeMax - timeMin || 1
-  const currentIndex = detail ? getNearestTrajectoryIndex(detail, videoCurrentTime) : 0
-  const currentTimePercent = detail
-    ? Math.min(Math.max(((videoCurrentTime - timeMin) / timeRange) * 100, 0), 100)
-    : 0
 
   useEffect(() => {
-    videoRefs.current = []
-  }, [detail?.episode_index])
+    lastTimelineTimeRef.current = -1
+    if (timelineFrameRef.current != null) {
+      window.cancelAnimationFrame(timelineFrameRef.current)
+      timelineFrameRef.current = null
+    }
+  }, [detail.episode_index])
 
   useEffect(() => {
+    return () => {
+      if (timelineFrameRef.current != null) {
+        window.cancelAnimationFrame(timelineFrameRef.current)
+      }
+    }
+  }, [])
+
+  const paintTimeline = (relativeTime: number, options: { force?: boolean } = {}) => {
+    if (
+      !options.force &&
+      lastTimelineTimeRef.current >= 0 &&
+      Math.abs(relativeTime - lastTimelineTimeRef.current) < 0.008
+    ) {
+      return
+    }
+    lastTimelineTimeRef.current = relativeTime
+
+    const root = rootRef.current
+    if (!root) return
+
+    const currentTimePercent = Math.min(
+      Math.max(((relativeTime - timeMin) / timeRange) * 100, 0),
+      100,
+    )
+    root
+      .querySelectorAll<SVGLineElement>('[data-trajectory-cursor]')
+      .forEach((line) => {
+        line.setAttribute('x1', String(currentTimePercent))
+        line.setAttribute('x2', String(currentTimePercent))
+      })
+
+    const currentIndex = getNearestTrajectoryIndexForTime(detail, relativeTime)
+    preparedJointCharts.forEach((joint, index) => {
+      const currentNode = root.querySelector<HTMLElement>(
+        `[data-trajectory-current="${index}"]`,
+      )
+      if (!currentNode) return
+      const currentState = joint.stateValues[Math.min(currentIndex, joint.stateValues.length - 1)]
+      const currentAction = joint.actionValues[Math.min(currentIndex, joint.actionValues.length - 1)]
+      currentNode.textContent = `S ${formatAngle(currentState)} / A ${formatAngle(currentAction)}`
+    })
+  }
+
+  useEffect(() => {
+    paintTimeline(0, { force: true })
+  }, [detail, preparedJointCharts])
+
+  useEffect(() => {
+    const timelineLeaderIndex = 0
+    const updateTimelineFrom = (
+      index: number,
+      absoluteTime: number,
+      options: { force?: boolean } = {},
+    ) => {
+      if (!options.force && index !== timelineLeaderIndex) {
+        return
+      }
+      const relativeTime = getRelativePlaybackTime(getVideoMeta(index), absoluteTime)
+      paintTimeline(relativeTime, options)
+    }
+
+    const getVideoMeta = (index: number): EpisodeVideo | null => detail.videos[index] ?? null
+    const stopTimelineLoop = () => {
+      if (timelineFrameRef.current != null) {
+        window.cancelAnimationFrame(timelineFrameRef.current)
+        timelineFrameRef.current = null
+      }
+    }
+    const startTimelineLoop = () => {
+      if (timelineFrameRef.current != null) {
+        return
+      }
+      const tick = () => {
+        const leader = videoRefs.current[timelineLeaderIndex]
+        if (!leader || leader.paused) {
+          timelineFrameRef.current = null
+          return
+        }
+        const absoluteTime = syncVideoIntoClipWindow(leader, getVideoMeta(timelineLeaderIndex), {
+          loopToStart: true,
+        })
+        updateTimelineFrom(timelineLeaderIndex, absoluteTime)
+        timelineFrameRef.current = window.requestAnimationFrame(tick)
+      }
+      timelineFrameRef.current = window.requestAnimationFrame(tick)
+    }
     const syncFromSource = (
       sourceIndex: number,
       options: { forceSeek?: boolean } = {},
@@ -226,22 +392,34 @@ function EpisodeHoverPreview({
       if (!source || syncLockRef.current) return
 
       syncLockRef.current = true
-      const sourceTime = source.currentTime
+      const sourceMeta = getVideoMeta(sourceIndex)
+      const sourceAbsoluteTime = syncVideoIntoClipWindow(source, sourceMeta, {
+        loopToStart: !source.paused && playVideo,
+        forceSeek: options.forceSeek,
+      })
+      const sourceTime = getRelativePlaybackTime(sourceMeta, sourceAbsoluteTime)
       const sourcePaused = source.paused
       const sourceRate = source.playbackRate
 
       videoRefs.current.forEach((target, targetIndex) => {
         if (!target || targetIndex === sourceIndex) return
+        const targetMeta = getVideoMeta(targetIndex)
 
         if (target.playbackRate !== sourceRate) {
           target.playbackRate = sourceRate
         }
 
+        const targetAbsoluteTime = clampAbsolutePlaybackTime(
+          targetMeta,
+          getClipStart(targetMeta) + sourceTime,
+          target.duration,
+          { loopToStart: !sourcePaused && playVideo },
+        )
         const shouldSeek =
-          options.forceSeek || Math.abs(target.currentTime - sourceTime) > 0.08
+          options.forceSeek || Math.abs(target.currentTime - targetAbsoluteTime) > 0.08
         if (shouldSeek) {
           try {
-            target.currentTime = sourceTime
+            target.currentTime = targetAbsoluteTime
           } catch (_error) {
             // Ignore currentTime assignment failures until metadata is ready.
           }
@@ -270,22 +448,36 @@ function EpisodeHoverPreview({
 
       const handlePlay = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { loopToStart: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
+        if (index === timelineLeaderIndex) {
+          startTimelineLoop()
+        }
       }
       const handlePause = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta)
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index)
+        if (index === timelineLeaderIndex) {
+          stopTimelineLoop()
+        }
       }
       const handleSeeking = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { forceSeek: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
       }
       const handleSeeked = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { forceSeek: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
       }
       const handleRateChange = () => {
@@ -294,11 +486,23 @@ function EpisodeHoverPreview({
       }
       const handleTimeUpdate = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, {
+          loopToStart: !video.paused,
+          forceSeek: false,
+        })
+        updateTimelineFrom(index, absoluteTime)
+        if (index !== timelineLeaderIndex) {
+          return
+        }
         syncFromSource(index)
+        startTimelineLoop()
       }
       const handleLoadedMetadata = () => {
         if (syncLockRef.current) return
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { forceSeek: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
       }
 
@@ -321,10 +525,23 @@ function EpisodeHoverPreview({
       })
     })
 
+    const leader = videoRefs.current[timelineLeaderIndex]
+    if (leader) {
+      const leaderMeta = getVideoMeta(timelineLeaderIndex)
+      const absoluteTime = syncVideoIntoClipWindow(leader, leaderMeta, {
+        loopToStart: !leader.paused,
+      })
+      updateTimelineFrom(timelineLeaderIndex, absoluteTime, { force: true })
+      if (!leader.paused) {
+        startTimelineLoop()
+      }
+    }
+
     return () => {
       listeners.forEach((cleanup) => cleanup())
+      stopTimelineLoop()
     }
-  }, [detail?.episode_index, onVideoTimeUpdate, playVideo])
+  }, [detail, paintTimeline, playVideo])
 
   useEffect(() => {
     const videos = videoRefs.current.filter((video): video is HTMLVideoElement => Boolean(video))
@@ -337,14 +554,15 @@ function EpisodeHoverPreview({
 
     let attempts = 0
     const tryPlay = () => {
-      const currentVideos = videoRefs.current.filter(
-        (video): video is HTMLVideoElement => Boolean(video),
-      )
+      const currentVideos = videoRefs.current
+        .map((video, index) => ({ video, index }))
+        .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
       if (!currentVideos.length) {
         return
       }
 
-      currentVideos.forEach((video) => {
+      currentVideos.forEach(({ video, index }) => {
+        syncVideoIntoClipWindow(video, detail.videos[index] ?? null, { forceSeek: true })
         if (!video.paused) {
           return
         }
@@ -359,10 +577,10 @@ function EpisodeHoverPreview({
     const retryTimer = window.setInterval(() => {
       attempts += 1
       tryPlay()
-      const currentVideos = videoRefs.current.filter(
-        (video): video is HTMLVideoElement => Boolean(video),
-      )
-      const allPlaying = currentVideos.length > 0 && currentVideos.every((video) => !video.paused)
+      const currentVideos = videoRefs.current
+        .map((video, index) => ({ video, index }))
+        .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
+      const allPlaying = currentVideos.length > 0 && currentVideos.every(({ video }) => !video.paused)
       if (allPlaying || attempts >= 12) {
         window.clearInterval(retryTimer)
       }
@@ -371,29 +589,41 @@ function EpisodeHoverPreview({
     return () => {
       window.clearInterval(retryTimer)
     }
-  }, [playVideo, detail?.videos])
+  }, [playVideo, detail])
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      const [leader, ...followers] = videoRefs.current.filter(
-        (video): video is HTMLVideoElement => Boolean(video),
-      )
-      if (!leader || followers.length === 0 || syncLockRef.current) {
+      const entries = videoRefs.current
+        .map((video, index) => ({ video, index }))
+        .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
+      const [leaderEntry, ...followers] = entries
+      if (!leaderEntry || followers.length === 0 || syncLockRef.current) {
         return
       }
 
-      const leaderTime = leader.currentTime
-      const leaderPaused = leader.paused || !playVideo
-      const leaderRate = leader.playbackRate
+      const leaderMeta = detail.videos[leaderEntry.index] ?? null
+      const leaderAbsoluteTime = syncVideoIntoClipWindow(leaderEntry.video, leaderMeta, {
+        loopToStart: playVideo,
+      })
+      const leaderTime = getRelativePlaybackTime(leaderMeta, leaderAbsoluteTime)
+      const leaderPaused = leaderEntry.video.paused || !playVideo
+      const leaderRate = leaderEntry.video.playbackRate
 
-      followers.forEach((video) => {
+      followers.forEach(({ video, index }) => {
+        const videoMeta = detail.videos[index] ?? null
         if (video.playbackRate !== leaderRate) {
           video.playbackRate = leaderRate
         }
 
-        if (Math.abs(video.currentTime - leaderTime) > 0.08) {
+        const targetAbsoluteTime = clampAbsolutePlaybackTime(
+          videoMeta,
+          getClipStart(videoMeta) + leaderTime,
+          video.duration,
+          { loopToStart: !leaderPaused },
+        )
+        if (Math.abs(video.currentTime - targetAbsoluteTime) > 0.08) {
           try {
-            video.currentTime = leaderTime
+            video.currentTime = targetAbsoluteTime
           } catch (_error) {
             // Ignore currentTime sync failures until metadata is available.
           }
@@ -415,8 +645,129 @@ function EpisodeHoverPreview({
     return () => {
       window.clearInterval(interval)
     }
-  }, [detail?.episode_index, playVideo])
+  }, [detail, playVideo])
 
+  return (
+    <div ref={rootRef} className="explorer-hover-preview__body explorer-episode-playback">
+      <div className="explorer-hover-preview__video-grid">
+        {detail.videos.length > 0 ? (
+          detail.videos.map((video, index) => {
+            const clipLabel = formatClipWindowLabel(video)
+            return (
+              <div key={video.path} className="explorer-hover-preview__video-card">
+                <div className="explorer-hover-preview__status">
+                  <strong>{video.stream}</strong>
+                  {clipLabel ? <span> · {clipLabel}</span> : null}
+                </div>
+                <video
+                  ref={(node) => {
+                    videoRefs.current[index] = node
+                  }}
+                  src={video.url}
+                  autoPlay={playVideo}
+                  controls
+                  muted
+                  loop={shouldLoopVideo(video)}
+                  playsInline
+                  preload="metadata"
+                />
+              </div>
+            )
+          })
+        ) : (
+          <div className="explorer-hover-preview__empty">{emptyLabel}</div>
+        )}
+      </div>
+
+      {jointTrajectories.length > 0 && (
+        <div className="explorer-hover-preview__charts">
+          <h4>Joint Angle Info</h4>
+          <div className="explorer-hover-preview__legend">
+            <span className="explorer-hover-preview__legend-state">State</span>
+            <span className="explorer-hover-preview__legend-action">Action</span>
+          </div>
+
+          <div className="explorer-hover-preview__charts-grid">
+            {preparedJointCharts.map((joint, index) => (
+              <div key={joint.jointName} className="explorer-hover-preview__chart">
+                <div className="explorer-hover-preview__chart-title-row">
+                  <div className="explorer-hover-preview__chart-title">{joint.jointName}</div>
+                  <div
+                    className="explorer-hover-preview__chart-current"
+                    data-trajectory-current={index}
+                  >
+                    S {formatAngle(joint.stateValues[0])} / A {formatAngle(joint.actionValues[0])}
+                  </div>
+                </div>
+
+                <div className="explorer-hover-preview__chart-container">
+                  <div className="explorer-hover-preview__chart-yaxis">
+                    <span>{joint.yMaxLabel}</span>
+                    <span>{joint.yMidLabel}</span>
+                    <span>{joint.yMinLabel}</span>
+                  </div>
+
+                  <div className="explorer-hover-preview__chart-svg-wrap">
+                    <svg viewBox="0 0 100 60" preserveAspectRatio="none">
+                      <polyline
+                        points={joint.statePoints}
+                        fill="none"
+                        stroke="#2f6fe4"
+                        strokeWidth="0.55"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <polyline
+                        points={joint.actionPoints}
+                        fill="none"
+                        stroke="#f59e0b"
+                        strokeWidth="0.55"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <line
+                        data-trajectory-cursor
+                        x1="0"
+                        y1="10"
+                        x2="0"
+                        y2="50"
+                        stroke="#ef4444"
+                        strokeWidth="0.35"
+                        strokeDasharray="2,2"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
+                    <div className="explorer-hover-preview__chart-xaxis">
+                      <span>{timeMin.toFixed(1)}s</span>
+                      <span>{((timeMin + timeMax) / 2).toFixed(1)}s</span>
+                      <span>{timeMax.toFixed(1)}s</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EpisodeHoverPreview({
+  detail,
+  loading,
+  error,
+  playVideo,
+  onClose,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  detail: EpisodeDetail | null
+  loading: boolean
+  error: string
+  playVideo: boolean
+  onClose: () => void
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}) {
   return createPortal(
     <div className="explorer-hover-preview" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
       <div className="explorer-hover-preview__dialog">
@@ -451,129 +802,11 @@ function EpisodeHoverPreview({
               </div>
             </div>
 
-            <div className="explorer-hover-preview__body">
-              <div className="explorer-hover-preview__video-grid">
-                {detail.videos.length > 0 ? (
-                  detail.videos.map((video, index) => (
-                    <div key={video.path} className="explorer-hover-preview__video-card">
-                      <div className="explorer-hover-preview__status">
-                        Stream: {video.stream}
-                      </div>
-                      <video
-                        ref={(node) => {
-                          videoRefs.current[index] = node
-                        }}
-                        src={video.url}
-                        autoPlay={playVideo}
-                        controls
-                        muted
-                        loop
-                        playsInline
-                        preload="metadata"
-                        onTimeUpdate={(event) => {
-                          if (index === 0) {
-                            onVideoTimeUpdate(event.currentTarget.currentTime)
-                          }
-                        }}
-                      />
-                    </div>
-                  ))
-                ) : (
-                  <div className="explorer-hover-preview__empty">
-                    No video stream available for this episode.
-                  </div>
-                )}
-              </div>
-
-              {jointTrajectories.length > 0 && (
-                <div className="explorer-hover-preview__charts">
-                  <h4>Joint Angle Info</h4>
-                  <div className="explorer-hover-preview__legend">
-                    <span className="explorer-hover-preview__legend-state">State</span>
-                    <span className="explorer-hover-preview__legend-action">Action</span>
-                  </div>
-
-                  <div className="explorer-hover-preview__charts-grid">
-                    {jointTrajectories.map((joint) => {
-                      const actionValues = joint.action_values.map((value) => value ?? 0)
-                      const stateValues = joint.state_values.map((value) => value ?? 0)
-                      const allValues = [...actionValues, ...stateValues]
-                      const minValue = Math.min(...allValues)
-                      const maxValue = Math.max(...allValues)
-                      const padding = (maxValue - minValue || 1) * 0.1
-                      const yMin = minValue - padding
-                      const yMax = maxValue + padding
-                      const yRange = yMax - yMin || 1
-
-                      const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
-                      const buildPolyline = (values: number[]) =>
-                        values
-                          .map((value, index) => {
-                            const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
-                            return `${x},${toY(value)}`
-                          })
-                          .join(' ')
-
-                      const currentState = stateValues[Math.min(currentIndex, stateValues.length - 1)]
-                      const currentAction = actionValues[Math.min(currentIndex, actionValues.length - 1)]
-
-                      return (
-                        <div key={joint.joint_name} className="explorer-hover-preview__chart">
-                          <div className="explorer-hover-preview__chart-title-row">
-                            <div className="explorer-hover-preview__chart-title">{joint.joint_name}</div>
-                            <div className="explorer-hover-preview__chart-current">
-                              S {formatAngle(currentState)} / A {formatAngle(currentAction)}
-                            </div>
-                          </div>
-
-                          <div className="explorer-hover-preview__chart-container">
-                            <div className="explorer-hover-preview__chart-yaxis">
-                              <span>{yMax.toFixed(2)}</span>
-                              <span>{((yMax + yMin) / 2).toFixed(2)}</span>
-                              <span>{yMin.toFixed(2)}</span>
-                            </div>
-
-                            <div className="explorer-hover-preview__chart-svg-wrap">
-                              <svg viewBox="0 0 100 60" preserveAspectRatio="none">
-                                <polyline
-                                  points={buildPolyline(stateValues)}
-                                  fill="none"
-                                  stroke="#2f6fe4"
-                                  strokeWidth="0.55"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                                <polyline
-                                  points={buildPolyline(actionValues)}
-                                  fill="none"
-                                  stroke="#f59e0b"
-                                  strokeWidth="0.55"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                                <line
-                                  x1={currentTimePercent}
-                                  y1="10"
-                                  x2={currentTimePercent}
-                                  y2="50"
-                                  stroke="#ef4444"
-                                  strokeWidth="0.35"
-                                  strokeDasharray="2,2"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                              </svg>
-                              <div className="explorer-hover-preview__chart-xaxis">
-                                <span>{timeMin.toFixed(1)}s</span>
-                                <span>{((timeMin + timeMax) / 2).toFixed(1)}s</span>
-                                <span>{timeMax.toFixed(1)}s</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
+            <EpisodePlaybackSurface
+              detail={detail}
+              playVideo={playVideo}
+              emptyLabel="No video stream available for this episode."
+            />
           </>
         )}
       </div>
@@ -607,7 +840,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
   const [hoveredPreviewLoading, setHoveredPreviewLoading] = useState(false)
   const [hoveredPreviewError, setHoveredPreviewError] = useState('')
   const [previewPlayReady, setPreviewPlayReady] = useState(false)
-  const [videoCurrentTime, setVideoCurrentTime] = useState(0)
 
   useEffect(() => {
     previewCacheRef.current.clear()
@@ -616,7 +848,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
     setHoveredPreviewLoading(false)
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
-    setVideoCurrentTime(0)
   }, [selectedDataset, datasetRef.path, datasetRef.source])
 
   useEffect(() => {
@@ -666,7 +897,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
       setHoveredPreviewLoading(false)
       setHoveredPreviewError('')
       setPreviewPlayReady(false)
-      setVideoCurrentTime(0)
     }, 180)
   }
 
@@ -678,7 +908,6 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
     }
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
-    setVideoCurrentTime(0)
 
     hoverTimerRef.current = window.setTimeout(async () => {
       setHoveredEpisodeIndex(episodeIndex)
@@ -778,15 +1007,12 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
           detail={hoveredPreview}
           loading={hoveredPreviewLoading}
           error={hoveredPreviewError}
-          videoCurrentTime={videoCurrentTime}
-          onVideoTimeUpdate={setVideoCurrentTime}
           onClose={() => {
             setHoveredEpisodeIndex(null)
             setHoveredPreview(null)
             setHoveredPreviewLoading(false)
             setHoveredPreviewError('')
             setPreviewPlayReady(false)
-            setVideoCurrentTime(0)
           }}
           playVideo={previewPlayReady}
           onMouseEnter={cancelClosePreview}
@@ -817,10 +1043,24 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
 
           {episodeDetail.videos.length > 0 && (
             <div className="explorer-episode-detail__section">
-              <h4>Videos</h4>
+              <h4>Playback</h4>
+              <EpisodePlaybackSurface
+                detail={episodeDetail}
+                playVideo
+                emptyLabel="No video stream available for this episode."
+              />
+            </div>
+          )}
+
+          {episodeDetail.videos.length > 0 && (
+            <div className="explorer-episode-detail__section">
+              <h4>Video Sources</h4>
               <ul className="explorer-video-list">
                 {episodeDetail.videos.map((v) => (
-                  <li key={v.path}>{v.stream} — {v.path}</li>
+                  <li key={v.path}>
+                    <strong>{v.stream}</strong> — {v.path}
+                    {formatClipWindowLabel(v) ? ` (${formatClipWindowLabel(v)})` : ''}
+                  </li>
                 ))}
               </ul>
             </div>
