@@ -208,7 +208,7 @@ def test_quality_batch_marks_self_reference_as_unverified(monkeypatch, tmp_path)
         },
     }
 
-    def fake_load_episode_data(_dataset_path, episode_index):
+    def fake_load_episode_data(_dataset_path, episode_index, **_kwargs):
         return {
             "info": info,
             "episode_meta": {"episode_index": episode_index, "length": 3.0, "task": "pick"},
