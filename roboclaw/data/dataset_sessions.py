@@ -59,11 +59,21 @@ def parse_session_handle(handle: str) -> tuple[SessionKind, str] | None:
     kind = parts[1]
     if kind not in {"remote", "local_directory"}:
         return None
-    return kind, parts[2]
+    session_id = parts[2]
+    if not _is_safe_session_id(session_id):
+        return None
+    return kind, session_id
 
 
 def is_session_handle(handle: str) -> bool:
     return parse_session_handle(handle) is not None
+
+
+def _is_safe_session_id(session_id: str) -> bool:
+    return bool(session_id) and session_id not in {".", ".."} and not any(
+        char in session_id
+        for char in ("/", "\\", ":")
+    )
 
 
 def resolve_session_dataset_path(handle: str) -> Path:
