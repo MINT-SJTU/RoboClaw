@@ -14,7 +14,7 @@ from typing import Any, Callable, Literal
 from loguru import logger
 
 from roboclaw.data.curation.features import extract_action_names, extract_state_names
-from roboclaw.data.curation.paths import datasets_root
+from roboclaw.data.paths import datasets_root
 
 DatasetKind = Literal["local", "remote"]
 ImportStatus = Literal["queued", "running", "completed", "error"]
