@@ -18,13 +18,6 @@ const NAV_ICONS: Record<string, JSX.Element> = {
       <rect x="14" y="14" width="7" height="7" rx="1.5" />
     </svg>
   ),
-  '/datasets': (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <ellipse cx="12" cy="5" rx="9" ry="3" />
-      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-      <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" />
-    </svg>
-  ),
   '/training': (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 19V5" />
@@ -53,6 +46,13 @@ const NAV_ICONS: Record<string, JSX.Element> = {
       <path d="M4 18h14" />
     </svg>
   ),
+  '/curation/data-overview': (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3h18v18H3z" />
+      <path d="M7 15l3-3 2 2 5-5" />
+      <path d="M7 7h.01" />
+    </svg>
+  ),
   '/settings': (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -75,11 +75,10 @@ interface NavItem {
 
 export default function AppShell() {
   const location = useLocation()
-  const { connect, disconnect, connected, messages } = useChatSocket()
+  const { connect, disconnect } = useChatSocket()
   const fetchHardwareStatus = useHardwareStore((state) => state.fetchHardwareStatus)
   const recoveryFaults = useRecoveryStore((state) => state.faults)
   const { t } = useI18n()
-  const [chatOpen, setChatOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [pipelineExpanded, setPipelineExpanded] = useState(location.pathname.startsWith('/curation'))
 
@@ -111,6 +110,7 @@ export default function AppShell() {
     { path: '/curation/datasets', label: t('datasetReader') },
     { path: '/curation/quality', label: t('qualityWorkbench') },
     { path: '/curation/text-alignment', label: t('textAlignment') },
+    { path: '/curation/data-overview', label: t('dataOverview') },
   ]
   const pipelineActive = location.pathname.startsWith('/curation')
 
@@ -250,25 +250,7 @@ export default function AppShell() {
         </main>
 
         <div className="chat-widget">
-          {chatOpen && (
-            <div className="chat-widget__panel">
-              <ChatPanel variant="widget" onClose={() => setChatOpen(false)} />
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setChatOpen((value) => !value)}
-            className={cn('chat-widget__trigger', chatOpen && 'chat-widget__trigger--open')}
-            aria-expanded={chatOpen}
-            aria-label={chatOpen ? 'Close chat' : 'Open chat'}
-          >
-            <span className={cn('chat-widget__dot', connected && 'chat-widget__dot--live')} />
-            <span className="chat-widget__label">AI</span>
-            {!chatOpen && messages.length > 0 && (
-              <span className="chat-widget__count">{Math.min(messages.length, 99)}</span>
-            )}
-          </button>
+          <ChatPanel variant="widget" />
         </div>
 
         <ToastContainer />
