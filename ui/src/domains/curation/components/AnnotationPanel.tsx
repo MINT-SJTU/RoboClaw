@@ -240,19 +240,193 @@ function buildLinePath(
   return path
 }
 
+function buildStepLinePath(
+  xValues: number[],
+  series: Array<number | null>,
+  minY: number,
+  maxY: number,
+  width: number,
+  height: number,
+  padding: number,
+): string {
+  const maxX = xValues[xValues.length - 1] || 1
+  const usableWidth = width - padding * 2
+  const usableHeight = height - padding * 2
+  const rangeY = maxY - minY || 1
+  let path = ''
+  let hasStarted = false
+
+  for (let index = 0; index < xValues.length; index += 1) {
+    const yValue = series[index]
+    if (!Number.isFinite(yValue)) continue
+
+    const x = padding + (xValues[index] / maxX) * usableWidth
+    const y = padding + usableHeight - ((Number(yValue) - minY) / rangeY) * usableHeight
+
+    if (!hasStarted) {
+      path += `M ${x.toFixed(2)} ${y.toFixed(2)}`
+      hasStarted = true
+      continue
+    }
+
+    const previousYValue = series[index - 1]
+    const previousX = padding + (xValues[index - 1] / maxX) * usableWidth
+    const previousY = Number.isFinite(previousYValue)
+      ? padding + usableHeight - ((Number(previousYValue) - minY) / rangeY) * usableHeight
+      : y
+
+    path += ` L ${x.toFixed(2)} ${previousY.toFixed(2)} L ${x.toFixed(2)} ${y.toFixed(2)}`
+    if (previousX === x) {
+      path += ` L ${x.toFixed(2)} ${y.toFixed(2)}`
+    }
+  }
+
+  return path
+}
+
+function getComparisonSnapshot(
+  entry: ComparisonEntry,
+  currentTime: number,
+): {
+  index: number
+  time: number
+  actionValue: number | null
+  stateValue: number | null
+  deltaValue: number | null
+} {
+  if (!entry.xValues.length) {
+    return {
+      index: 0,
+      time: 0,
+      actionValue: null,
+      stateValue: null,
+      deltaValue: null,
+    }
+  }
+
+  const clampedTime = Math.min(
+    Math.max(currentTime, entry.xValues[0] || 0),
+    entry.xValues[entry.xValues.length - 1] || currentTime,
+  )
+  const index = findClosestPlaybackIndex(entry.xValues, clampedTime)
+  const actionValue = entry.actionValues[index] ?? null
+  const stateValue = entry.stateValues[index] ?? null
+  const deltaValue =
+    Number.isFinite(actionValue) && Number.isFinite(stateValue)
+      ? Number(actionValue) - Number(stateValue)
+      : null
+
+  return {
+    index,
+    time: clampedTime,
+    actionValue: Number.isFinite(actionValue) ? Number(actionValue) : null,
+    stateValue: Number.isFinite(stateValue) ? Number(stateValue) : null,
+    deltaValue,
+  }
+}
+
+function findWindowBounds(
+  xValues: number[],
+  currentTime: number,
+  windowSize: number,
+): [number, number] {
+  if (xValues.length <= 2) return [0, Math.max(xValues.length - 1, 0)]
+
+  const maxX = xValues[xValues.length - 1] || 0
+  if (maxX <= windowSize) {
+    return [0, xValues.length - 1]
+  }
+
+  const halfWindow = windowSize / 2
+  let startTime = Math.max(currentTime - halfWindow, 0)
+  let endTime = Math.min(currentTime + halfWindow, maxX)
+  if (endTime - startTime < windowSize) {
+    if (startTime <= 0) {
+      endTime = Math.min(windowSize, maxX)
+    } else if (endTime >= maxX) {
+      startTime = Math.max(maxX - windowSize, 0)
+    }
+  }
+
+  let startIndex = 0
+  while (startIndex < xValues.length - 1 && xValues[startIndex] < startTime) {
+    startIndex += 1
+  }
+  startIndex = Math.max(startIndex - 1, 0)
+
+  let endIndex = xValues.length - 1
+  while (endIndex > startIndex && xValues[endIndex] > endTime) {
+    endIndex -= 1
+  }
+  endIndex = Math.min(endIndex + 1, xValues.length - 1)
+
+  return [startIndex, endIndex]
+}
+
+function sampleSeriesWindow(
+  xValues: number[],
+  actionValues: Array<number | null>,
+  stateValues: Array<number | null>,
+  startIndex: number,
+  endIndex: number,
+  maxPoints: number,
+) {
+  const count = endIndex - startIndex + 1
+  if (count <= maxPoints) {
+    return {
+      xValues: xValues.slice(startIndex, endIndex + 1),
+      actionValues: actionValues.slice(startIndex, endIndex + 1),
+      stateValues: stateValues.slice(startIndex, endIndex + 1),
+    }
+  }
+
+  const sampledX: number[] = []
+  const sampledAction: Array<number | null> = []
+  const sampledState: Array<number | null> = []
+  for (let sampleIndex = 0; sampleIndex < maxPoints; sampleIndex += 1) {
+    const sourceIndex = Math.round(
+      startIndex + (sampleIndex * (count - 1)) / Math.max(maxPoints - 1, 1),
+    )
+    sampledX.push(xValues[sourceIndex])
+    sampledAction.push(actionValues[sourceIndex] ?? null)
+    sampledState.push(stateValues[sourceIndex] ?? null)
+  }
+  return {
+    xValues: sampledX,
+    actionValues: sampledAction,
+    stateValues: sampledState,
+  }
+}
+
 function JointComparisonChart({
   entry,
   currentTime,
   emptyLabel,
+  width = 720,
+  height = 220,
+  windowSize = 4,
 }: {
   entry: ComparisonEntry
   currentTime: number
   emptyLabel: string
+  width?: number
+  height?: number
+  windowSize?: number
 }) {
-  const width = 260
-  const height = 132
   const padding = 12
-  const numericValues = [...entry.actionValues, ...entry.stateValues].filter(
+  const [startIndex, endIndex] = findWindowBounds(entry.xValues, currentTime, windowSize)
+  const windowed = sampleSeriesWindow(
+    entry.xValues,
+    entry.actionValues,
+    entry.stateValues,
+    startIndex,
+    endIndex,
+    56,
+  )
+  const chartXValues = windowed.xValues
+  const chartActionValues = windowed.actionValues
+  const chartStateValues = windowed.stateValues
+  const numericValues = [...chartActionValues, ...chartStateValues].filter(
     (value): value is number => Number.isFinite(value),
   )
 
@@ -267,23 +441,43 @@ function JointComparisonChart({
     maxY += 1
   }
 
-  const maxX = entry.xValues[entry.xValues.length - 1] || 1
+  const minX = chartXValues[0] || 0
+  const maxX = chartXValues[chartXValues.length - 1] || 1
+  const safeRangeX = maxX - minX || 1
+  const xAxisY = height - padding
+  const midX = minX + safeRangeX / 2
   const cursorX =
     padding +
-    (Math.min(Math.max(currentTime, 0), maxX) / maxX) * (width - padding * 2)
+    ((Math.min(Math.max(currentTime, minX), maxX) - minX) / safeRangeX) * (width - padding * 2)
 
-  const actionPath = buildLinePath(
-    entry.xValues,
-    entry.actionValues,
+  const currentIndex = chartXValues.length
+    ? findClosestPlaybackIndex(chartXValues, Math.min(Math.max(currentTime, minX), maxX))
+    : 0
+  const currentActionValue = chartActionValues[currentIndex]
+  const currentStateValue = chartStateValues[currentIndex]
+  const usableHeight = height - padding * 2
+  const rangeY = maxY - minY || 1
+  const actionDotY =
+    Number.isFinite(currentActionValue)
+      ? padding + usableHeight - ((Number(currentActionValue) - minY) / rangeY) * usableHeight
+      : null
+  const stateDotY =
+    Number.isFinite(currentStateValue)
+      ? padding + usableHeight - ((Number(currentStateValue) - minY) / rangeY) * usableHeight
+      : null
+
+  const actionPath = buildStepLinePath(
+    chartXValues.map((value) => value - minX),
+    chartActionValues,
     minY,
     maxY,
     width,
     height,
     padding,
   )
-  const statePath = buildLinePath(
-    entry.xValues,
-    entry.stateValues,
+  const statePath = buildStepLinePath(
+    chartXValues.map((value) => value - minX),
+    chartStateValues,
     minY,
     maxY,
     width,
@@ -314,6 +508,14 @@ function JointComparisonChart({
         )
       })}
       <line
+        x1={padding}
+        x2={width - padding}
+        y1={xAxisY}
+        y2={xAxisY}
+        stroke="rgba(47, 111, 228, 0.12)"
+        strokeWidth="1"
+      />
+      <line
         x1={cursorX}
         x2={cursorX}
         y1={padding}
@@ -342,11 +544,164 @@ function JointComparisonChart({
           strokeLinejoin="round"
         />
       ) : null}
+      {actionDotY !== null ? (
+        <circle
+          cx={cursorX}
+          cy={actionDotY}
+          r="3.6"
+          fill="#2f6fe4"
+          stroke="white"
+          strokeWidth="1.6"
+        />
+      ) : null}
+      {stateDotY !== null ? (
+        <circle
+          cx={cursorX}
+          cy={stateDotY}
+          r="3.6"
+          fill="#ff8a5b"
+          stroke="white"
+          strokeWidth="1.6"
+        />
+      ) : null}
+      {[
+        { label: `${minX.toFixed(1)}s`, x: padding, anchor: 'start' as const },
+        { label: `${midX.toFixed(1)}s`, x: width / 2, anchor: 'middle' as const },
+        { label: `${maxX.toFixed(1)}s`, x: width - padding, anchor: 'end' as const },
+      ].map((tick) => (
+        <text
+          key={tick.label}
+          x={tick.x}
+          y={height - 2}
+          textAnchor={tick.anchor}
+          fill="rgba(95,107,122,0.9)"
+          fontSize="11"
+          fontWeight="700"
+        >
+          {tick.label}
+        </text>
+      ))}
     </svg>
   )
 }
 
-function JointComparisonGrid({
+function DeltaComparisonChart({
+  entry,
+  currentTime,
+  emptyLabel,
+  width = 720,
+  height = 140,
+  windowSize = 4,
+}: {
+  entry: ComparisonEntry
+  currentTime: number
+  emptyLabel: string
+  width?: number
+  height?: number
+  windowSize?: number
+}) {
+  const padding = 12
+  const [startIndex, endIndex] = findWindowBounds(entry.xValues, currentTime, windowSize)
+  const windowed = sampleSeriesWindow(
+    entry.xValues,
+    entry.actionValues,
+    entry.stateValues,
+    startIndex,
+    endIndex,
+    48,
+  )
+  const chartXValues = windowed.xValues
+  const deltaValues = chartXValues.map((_, index) => {
+    const actionValue = windowed.actionValues[index]
+    const stateValue = windowed.stateValues[index]
+    if (!Number.isFinite(actionValue) || !Number.isFinite(stateValue)) {
+      return null
+    }
+    return Number(actionValue) - Number(stateValue)
+  })
+  const numericValues = deltaValues.filter((value): value is number => Number.isFinite(value))
+
+  if (!numericValues.length) {
+    return <div className="episode-preview-empty">{emptyLabel}</div>
+  }
+
+  const minValue = Math.min(...numericValues, 0)
+  const maxValue = Math.max(...numericValues, 0)
+  const minX = chartXValues[0] || 0
+  const maxX = chartXValues[chartXValues.length - 1] || 1
+  const safeRangeX = maxX - minX || 1
+  const zeroY =
+    padding + (height - padding * 2) - ((0 - minValue) / (maxValue - minValue || 1)) * (height - padding * 2)
+  const currentIndex = chartXValues.length
+    ? findClosestPlaybackIndex(chartXValues, Math.min(Math.max(currentTime, minX), maxX))
+    : 0
+  const currentDelta = deltaValues[currentIndex]
+  const cursorX =
+    padding +
+    ((Math.min(Math.max(currentTime, minX), maxX) - minX) / safeRangeX) * (width - padding * 2)
+  const currentDeltaY =
+    Number.isFinite(currentDelta)
+      ? padding + (height - padding * 2) - ((Number(currentDelta) - minValue) / (maxValue - minValue || 1)) * (height - padding * 2)
+      : null
+  const deltaPath = buildLinePath(
+    chartXValues.map((value) => value - minX),
+    deltaValues,
+    minValue,
+    maxValue,
+    width,
+    height,
+    padding,
+  )
+
+  return (
+    <svg
+      className="joint-comparison-chart joint-comparison-chart--delta"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={`${entry.label} delta trajectory`}
+    >
+      <rect x="0" y="0" width={width} height={height} rx="14" fill="rgba(255, 255, 255, 0.82)" />
+      <line
+        x1={padding}
+        x2={width - padding}
+        y1={zeroY}
+        y2={zeroY}
+        stroke="rgba(47, 111, 228, 0.16)"
+        strokeDasharray="4 4"
+        strokeWidth="1.2"
+      />
+      <line
+        x1={cursorX}
+        x2={cursorX}
+        y1={padding}
+        y2={height - padding}
+        stroke="rgba(17, 17, 17, 0.28)"
+        strokeDasharray="4 4"
+        strokeWidth="1.2"
+      />
+      <path
+        d={deltaPath}
+        fill="none"
+        stroke="#7c68ff"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {currentDeltaY !== null ? (
+        <circle
+          cx={cursorX}
+          cy={currentDeltaY}
+          r="3.6"
+          fill="#7c68ff"
+          stroke="white"
+          strokeWidth="1.6"
+        />
+      ) : null}
+    </svg>
+  )
+}
+
+function JointComparisonWorkbench({
   jointTrajectory,
   currentTime,
   copy,
@@ -359,6 +714,8 @@ function JointComparisonGrid({
     noJointData: string
     actionSeries: string
     stateSeries: string
+    focusActionValue: string
+    focusStateValue: string
   }
   activeKey: string
   onSelectEntry: (key: string) => void
@@ -372,40 +729,69 @@ function JointComparisonGrid({
     return <div className="episode-preview-empty">{copy.noJointData}</div>
   }
 
+  const activeEntry =
+    entries.find((entry) => buildComparisonSelectionKey(entry) === activeKey)
+    || entries[0]
+  const activeSnapshot = getComparisonSnapshot(activeEntry, currentTime)
+
   return (
-    <div className="joint-comparison-grid">
-      {entries.map((entry) => {
-        const selectionKey = buildComparisonSelectionKey(entry)
-        const isSelected = selectionKey === activeKey
-        return (
-          <article
-            key={entry.key}
-            className={isSelected ? 'joint-comparison-card is-selected' : 'joint-comparison-card'}
-            role="button"
-            tabIndex={0}
-            onClick={() => onSelectEntry(selectionKey)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                onSelectEntry(selectionKey)
-              }
-            }}
-          >
-            <div className="joint-comparison-head">
-              <strong>{entry.label}</strong>
-              <div className="joint-comparison-legend">
-                <span className="is-action">{copy.actionSeries}</span>
-                <span className="is-state">{copy.stateSeries}</span>
+    <div className="joint-comparison-workbench">
+      <div className="joint-comparison-main-panel">
+        <div className="joint-comparison-main-panel__head">
+          <div>
+            <strong>{activeEntry.label}</strong>
+            <span className="joint-comparison-main-panel__sub">
+              {copy.actionSeries} vs {copy.stateSeries}
+            </span>
+          </div>
+          <div className="joint-comparison-main-panel__metrics">
+            <span>{copy.focusActionValue}: {formatValue(activeSnapshot.actionValue)}</span>
+            <span>{copy.focusStateValue}: {formatValue(activeSnapshot.stateValue)}</span>
+            <span>Delta: {formatValue(activeSnapshot.deltaValue)}</span>
+          </div>
+        </div>
+        <JointComparisonChart
+          entry={activeEntry}
+          currentTime={currentTime}
+          emptyLabel={copy.noJointData}
+          width={820}
+          height={220}
+          windowSize={4}
+        />
+        <DeltaComparisonChart
+          entry={activeEntry}
+          currentTime={currentTime}
+          emptyLabel={copy.noJointData}
+          width={820}
+          height={132}
+          windowSize={4}
+        />
+      </div>
+
+      <div className="joint-comparison-list">
+        {entries.map((entry) => {
+          const selectionKey = buildComparisonSelectionKey(entry)
+          const isSelected = selectionKey === buildComparisonSelectionKey(activeEntry)
+          const snapshot = getComparisonSnapshot(entry, currentTime)
+          return (
+            <button
+              key={entry.key}
+              type="button"
+              className={isSelected ? 'joint-comparison-list__item is-selected' : 'joint-comparison-list__item'}
+              onClick={() => onSelectEntry(selectionKey)}
+            >
+              <div className="joint-comparison-list__head">
+                <strong>{entry.label}</strong>
+                <span>{formatValue(snapshot.deltaValue)}</span>
               </div>
-            </div>
-            <JointComparisonChart
-              entry={entry}
-              currentTime={currentTime}
-              emptyLabel={copy.noJointData}
-            />
-          </article>
-        )
-      })}
+              <div className="joint-comparison-list__meta">
+                <span>A {formatValue(snapshot.actionValue)}</span>
+                <span>S {formatValue(snapshot.stateValue)}</span>
+              </div>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -420,6 +806,7 @@ export default function AnnotationPanel() {
     saveAnnotations,
     runPropagation,
     loadPropagationResults,
+    refreshState,
   } = useWorkflow()
 
   const copy = locale === 'zh'
@@ -506,6 +893,13 @@ export default function AnnotationPanel() {
 
   const anchorItems = useMemo(() => {
     const annotatedSet = new Set(workflowState?.stages.annotation.annotated_episodes || [])
+    const propagatedSourceSet = new Set([
+      ...(workflowState?.stages.annotation.propagated_source_episodes || []),
+      ...(propagationResults?.source_episode_indices || []),
+      ...(propagationResults?.source_episode_index !== null && propagationResults?.source_episode_index !== undefined
+        ? [propagationResults.source_episode_index]
+        : []),
+    ])
     return (prototypeResults?.clusters || [])
       .map((cluster) => {
         const episodeIndex = Number(cluster.anchor_record_key)
@@ -520,7 +914,7 @@ export default function AnnotationPanel() {
           qualityScore: anchorMember?.quality?.score ?? null,
           qualityPassed: anchorMember?.quality?.passed ?? null,
           annotated: annotatedSet.has(episodeIndex),
-          propagated: propagationResults?.source_episode_index === episodeIndex,
+          propagated: propagatedSourceSet.has(episodeIndex),
         }
       })
       .filter((item): item is NonNullable<typeof item> => item !== null)
@@ -538,7 +932,6 @@ export default function AnnotationPanel() {
   const [isStudioPaused, setIsStudioPaused] = useState(true)
   const [selectedComparisonKey, setSelectedComparisonKey] = useState('')
   const [pendingRestoreContext, setPendingRestoreContext] = useState<SavedComparisonContext | null>(null)
-  const [savedTaskContext, setSavedTaskContext] = useState<WorkflowTaskContext | null>(null)
   const [saveState, setSaveState] = useState({
     isSaving: false,
     error: '',
@@ -552,6 +945,8 @@ export default function AnnotationPanel() {
 
   const annotationIdRef = useRef(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const propagationRequestPendingRef = useRef(false)
+  const propagationRunAcceptedRef = useRef(false)
 
   const effectiveSelectedVideo = useMemo(() => {
     if (!workspace?.videos.length) return null
@@ -659,7 +1054,7 @@ export default function AnnotationPanel() {
   }, [workspace])
 
   useEffect(() => {
-    if (!selectedAnchorEpisode) return
+    if (selectedAnchorEpisode === null) return
 
     let active = true
     setWorkspaceLoading(true)
@@ -677,7 +1072,6 @@ export default function AnnotationPanel() {
         setAnnotations(normalizedAnnotations)
         setSelectedAnnotationId(normalizedAnnotations[0]?.id ?? null)
         setHasUnsavedChanges(false)
-        setSavedTaskContext(payload.annotations.task_context || {})
         setPendingRestoreContext(
           normalizeSavedComparisonContext(payload.annotations.task_context),
         )
@@ -913,14 +1307,23 @@ export default function AnnotationPanel() {
   }, [effectiveSelectedVideo, workspace])
 
   useEffect(() => {
+    if (propagationRequestPendingRef.current) return
     const status = workflowState?.stages.annotation.status
-    if (status !== 'running' && propagationState.isRunning) {
+    if (!propagationState.isRunning) return
+
+    if (status === 'running') {
+      propagationRunAcceptedRef.current = true
+      return
+    }
+
+    if (propagationRunAcceptedRef.current) {
+      propagationRunAcceptedRef.current = false
       setPropagationState((current) => ({ ...current, isRunning: false }))
     }
   }, [propagationState.isRunning, workflowState])
 
   function createAnnotation(seedTime = playbackState.time): void {
-    if (!selectedAnchorEpisode) return
+    if (selectedAnchorEpisode === null) return
 
     annotationIdRef.current += 1
     const startTime = clampAnnotationTime(seedTime, Number.POSITIVE_INFINITY)
@@ -1010,7 +1413,7 @@ export default function AnnotationPanel() {
   }
 
   async function handleSaveAnnotations(): Promise<boolean> {
-    if (!selectedAnchorEpisode) return false
+    if (selectedAnchorEpisode === null) return false
 
     setSaveState((current) => ({ ...current, isSaving: true, error: '' }))
 
@@ -1026,7 +1429,6 @@ export default function AnnotationPanel() {
           ? currentValue
           : normalizedAnnotations[0]?.id ?? null,
       )
-      setSavedTaskContext(saved.task_context || taskContext)
       setSaveState({
         isSaving: false,
         error: '',
@@ -1046,22 +1448,31 @@ export default function AnnotationPanel() {
   }
 
   async function handleRunPropagation(): Promise<void> {
-    if (!selectedAnchorEpisode) return
+    if (selectedAnchorEpisode === null) return
+    if (propagationState.isRunning || propagationRequestPendingRef.current) return
 
+    propagationRequestPendingRef.current = true
+    propagationRunAcceptedRef.current = false
     setPropagationState({ isRunning: true, error: '' })
 
     try {
       if (hasUnsavedChanges || saveState.versionNumber === 0) {
         const saved = await handleSaveAnnotations()
         if (!saved) {
+          propagationRequestPendingRef.current = false
           setPropagationState({ isRunning: false, error: '' })
           return
         }
       }
 
       await runPropagation(selectedAnchorEpisode)
+      propagationRunAcceptedRef.current = true
+      propagationRequestPendingRef.current = false
+      await refreshState()
       await loadPropagationResults()
     } catch (error) {
+      propagationRequestPendingRef.current = false
+      propagationRunAcceptedRef.current = false
       setPropagationState({
         isRunning: false,
         error: error instanceof Error ? error.message : 'Failed to run propagation',
@@ -1088,7 +1499,7 @@ export default function AnnotationPanel() {
     )
   }
 
-  if (!selectedAnchorEpisode) {
+  if (selectedAnchorEpisode === null) {
     return (
       <div className="annotation-panel__empty">
         <p>{copy.selectAnchor}</p>
@@ -1098,92 +1509,114 @@ export default function AnnotationPanel() {
 
   return (
     <div className="annotation-panel">
-      <div className="annotation-panel__anchor-strip">
-        <div className="annotation-panel__anchor-head">
-          <div>
-            <h4>{copy.anchors}</h4>
-            <p>{copy.anchorsDesc}</p>
+      <div className="annotation-panel__topdock">
+        <div className="annotation-panel__anchor-strip">
+          <div className="annotation-panel__anchor-head">
+            <div>
+              <h4>{copy.anchors}</h4>
+            </div>
+            {hasUnsavedChanges ? (
+              <span className="annotation-pill annotation-pill--warn">
+                {copy.saveBeforeSwitch}
+              </span>
+            ) : null}
           </div>
-          {hasUnsavedChanges ? (
-            <span className="annotation-pill annotation-pill--warn">
-              {copy.saveBeforeSwitch}
-            </span>
-          ) : null}
-        </div>
-        <div className="annotation-panel__anchor-list">
-          {anchorItems.map((item) => (
-            <button
-              key={item.episodeIndex}
-              type="button"
-              className={
-                item.episodeIndex === selectedAnchorEpisode
-                  ? 'annotation-anchor-card is-selected'
-                  : 'annotation-anchor-card'
-              }
-              onClick={() => void focusAnchorEpisode(item.episodeIndex)}
-            >
-              <div className="annotation-anchor-card__head">
-                <span>{copy.cluster} {item.clusterIndex + 1}</span>
-                <strong>EP {item.episodeIndex}</strong>
-              </div>
-              <div className="annotation-anchor-card__meta">
-                <span>{copy.members}: {item.memberCount}</span>
-                <span>{copy.quality}: {item.qualityScore?.toFixed(1) ?? '-'}</span>
-              </div>
-              <div className="annotation-anchor-card__status">
-                {item.annotated ? (
-                  <span className="annotation-pill annotation-pill--ok">
-                    {copy.annotated}
+          <div className="annotation-panel__anchor-list">
+            {anchorItems.map((item) => (
+              <button
+                key={item.episodeIndex}
+                type="button"
+                className={
+                  item.episodeIndex === selectedAnchorEpisode
+                    ? 'annotation-anchor-card is-selected'
+                    : 'annotation-anchor-card'
+                }
+                onClick={() => void focusAnchorEpisode(item.episodeIndex)}
+              >
+                <div className="annotation-anchor-card__head">
+                  <span>{copy.cluster} {item.clusterIndex + 1}</span>
+                  <strong>EP {item.episodeIndex}</strong>
+                </div>
+                <div className="annotation-anchor-card__meta">
+                  <span>{copy.members}: {item.memberCount}</span>
+                  <span>{copy.quality}: {item.qualityScore?.toFixed(1) ?? '-'}</span>
+                </div>
+                <div className="annotation-anchor-card__status">
+                  {item.annotated ? (
+                    <span className="annotation-pill annotation-pill--ok">
+                      {copy.annotated}
+                    </span>
+                  ) : null}
+                  <span className={item.propagated ? 'annotation-pill annotation-pill--ok' : 'annotation-pill'}>
+                    {item.propagated ? copy.propagationDone : copy.propagationPending}
                   </span>
-                ) : null}
-                <span className={item.propagated ? 'annotation-pill annotation-pill--ok' : 'annotation-pill'}>
-                  {item.propagated ? copy.propagationDone : copy.propagationPending}
-                </span>
-              </div>
-            </button>
-          ))}
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
 
-      <div className="annotation-panel__toolbar">
-        <div className="annotation-panel__toolbar-status">
-          <span className="annotation-pill">
-            {copy.workspaceStatus}
-          </span>
-          <span className="annotation-pill">
-            {copy.savedVersion}: {saveState.versionNumber || copy.notSavedYet}
-          </span>
-          <span className="annotation-pill">
-            {copy.annotationCount}: {annotations.length}
-          </span>
-          {latestPropagation ? (
-            <span className="annotation-pill annotation-pill--ok">
-              {copy.targetCount}: {latestPropagation.target_count}
+        <div className="annotation-panel__toolbar">
+          <div className="annotation-panel__toolbar-status">
+            <span className="annotation-pill">
+              {copy.savedVersion}: {saveState.versionNumber || copy.notSavedYet}
             </span>
-          ) : null}
+            <span className="annotation-pill">
+              {copy.annotationCount}: {annotations.length}
+            </span>
+            {latestPropagation ? (
+              <span className="annotation-pill annotation-pill--ok">
+                {copy.targetCount}: {latestPropagation.target_count}
+              </span>
+            ) : null}
+          </div>
+          <div className="annotation-panel__toolbar-actions">
+            <button
+              type="button"
+              className="annotation-primary-button"
+              onClick={() => void handleSaveAnnotations()}
+              disabled={saveState.isSaving || workspaceLoading}
+            >
+              {saveState.isSaving ? copy.saving : copy.saveAnnotationVersion}
+            </button>
+            <button
+              type="button"
+              className="annotation-primary-button"
+              onClick={() => void handleRunPropagation()}
+              disabled={saveState.isSaving || workspaceLoading || propagationState.isRunning}
+            >
+              {propagationState.isRunning
+                ? copy.propagating
+                : hasUnsavedChanges || saveState.versionNumber === 0
+                  ? copy.saveAndPropagate
+                  : copy.runPropagation}
+            </button>
+          </div>
         </div>
-        <div className="annotation-panel__toolbar-actions">
-          <button
-            type="button"
-            className="annotation-primary-button"
-            onClick={() => void handleSaveAnnotations()}
-            disabled={saveState.isSaving || workspaceLoading}
-          >
-            {saveState.isSaving ? copy.saving : copy.saveAnnotationVersion}
-          </button>
-          <button
-            type="button"
-            className="annotation-primary-button"
-            onClick={() => void handleRunPropagation()}
-            disabled={saveState.isSaving || workspaceLoading || propagationState.isRunning}
-          >
-            {propagationState.isRunning
-              ? copy.propagating
-              : hasUnsavedChanges || saveState.versionNumber === 0
-                ? copy.saveAndPropagate
-                : copy.runPropagation}
-          </button>
-        </div>
+
+        {workspace && workspace.videos.length > 1 ? (
+          <section className="annotation-stream-switcher">
+            <div className="annotation-stream-switcher__head">
+              <span>{copy.switchVideo}</span>
+            </div>
+            <div className="annotation-stream-switcher__list">
+              {workspace.videos.map((video) => (
+                <button
+                  key={video.path}
+                  type="button"
+                  className={
+                    video.path === effectiveSelectedVideo?.path
+                      ? 'annotation-stream-pill is-selected'
+                      : 'annotation-stream-pill'
+                  }
+                  onClick={() => setSelectedVideoPath(video.path)}
+                >
+                  {video.stream || video.path}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {workspaceError ? <div className="status-panel error">{workspaceError}</div> : null}
@@ -1194,60 +1627,34 @@ export default function AnnotationPanel() {
       {workspaceLoading ? <div className="status-panel">{copy.loadingWorkspace}</div> : null}
 
       {workspace && !workspaceLoading ? (
-        <>
-          <AnnotationWorkspaceCard
-            videoRef={videoRef}
-            videoSource={effectiveSelectedVideo?.url || ''}
-            videoTitle={effectiveSelectedVideo?.path || ''}
-            fps={Number(workspace.summary.fps) || 30}
-            streamLabel={effectiveSelectedVideo?.stream || ''}
-            chunkLabel={
-              effectiveSelectedVideo
-                ? effectiveSelectedVideo.path.split('/').slice(-2, -1)[0] || ''
-                : ''
-            }
-            currentFrame={currentFrame}
-            isPaused={isStudioPaused}
-            videoCurrentTime={playbackState.time}
-            timelineDuration={timelineDuration}
-            annotations={annotations}
-            selectedAnnotationId={selectedAnnotationId}
-            onSelectAnnotation={setSelectedAnnotationId}
-            onCreateAnnotation={createAnnotation}
-            onUpdateAnnotation={updateAnnotation}
-            onDeleteAnnotation={deleteAnnotation}
-            onJumpToTime={jumpToTime}
-          />
+        <div className="annotation-panel__studio-grid">
+          <div className="annotation-panel__studio-main">
+            <AnnotationWorkspaceCard
+              videoRef={videoRef}
+              videoSource={effectiveSelectedVideo?.url || ''}
+              videoTitle={effectiveSelectedVideo?.path || ''}
+              fps={Number(workspace.summary.fps) || 30}
+              streamLabel={effectiveSelectedVideo?.stream || ''}
+              chunkLabel={
+                effectiveSelectedVideo
+                  ? effectiveSelectedVideo.path.split('/').slice(-2, -1)[0] || ''
+                  : ''
+              }
+              currentFrame={currentFrame}
+              isPaused={isStudioPaused}
+              videoCurrentTime={playbackState.time}
+              timelineDuration={timelineDuration}
+              annotations={annotations}
+              selectedAnnotationId={selectedAnnotationId}
+              onSelectAnnotation={setSelectedAnnotationId}
+              onCreateAnnotation={createAnnotation}
+              onUpdateAnnotation={updateAnnotation}
+              onDeleteAnnotation={deleteAnnotation}
+              onJumpToTime={jumpToTime}
+            />
+          </div>
 
-          <section className="annotation-stream-switcher">
-            <div className="annotation-stream-switcher__head">
-              <span>{copy.switchVideo}</span>
-            </div>
-            <div className="annotation-stream-switcher__list">
-              {workspace.videos.length ? (
-                workspace.videos.map((video) => (
-                  <button
-                    key={video.path}
-                    type="button"
-                    className={
-                      video.path === effectiveSelectedVideo?.path
-                        ? 'annotation-stream-pill is-selected'
-                        : 'annotation-stream-pill'
-                    }
-                    onClick={() => setSelectedVideoPath(video.path)}
-                  >
-                    {video.stream || video.path}
-                  </button>
-                ))
-              ) : (
-                <span className="annotation-stream-switcher__empty">
-                  {copy.noVideoData}
-                </span>
-              )}
-            </div>
-          </section>
-
-          <section className="episode-preview-trajectory-panel">
+          <section className="episode-preview-trajectory-panel annotation-panel__trajectory-dock">
             <div className="episode-preview-trajectory-head">
               <span>{copy.syncedAxes}</span>
               <strong>{copy.syncedAxesHint}</strong>
@@ -1273,30 +1680,22 @@ export default function AnnotationPanel() {
                 <span>{copy.focusStateValue}</span>
                 <strong>{formatValue(comparisonSnapshot.state_value)}</strong>
               </div>
-              <div className="joint-comparison-focus-metric">
-                <span>{copy.restoreSource}</span>
-                <strong>
-                  {savedTaskContext?.source || comparisonSnapshot.source || '-'}
-                </strong>
-              </div>
-              <div className="joint-comparison-focus-metric">
-                <span>{copy.savedAt}</span>
-                <strong>{saveState.savedAt || copy.notSavedYet}</strong>
-              </div>
             </div>
-            <JointComparisonGrid
+            <JointComparisonWorkbench
               jointTrajectory={workspace.joint_trajectory}
               currentTime={playbackState.time}
               copy={{
                 noJointData: copy.noJointData,
                 actionSeries: copy.actionSeries,
                 stateSeries: copy.stateSeries,
+                focusActionValue: copy.focusActionValue,
+                focusStateValue: copy.focusStateValue,
               }}
               activeKey={selectedComparisonKey}
               onSelectEntry={setSelectedComparisonKey}
             />
           </section>
-        </>
+        </div>
       ) : null}
     </div>
   )

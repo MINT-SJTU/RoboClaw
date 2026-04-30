@@ -3,7 +3,7 @@ import type { DatasetImportJob, DatasetRef } from '@/domains/datasets/types'
 
 type StageStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error'
 const CURRENT_DATASET_KEY = 'roboclaw.current_dataset'
-
+const WORKFLOW_REFRESH_INTERVAL_MS = 6000
 export interface StageState {
   status: StageStatus
   summary: Record<string, unknown> | null
@@ -11,6 +11,15 @@ export interface StageState {
 
 interface QualityStage extends StageState {
   selected_validators: string[]
+  pause_requested?: boolean
+}
+
+export type QualityFilterMode = 'passed' | 'failed' | 'all' | 'raw'
+export type AlignmentSourceMode = 'quality' | 'raw'
+
+interface PrototypeStage extends StageState {
+  quality_filter_mode?: string
+  selected_episode_indices?: number[]
 }
 
 export interface WorkflowState {
@@ -18,8 +27,11 @@ export interface WorkflowState {
   dataset: string
   stages: {
     quality_validation: QualityStage
-    prototype_discovery: StageState
-    annotation: StageState & { annotated_episodes: number[] }
+    prototype_discovery: PrototypeStage
+    annotation: StageState & {
+      annotated_episodes: number[]
+      propagated_source_episodes?: number[]
+    }
   }
 }
 
@@ -43,6 +55,23 @@ export interface QualityResults {
   published_parquet_path?: string
 }
 
+export interface QualityDefaults {
+  dataset: string
+  selected_validators: string[]
+  threshold_overrides: Record<string, number>
+  profile: {
+    fps: number
+    median_episode_duration_s: number
+    video_resolution?: { width: number; height: number } | null
+    visual_streams: string[]
+    depth_streams: string[]
+    has_action: boolean
+    has_state: boolean
+    has_gripper: boolean
+  }
+  checks: Record<string, boolean>
+}
+
 export interface PrototypeClusterMember {
   record_key: string
   episode_index: number | null
@@ -64,11 +93,59 @@ export interface PrototypeCluster {
   members: PrototypeClusterMember[]
 }
 
+export interface PrototypeSelectionEvaluation {
+  k: number
+  score: number
+  smallest_member_count: number
+  member_counts: number[]
+  eligible: boolean
+  rejection_reason?: string | null
+  selected: boolean
+  within_tolerance: boolean
+}
+
+export interface PrototypeSelectionDiagnostics {
+  strategy: string
+  selected_k: number
+  selected_score: number
+  best_k: number
+  best_score: number
+  tolerance: number
+  max_candidate_k: number
+  evaluated_count: number
+  candidate_pool_count: number
+  rejected_singleton_heavy_count: number
+  selection_reason: string
+  min_member_count: number
+  evaluated: PrototypeSelectionEvaluation[]
+}
+
+export interface PrototypeGroupSummary {
+  group_index: number
+  bucket_key: string
+  task_key: string
+  robot_type: string
+  canonical_mode: string
+  entry_count: number
+  cluster_count: number
+  selection_mode: string
+  distance_pair_count: number
+  distance_backend: string
+  selection_diagnostics?: PrototypeSelectionDiagnostics | null
+}
+
 export interface PrototypeResults {
   candidate_count: number
   entry_count: number
   cluster_count: number
   anchor_record_keys: string[]
+  selection_mode?: string
+  distance_pair_count?: number
+  distance_backend?: string
+  distance_backend_detail?: Record<string, unknown>
+  groups?: PrototypeGroupSummary[]
+  quality_filter_mode?: string
+  selected_episode_indices?: number[]
   clusters: PrototypeCluster[]
 }
 
@@ -84,13 +161,31 @@ export interface PropagationResultItem {
   episode_index: number
   spans: PropagationSpan[]
   prototype_score?: number
+  alignment_method?: string
+  source_episode_index?: number | null
 }
 
 export interface PropagationResults {
   source_episode_index: number | null
+  source_episode_indices: number[]
   target_count: number
   propagated: PropagationResultItem[]
   published_parquet_path?: string
+}
+
+export interface TrainingTaskApplyResult {
+  status: string
+  path: string
+  manifest_path: string
+  backup_dir: string
+  updated_episode_count: number
+  updated_episode_file_count: number
+  updated_data_file_count: number
+  updated_task_file_count: number
+  updated_info_file_count: number
+  synced_quality_episode_count?: number
+  task_count: number
+  unmatched_episode_indices: number[]
 }
 
 export interface RemoteWorkflowPrepareResult {
@@ -105,7 +200,6 @@ export interface LocalDirectorySessionResult {
   display_name: string
   local_path: string
 }
-
 export interface AnnotationItem {
   id: string
   label: string
@@ -160,6 +254,8 @@ export interface AnnotationWorkspaceSummary {
   end_timestamp: number | null
   duration_s: number
   video_count: number
+  quality_status?: 'passed' | 'failed' | 'unvalidated'
+  quality_score?: number | null
 }
 
 export interface AnnotationVideoClip {
@@ -186,6 +282,74 @@ export interface AnnotationWorkspacePayload {
   joint_trajectory: JointTrajectoryPayload
   annotations: SavedAnnotationsPayload
   latest_propagation: PropagationResults | null
+  quality?: {
+    validated: boolean
+    passed: boolean | null
+    score: number | null
+    failed_validators: string[]
+    quality_tags: string[]
+    issues: Array<Record<string, unknown>>
+  }
+}
+
+export interface AlignmentOverviewRow {
+  episode_index: number
+  record_key: string
+  task: string
+  task_source?: string | null
+  task_is_supplemental?: boolean
+  semantic_task_text?: string | null
+  quality_passed: boolean
+  quality_score: number
+  quality_status: 'passed' | 'failed'
+  validator_scores: Record<string, number>
+  failed_validators: string[]
+  issues: Array<Record<string, unknown>>
+  alignment_status: 'not_started' | 'annotated' | 'propagated'
+  annotation_count: number
+  propagated_count: number
+  annotation_spans?: AlignmentOverviewSpan[]
+  propagation_source_episode_index?: number | null
+  propagation_alignment_method?: string | null
+  propagation_spans?: AlignmentOverviewSpan[]
+  prototype_score?: number | null
+  updated_at?: string
+}
+
+export interface AlignmentOverviewSpan {
+  id?: string | null
+  label?: string | null
+  text?: string | null
+  category?: string | null
+  startTime?: number | null
+  endTime?: number | null
+  source?: string | null
+  target_record_key?: string | null
+  prototype_score?: number | null
+  source_start_time?: number | null
+  source_end_time?: number | null
+  dtw_start_delay_s?: number | null
+  dtw_end_delay_s?: number | null
+  duration_delta_s?: number | null
+}
+
+export interface AlignmentOverview {
+  summary: {
+    total_checked: number
+    passed_count: number
+    failed_count: number
+    perfect_ratio: number
+    aligned_count: number
+    annotated_count: number
+    propagated_count: number
+    prototype_cluster_count: number
+    quality_filter_mode: string
+  }
+  distribution: {
+    issue_types: Array<{ label: string; count: number }>
+    alignment_status: Array<{ label: string; count: number }>
+  }
+  rows: AlignmentOverviewRow[]
 }
 
 interface WorkflowStore {
@@ -195,13 +359,18 @@ interface WorkflowStore {
   datasetInfo: DatasetRef | null
   workflowState: WorkflowState | null
   selectedValidators: string[]
+  alignmentSourceMode: AlignmentSourceMode
+  alignmentQualityFilter: QualityFilterMode
   qualityThresholds: Record<string, number>
+  qualityDefaults: QualityDefaults | null
   qualityResults: QualityResults | null
   qualityRunning: boolean
   prototypeResults: PrototypeResults | null
   prototypeRunning: boolean
   propagationResults: PropagationResults | null
+  alignmentOverview: AlignmentOverview | null
   datasetImportJob: DatasetImportJob | null
+  selectedDatasetIsRemotePrepared: boolean
   pollInterval: ReturnType<typeof setInterval> | null
   loadDatasets: () => Promise<void>
   selectDataset: (datasetId: string) => Promise<void>
@@ -216,7 +385,10 @@ interface WorkflowStore {
     displayName?: string,
   ) => Promise<LocalDirectorySessionResult>
   toggleValidator: (name: string) => void
+  setAlignmentSourceMode: (mode: AlignmentSourceMode) => void
+  setAlignmentQualityFilter: (mode: QualityFilterMode) => void
   setQualityThreshold: (key: string, value: number) => void
+  loadQualityDefaults: () => Promise<QualityDefaults | null>
   runQualityValidation: () => Promise<void>
   pauseQualityValidation: () => Promise<void>
   resumeQualityValidation: () => Promise<void>
@@ -224,9 +396,11 @@ interface WorkflowStore {
   loadQualityResults: () => Promise<QualityResults | null>
   loadPrototypeResults: () => Promise<PrototypeResults | null>
   loadPropagationResults: () => Promise<PropagationResults | null>
+  loadAlignmentOverview: () => Promise<AlignmentOverview | null>
   deleteQualityResults: () => Promise<void>
   publishQualityParquet: () => Promise<{ path: string; row_count: number }>
   publishTextAnnotationsParquet: () => Promise<{ path: string; row_count: number }>
+  applyTextAnnotationsToTrainingTasks: () => Promise<TrainingTaskApplyResult>
   getQualityCsvUrl: (failedOnly?: boolean) => string
   fetchAnnotationWorkspace: (episodeIndex: number) => Promise<AnnotationWorkspacePayload>
   saveAnnotations: (
@@ -291,6 +465,14 @@ function normalizeQualityResults(payload: Partial<QualityResults> | null): Quali
   }
 }
 
+function normalizeQualityFilterMode(value: unknown): QualityFilterMode {
+  return value === 'failed' || value === 'all' || value === 'raw' ? value : 'passed'
+}
+
+function normalizeAlignmentSourceMode(value: unknown): AlignmentSourceMode {
+  return value === 'raw' ? 'raw' : 'quality'
+}
+
 function normalizePrototypeResults(payload: Partial<PrototypeResults> | null): PrototypeResults | null {
   if (!payload) return null
   return {
@@ -298,6 +480,13 @@ function normalizePrototypeResults(payload: Partial<PrototypeResults> | null): P
     entry_count: payload.entry_count ?? 0,
     cluster_count: payload.cluster_count ?? 0,
     anchor_record_keys: payload.anchor_record_keys ?? [],
+    selection_mode: payload.selection_mode ?? '',
+    distance_pair_count: payload.distance_pair_count ?? 0,
+    distance_backend: payload.distance_backend ?? 'cpu',
+    distance_backend_detail: payload.distance_backend_detail ?? {},
+    groups: payload.groups ?? [],
+    quality_filter_mode: normalizeQualityFilterMode(payload.quality_filter_mode),
+    selected_episode_indices: payload.selected_episode_indices ?? [],
     clusters: payload.clusters ?? [],
   }
 }
@@ -308,6 +497,7 @@ function normalizePropagationResults(
   if (!payload) return null
   return {
     source_episode_index: payload.source_episode_index ?? null,
+    source_episode_indices: payload.source_episode_indices ?? [],
     target_count: payload.target_count ?? 0,
     propagated: payload.propagated ?? [],
     published_parquet_path:
@@ -323,8 +513,15 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
   selectedDataset: getStoredDataset(),
   datasetInfo: null,
   workflowState: null,
-  selectedValidators: ['metadata', 'timing', 'action', 'visual', 'depth', 'ee_trajectory'],
+  selectedValidators: ['metadata', 'timing', 'action', 'visual', 'ee_trajectory'],
+  alignmentSourceMode: 'quality',
+  alignmentQualityFilter: 'passed',
   qualityThresholds: {
+    metadata_require_info_json: 1.0,
+    metadata_require_episode_metadata: 1.0,
+    metadata_require_data_files: 1.0,
+    metadata_require_videos: 1.0,
+    metadata_require_task_description: 1.0,
     metadata_min_duration_s: 1.0,
     timing_min_monotonicity: 0.99,
     timing_max_interval_cv: 0.05,
@@ -355,12 +552,15 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     ee_min_event_count: 1.0,
     ee_min_gripper_span: 0.05,
   },
+  qualityDefaults: null,
   qualityResults: null,
   qualityRunning: false,
   prototypeResults: null,
   prototypeRunning: false,
   propagationResults: null,
+  alignmentOverview: null,
   datasetImportJob: null,
+  selectedDatasetIsRemotePrepared: false,
   pollInterval: null,
 
   loadDatasets: async () => {
@@ -379,15 +579,28 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       selectedDataset: datasetId,
       datasetInfo: null,
       workflowState: null,
+      qualityDefaults: null,
       qualityResults: null,
       prototypeResults: null,
       propagationResults: null,
+      alignmentOverview: null,
+      selectedDatasetIsRemotePrepared: false,
     })
     const info = await fetchJson<DatasetRef>(
       `/api/curation/datasets/${encodeURIComponent(datasetId)}`,
     )
     set({ datasetInfo: info })
-    await get().refreshState()
+    try {
+      await get().loadQualityDefaults()
+    } catch (error) {
+      console.warn('Failed to load quality defaults', error)
+    }
+    try {
+      await get().refreshState()
+      set({ selectedDatasetIsRemotePrepared: true })
+    } catch {
+      set({ workflowState: null, selectedDatasetIsRemotePrepared: false })
+    }
   },
 
   importDatasetFromHf: async (datasetId: string, includeVideos = true) => {
@@ -436,6 +649,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     await get().loadDatasets()
     persistDataset(payload.dataset_name)
     await get().selectDataset(payload.dataset_name)
+    set({ selectedDatasetIsRemotePrepared: true })
     return payload
   },
 
@@ -469,6 +683,14 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     set({ selectedValidators: [...current, name] })
   },
 
+  setAlignmentSourceMode: (mode) => {
+    set({ alignmentSourceMode: mode })
+  },
+
+  setAlignmentQualityFilter: (mode) => {
+    set({ alignmentQualityFilter: mode })
+  },
+
   setQualityThreshold: (key: string, value: number) => {
     set((state) => ({
       qualityThresholds: {
@@ -476,6 +698,26 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
         [key]: value,
       },
     }))
+  },
+
+  loadQualityDefaults: async () => {
+    const { selectedDataset } = get()
+    if (!selectedDataset) return null
+    const defaults = await fetchJson<QualityDefaults>(
+      `/api/curation/quality-defaults?dataset=${encodeURIComponent(selectedDataset)}`,
+    )
+    set((state) => ({
+      qualityDefaults: defaults,
+      selectedValidators:
+        defaults.selected_validators.length > 0
+          ? defaults.selected_validators
+          : state.selectedValidators,
+      qualityThresholds: {
+        ...state.qualityThresholds,
+        ...defaults.threshold_overrides,
+      },
+    }))
+    return defaults
   },
 
   runQualityValidation: async () => {
@@ -504,6 +746,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset: selectedDataset }),
     })
+    await get().refreshState()
     get().startPolling()
   },
 
@@ -526,8 +769,18 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
   },
 
   runPrototypeDiscovery: async (clusterCount?: number) => {
-    const { selectedDataset } = get()
+    const { selectedDataset, datasetInfo, qualityResults, alignmentSourceMode, alignmentQualityFilter } = get()
     if (!selectedDataset) return
+    const qualityMode = alignmentSourceMode === 'raw' ? 'raw' : alignmentQualityFilter
+    const selectedEpisodeIndices =
+      alignmentSourceMode === 'raw'
+        ? Array.from({ length: datasetInfo?.stats.total_episodes ?? 0 }, (_, index) => index)
+        : (qualityResults?.episodes || [])
+            .filter((episode) => {
+              if (alignmentQualityFilter === 'all') return true
+              return alignmentQualityFilter === 'passed' ? episode.passed : !episode.passed
+            })
+            .map((episode) => episode.episode_index)
     set({ prototypeRunning: true })
     await fetchJson('/api/curation/prototype-run', {
       method: 'POST',
@@ -535,6 +788,8 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       body: JSON.stringify({
         dataset: selectedDataset,
         cluster_count: clusterCount ?? null,
+        episode_indices: selectedEpisodeIndices,
+        quality_filter_mode: qualityMode,
       }),
     })
     get().startPolling()
@@ -573,7 +828,15 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
         `/api/curation/prototype-results?dataset=${encodeURIComponent(selectedDataset)}`,
       ),
     )
-    set({ prototypeResults: results })
+    set({
+      prototypeResults: results,
+      ...(results?.quality_filter_mode
+        ? {
+            alignmentSourceMode: normalizeAlignmentSourceMode(results.quality_filter_mode),
+            alignmentQualityFilter: normalizeQualityFilterMode(results.quality_filter_mode),
+          }
+        : {}),
+    })
     return results
   },
 
@@ -589,20 +852,28 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     return results
   },
 
+  loadAlignmentOverview: async () => {
+    const { selectedDataset } = get()
+    if (!selectedDataset) return null
+    const results = await fetchJson<AlignmentOverview>(
+      `/api/curation/alignment-overview?dataset=${encodeURIComponent(selectedDataset)}`,
+    )
+    set({ alignmentOverview: results })
+    return results
+  },
+
   deleteQualityResults: async () => {
     const { selectedDataset } = get()
     if (!selectedDataset) {
       throw new Error('No dataset selected')
     }
     await fetchJson<{ status: string }>(
-      '/api/curation/quality-results/delete',
+      `/api/curation/quality-results?dataset=${encodeURIComponent(selectedDataset)}`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataset: selectedDataset }),
+        method: 'DELETE',
       },
     )
-    set({ qualityResults: null, qualityRunning: false })
+    set({ qualityResults: null, qualityRunning: false, prototypeResults: null, alignmentOverview: null })
     await get().refreshState()
   },
 
@@ -620,6 +891,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       },
     )
     await get().loadQualityResults()
+    await get().loadAlignmentOverview()
     return result
   },
 
@@ -637,6 +909,25 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       },
     )
     await get().loadPropagationResults()
+    await get().loadAlignmentOverview()
+    return result
+  },
+
+  applyTextAnnotationsToTrainingTasks: async () => {
+    const { selectedDataset } = get()
+    if (!selectedDataset) {
+      throw new Error('No dataset selected')
+    }
+    const result = await fetchJson<TrainingTaskApplyResult>(
+      '/api/curation/text-annotations-apply',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataset: selectedDataset }),
+      },
+    )
+    await get().loadQualityResults()
+    await get().loadAlignmentOverview()
     return result
   },
 
@@ -684,6 +975,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     })
 
     await get().refreshState()
+    await get().loadAlignmentOverview()
     return saved
   },
 
@@ -711,15 +1003,24 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     const state = await fetchJson<WorkflowState>(
       `/api/curation/state?dataset=${encodeURIComponent(selectedDataset)}`,
     )
+    const qualityStatus = state.stages.quality_validation.status
+    const savedQualityValidators = state.stages.quality_validation.selected_validators
+
     set((current) => ({
       workflowState: state,
+      selectedDatasetIsRemotePrepared: true,
+      alignmentSourceMode: normalizeAlignmentSourceMode(
+        state.stages.prototype_discovery.quality_filter_mode || current.alignmentSourceMode,
+      ),
+      alignmentQualityFilter: normalizeQualityFilterMode(
+        state.stages.prototype_discovery.quality_filter_mode || current.alignmentQualityFilter,
+      ),
       selectedValidators:
-        state.stages.quality_validation.selected_validators.length > 0
-          ? state.stages.quality_validation.selected_validators
+        ['running', 'paused', 'completed'].includes(qualityStatus) && savedQualityValidators.length > 0
+          ? savedQualityValidators
           : current.selectedValidators,
     }))
 
-    const qualityStatus = state.stages.quality_validation.status
     const prototypeStatus = state.stages.prototype_discovery.status
     const annotationStatus = state.stages.annotation.status
 
@@ -752,6 +1053,17 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
       await get().loadPropagationResults()
     }
 
+    if (
+      qualityStatus === 'completed'
+      || qualityStatus === 'paused'
+      || qualityStatus === 'running'
+      || prototypeStatus === 'completed'
+      || annotationStatus === 'completed'
+      || state.stages.annotation.annotated_episodes.length > 0
+    ) {
+      await get().loadAlignmentOverview()
+    }
+
     if (qualityStatus !== 'running' && prototypeStatus !== 'running' && annotationStatus !== 'running') {
       get().stopPolling()
     }
@@ -762,7 +1074,7 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
     if (existing) return
     const interval = setInterval(() => {
       void get().refreshState()
-    }, 1200)
+    }, WORKFLOW_REFRESH_INTERVAL_MS)
     set({ pollInterval: interval })
   },
 

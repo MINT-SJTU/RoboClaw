@@ -1,23 +1,23 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
 import {
-  buildExplorerQuery,
   buildExplorerRefKey,
   listExplorerDatasets,
   searchDatasetSuggestions,
-  useExplorer,
-  type DatasetSuggestion,
-  type EpisodeDetail,
   type ExplorerDatasetRef,
   type ExplorerPageState,
   type ExplorerSource,
+  type DatasetSuggestion,
+  useExplorer,
+  type EpisodeDetail,
   type FeatureStat,
   type ModalityItem,
 } from '@/domains/datasets/explorer/store/useExplorerStore'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
-import { ActionButton, GlassPanel } from '@/shared/ui'
+import { cn } from '@/shared/lib/cn'
+import { ActionButton, GlassPanel, MetricCard } from '@/shared/ui'
 import {
   clampAbsolutePlaybackTime,
   formatClipWindowLabel,
@@ -26,11 +26,7 @@ import {
   shouldLoopVideo,
   type EpisodeVideo,
 } from './datasetExplorerPlayback'
-import { DatasetInsightStack } from '@/domains/datasets/explorer/components/DatasetInsightStack'
-
-function cn(...values: Array<string | false | null | undefined>) {
-  return values.filter(Boolean).join(' ')
-}
+import { DatasetInsightStack } from '../components/DatasetInsightStack'
 
 // ---------------------------------------------------------------------------
 // Modality chips
@@ -144,97 +140,6 @@ function formatAngle(value: number | null | undefined): string {
   return value.toFixed(3)
 }
 
-function getTrajectoryTimeBounds(detail: EpisodeDetail): [number, number] {
-  const timeValues = detail.joint_trajectory.time_values
-  if (timeValues.length >= 2) {
-    return [timeValues[0], timeValues[timeValues.length - 1]]
-  }
-  const duration = detail.summary.duration_s || 0
-  return [0, duration]
-}
-
-interface PreparedJointChart {
-  jointName: string
-  stateValues: number[]
-  actionValues: number[]
-  statePoints: string
-  actionPoints: string
-  yMaxLabel: string
-  yMidLabel: string
-  yMinLabel: string
-}
-
-function getNearestTrajectoryIndexForTime(
-  detail: EpisodeDetail,
-  relativeTime: number,
-): number {
-  const timeValues = detail.joint_trajectory.time_values
-  if (timeValues.length > 0) {
-    let low = 0
-    let high = timeValues.length - 1
-
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2)
-      if (timeValues[mid] < relativeTime) {
-        low = mid + 1
-      } else {
-        high = mid
-      }
-    }
-
-    const previous = Math.max(low - 1, 0)
-    return Math.abs(timeValues[previous] - relativeTime) <= Math.abs(timeValues[low] - relativeTime)
-      ? previous
-      : low
-  }
-
-  const firstJoint = detail.joint_trajectory.joint_trajectories[0]
-  const totalPoints = Math.max(
-    firstJoint?.state_values.length ?? 0,
-    firstJoint?.action_values.length ?? 0,
-  )
-  if (totalPoints <= 1) return 0
-  const duration = detail.summary.duration_s || 1
-  const progress = Math.min(Math.max(relativeTime / duration, 0), 1)
-  return Math.round(progress * (totalPoints - 1))
-}
-
-function buildPreparedJointCharts(
-  jointTrajectories: EpisodeDetail['joint_trajectory']['joint_trajectories'],
-): PreparedJointChart[] {
-  return jointTrajectories.map((joint) => {
-    const actionValues = joint.action_values.map((value) => value ?? 0)
-    const stateValues = joint.state_values.map((value) => value ?? 0)
-    const allValues = [...actionValues, ...stateValues]
-    const minValue = allValues.length > 0 ? Math.min(...allValues) : 0
-    const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1
-    const padding = (maxValue - minValue || 1) * 0.1
-    const yMin = minValue - padding
-    const yMax = maxValue + padding
-    const yRange = yMax - yMin || 1
-
-    const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
-    const buildPolyline = (values: number[]) =>
-      values
-        .map((value, index) => {
-          const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
-          return `${x},${toY(value)}`
-        })
-        .join(' ')
-
-    return {
-      jointName: joint.joint_name,
-      stateValues,
-      actionValues,
-      statePoints: buildPolyline(stateValues),
-      actionPoints: buildPolyline(actionValues),
-      yMaxLabel: yMax.toFixed(2),
-      yMidLabel: ((yMax + yMin) / 2).toFixed(2),
-      yMinLabel: yMin.toFixed(2),
-    }
-  })
-}
-
 function syncVideoIntoClipWindow(
   element: HTMLVideoElement,
   video: EpisodeVideo | null | undefined,
@@ -256,83 +161,78 @@ function syncVideoIntoClipWindow(
   return nextTime
 }
 
+function getTrajectoryTimeBounds(detail: EpisodeDetail): [number, number] {
+  const timeValues = detail.joint_trajectory.time_values
+  if (timeValues.length >= 2) {
+    return [timeValues[0], timeValues[timeValues.length - 1]]
+  }
+  const duration = detail.summary.duration_s || 0
+  return [0, duration]
+}
+
+function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: number): number {
+  const timeValues = detail.joint_trajectory.time_values
+  if (timeValues.length > 0) {
+    let nearestIndex = 0
+    let nearestDistance = Number.POSITIVE_INFINITY
+    timeValues.forEach((value, index) => {
+      const distance = Math.abs(value - videoCurrentTime)
+      if (distance < nearestDistance) {
+        nearestDistance = distance
+        nearestIndex = index
+      }
+    })
+    return nearestIndex
+  }
+
+  const firstJoint = detail.joint_trajectory.joint_trajectories[0]
+  const totalPoints = Math.max(
+    firstJoint?.state_values.length ?? 0,
+    firstJoint?.action_values.length ?? 0,
+  )
+  if (totalPoints <= 1) return 0
+  const duration = detail.summary.duration_s || 1
+  const progress = Math.min(Math.max(videoCurrentTime / duration, 0), 1)
+  return Math.round(progress * (totalPoints - 1))
+}
+
+function hasTrajectoryData(detail: EpisodeDetail | null | undefined): boolean {
+  if (!detail) return false
+  return (
+    detail.joint_trajectory.joint_trajectories.length > 0 ||
+    detail.joint_trajectory.total_points > 0
+  )
+}
+
 function EpisodePlaybackSurface({
   detail,
   playVideo,
+  videoCurrentTime,
+  onVideoTimeUpdate,
   emptyLabel,
 }: {
   detail: EpisodeDetail
   playVideo: boolean
+  videoCurrentTime: number
+  onVideoTimeUpdate: (seconds: number) => void
   emptyLabel: string
 }) {
-  const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const syncLockRef = useRef(false)
   const lastTimelineTimeRef = useRef<number>(-1)
-  const timelineFrameRef = useRef<number | null>(null)
   const jointTrajectories = detail.joint_trajectory.joint_trajectories
-  const preparedJointCharts = useMemo(
-    () => buildPreparedJointCharts(jointTrajectories),
-    [jointTrajectories],
-  )
   const [timeMin, timeMax] = getTrajectoryTimeBounds(detail)
   const timeRange = timeMax - timeMin || 1
+  const currentIndex = getNearestTrajectoryIndex(detail, videoCurrentTime)
+  const currentTimePercent = Math.min(
+    Math.max(((videoCurrentTime - timeMin) / timeRange) * 100, 0),
+    100,
+  )
 
   useEffect(() => {
+    videoRefs.current = []
     lastTimelineTimeRef.current = -1
-    if (timelineFrameRef.current != null) {
-      window.cancelAnimationFrame(timelineFrameRef.current)
-      timelineFrameRef.current = null
-    }
   }, [detail.episode_index])
-
-  useEffect(() => {
-    return () => {
-      if (timelineFrameRef.current != null) {
-        window.cancelAnimationFrame(timelineFrameRef.current)
-      }
-    }
-  }, [])
-
-  const paintTimeline = (relativeTime: number, options: { force?: boolean } = {}) => {
-    if (
-      !options.force &&
-      lastTimelineTimeRef.current >= 0 &&
-      Math.abs(relativeTime - lastTimelineTimeRef.current) < 0.008
-    ) {
-      return
-    }
-    lastTimelineTimeRef.current = relativeTime
-
-    const root = rootRef.current
-    if (!root) return
-
-    const currentTimePercent = Math.min(
-      Math.max(((relativeTime - timeMin) / timeRange) * 100, 0),
-      100,
-    )
-    root
-      .querySelectorAll<SVGLineElement>('[data-trajectory-cursor]')
-      .forEach((line) => {
-        line.setAttribute('x1', String(currentTimePercent))
-        line.setAttribute('x2', String(currentTimePercent))
-      })
-
-    const currentIndex = getNearestTrajectoryIndexForTime(detail, relativeTime)
-    preparedJointCharts.forEach((joint, index) => {
-      const currentNode = root.querySelector<HTMLElement>(
-        `[data-trajectory-current="${index}"]`,
-      )
-      if (!currentNode) return
-      const currentState = joint.stateValues[Math.min(currentIndex, joint.stateValues.length - 1)]
-      const currentAction = joint.actionValues[Math.min(currentIndex, joint.actionValues.length - 1)]
-      currentNode.textContent = `S ${formatAngle(currentState)} / A ${formatAngle(currentAction)}`
-    })
-  }
-
-  useEffect(() => {
-    paintTimeline(0, { force: true })
-  }, [detail, preparedJointCharts])
 
   useEffect(() => {
     const timelineLeaderIndex = 0
@@ -345,34 +245,18 @@ function EpisodePlaybackSurface({
         return
       }
       const relativeTime = getRelativePlaybackTime(getVideoMeta(index), absoluteTime)
-      paintTimeline(relativeTime, options)
+      if (
+        !options.force &&
+        lastTimelineTimeRef.current >= 0 &&
+        Math.abs(relativeTime - lastTimelineTimeRef.current) < 0.033
+      ) {
+        return
+      }
+      lastTimelineTimeRef.current = relativeTime
+      onVideoTimeUpdate(relativeTime)
     }
 
     const getVideoMeta = (index: number): EpisodeVideo | null => detail.videos[index] ?? null
-    const stopTimelineLoop = () => {
-      if (timelineFrameRef.current != null) {
-        window.cancelAnimationFrame(timelineFrameRef.current)
-        timelineFrameRef.current = null
-      }
-    }
-    const startTimelineLoop = () => {
-      if (timelineFrameRef.current != null) {
-        return
-      }
-      const tick = () => {
-        const leader = videoRefs.current[timelineLeaderIndex]
-        if (!leader || leader.paused) {
-          timelineFrameRef.current = null
-          return
-        }
-        const absoluteTime = syncVideoIntoClipWindow(leader, getVideoMeta(timelineLeaderIndex), {
-          loopToStart: true,
-        })
-        updateTimelineFrom(timelineLeaderIndex, absoluteTime)
-        timelineFrameRef.current = window.requestAnimationFrame(tick)
-      }
-      timelineFrameRef.current = window.requestAnimationFrame(tick)
-    }
     const syncFromSource = (
       sourceIndex: number,
       options: { forceSeek?: boolean } = {},
@@ -441,9 +325,6 @@ function EpisodePlaybackSurface({
         const absoluteTime = syncVideoIntoClipWindow(video, meta, { loopToStart: true })
         updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
-        if (index === timelineLeaderIndex) {
-          startTimelineLoop()
-        }
       }
       const handlePause = () => {
         if (syncLockRef.current) return
@@ -451,9 +332,6 @@ function EpisodePlaybackSurface({
         const absoluteTime = syncVideoIntoClipWindow(video, meta)
         updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index)
-        if (index === timelineLeaderIndex) {
-          stopTimelineLoop()
-        }
       }
       const handleSeeking = () => {
         if (syncLockRef.current) return
@@ -477,7 +355,7 @@ function EpisodePlaybackSurface({
         if (syncLockRef.current) return
         const meta = getVideoMeta(index)
         const absoluteTime = syncVideoIntoClipWindow(video, meta, {
-          loopToStart: !video.paused,
+          loopToStart: playVideo,
           forceSeek: false,
         })
         updateTimelineFrom(index, absoluteTime)
@@ -485,7 +363,6 @@ function EpisodePlaybackSurface({
           return
         }
         syncFromSource(index)
-        startTimelineLoop()
       }
       const handleLoadedMetadata = () => {
         if (syncLockRef.current) return
@@ -514,23 +391,10 @@ function EpisodePlaybackSurface({
       })
     })
 
-    const leader = videoRefs.current[timelineLeaderIndex]
-    if (leader) {
-      const leaderMeta = getVideoMeta(timelineLeaderIndex)
-      const absoluteTime = syncVideoIntoClipWindow(leader, leaderMeta, {
-        loopToStart: !leader.paused,
-      })
-      updateTimelineFrom(timelineLeaderIndex, absoluteTime, { force: true })
-      if (!leader.paused) {
-        startTimelineLoop()
-      }
-    }
-
     return () => {
       listeners.forEach((cleanup) => cleanup())
-      stopTimelineLoop()
     }
-  }, [detail, paintTimeline, playVideo])
+  }, [detail, onVideoTimeUpdate, playVideo])
 
   useEffect(() => {
     const videos = videoRefs.current.filter((video): video is HTMLVideoElement => Boolean(video))
@@ -581,12 +445,7 @@ function EpisodePlaybackSurface({
   }, [playVideo, detail])
 
   useEffect(() => {
-    if (!playVideo) {
-      return
-    }
-
-    let interval: number | null = null
-    const syncFollowers = () => {
+    const interval = window.setInterval(() => {
       const entries = videoRefs.current
         .map((video, index) => ({ video, index }))
         .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
@@ -634,39 +493,15 @@ function EpisodePlaybackSurface({
           }
         }
       })
-    }
-
-    const stopInterval = () => {
-      if (interval != null) {
-        window.clearInterval(interval)
-        interval = null
-      }
-    }
-    const startInterval = () => {
-      if (interval != null) {
-        return
-      }
-      interval = window.setInterval(syncFollowers, 120)
-    }
-
-    const leader = videoRefs.current[0]
-    if (leader && !leader.paused) {
-      startInterval()
-    }
-    leader?.addEventListener('play', startInterval)
-    leader?.addEventListener('pause', stopInterval)
-    leader?.addEventListener('ended', stopInterval)
+    }, 120)
 
     return () => {
-      stopInterval()
-      leader?.removeEventListener('play', startInterval)
-      leader?.removeEventListener('pause', stopInterval)
-      leader?.removeEventListener('ended', stopInterval)
+      window.clearInterval(interval)
     }
   }, [detail, playVideo])
 
   return (
-    <div ref={rootRef} className="explorer-hover-preview__body explorer-episode-playback">
+    <div className="explorer-hover-preview__body explorer-episode-playback">
       <div className="explorer-hover-preview__video-grid">
         {detail.videos.length > 0 ? (
           detail.videos.map((video, index) => {
@@ -706,62 +541,82 @@ function EpisodePlaybackSurface({
           </div>
 
           <div className="explorer-hover-preview__charts-grid">
-            {preparedJointCharts.map((joint, index) => (
-              <div key={joint.jointName} className="explorer-hover-preview__chart">
-                <div className="explorer-hover-preview__chart-title-row">
-                  <div className="explorer-hover-preview__chart-title">{joint.jointName}</div>
-                  <div
-                    className="explorer-hover-preview__chart-current"
-                    data-trajectory-current={index}
-                  >
-                    S {formatAngle(joint.stateValues[0])} / A {formatAngle(joint.actionValues[0])}
-                  </div>
-                </div>
+            {jointTrajectories.map((joint) => {
+              const actionValues = joint.action_values.map((value) => value ?? 0)
+              const stateValues = joint.state_values.map((value) => value ?? 0)
+              const allValues = [...actionValues, ...stateValues]
+              const minValue = Math.min(...allValues)
+              const maxValue = Math.max(...allValues)
+              const padding = (maxValue - minValue || 1) * 0.1
+              const yMin = minValue - padding
+              const yMax = maxValue + padding
+              const yRange = yMax - yMin || 1
 
-                <div className="explorer-hover-preview__chart-container">
-                  <div className="explorer-hover-preview__chart-yaxis">
-                    <span>{joint.yMaxLabel}</span>
-                    <span>{joint.yMidLabel}</span>
-                    <span>{joint.yMinLabel}</span>
+              const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
+              const buildPolyline = (values: number[]) =>
+                values
+                  .map((value, index) => {
+                    const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
+                    return `${x},${toY(value)}`
+                  })
+                  .join(' ')
+
+              const currentState = stateValues[Math.min(currentIndex, stateValues.length - 1)]
+              const currentAction = actionValues[Math.min(currentIndex, actionValues.length - 1)]
+
+              return (
+                <div key={joint.joint_name} className="explorer-hover-preview__chart">
+                  <div className="explorer-hover-preview__chart-title-row">
+                    <div className="explorer-hover-preview__chart-title">{joint.joint_name}</div>
+                    <div className="explorer-hover-preview__chart-current">
+                      S {formatAngle(currentState)} / A {formatAngle(currentAction)}
+                    </div>
                   </div>
 
-                  <div className="explorer-hover-preview__chart-svg-wrap">
-                    <svg viewBox="0 0 100 60" preserveAspectRatio="none">
-                      <polyline
-                        points={joint.statePoints}
-                        fill="none"
-                        stroke="#2f6fe4"
-                        strokeWidth="0.55"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                      <polyline
-                        points={joint.actionPoints}
-                        fill="none"
-                        stroke="#f59e0b"
-                        strokeWidth="0.55"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                      <line
-                        data-trajectory-cursor
-                        x1="0"
-                        y1="10"
-                        x2="0"
-                        y2="50"
-                        stroke="#ef4444"
-                        strokeWidth="0.35"
-                        strokeDasharray="2,2"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    </svg>
-                    <div className="explorer-hover-preview__chart-xaxis">
-                      <span>{timeMin.toFixed(1)}s</span>
-                      <span>{((timeMin + timeMax) / 2).toFixed(1)}s</span>
-                      <span>{timeMax.toFixed(1)}s</span>
+                  <div className="explorer-hover-preview__chart-container">
+                    <div className="explorer-hover-preview__chart-yaxis">
+                      <span>{yMax.toFixed(2)}</span>
+                      <span>{((yMax + yMin) / 2).toFixed(2)}</span>
+                      <span>{yMin.toFixed(2)}</span>
+                    </div>
+
+                    <div className="explorer-hover-preview__chart-svg-wrap">
+                      <svg viewBox="0 0 100 60" preserveAspectRatio="none">
+                        <polyline
+                          points={buildPolyline(stateValues)}
+                          fill="none"
+                          stroke="#2f6fe4"
+                          strokeWidth="0.55"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <polyline
+                          points={buildPolyline(actionValues)}
+                          fill="none"
+                          stroke="#f59e0b"
+                          strokeWidth="0.55"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <line
+                          x1={currentTimePercent}
+                          y1="10"
+                          x2={currentTimePercent}
+                          y2="50"
+                          stroke="#ef4444"
+                          strokeWidth="0.35"
+                          strokeDasharray="2,2"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </svg>
+                      <div className="explorer-hover-preview__chart-xaxis">
+                        <span>{timeMin.toFixed(1)}s</span>
+                        <span>{((timeMin + timeMax) / 2).toFixed(1)}s</span>
+                        <span>{timeMax.toFixed(1)}s</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
@@ -772,16 +627,22 @@ function EpisodePlaybackSurface({
 function EpisodeHoverPreview({
   detail,
   loading,
+  trajectoryLoading,
   error,
   playVideo,
+  videoCurrentTime,
+  onVideoTimeUpdate,
   onClose,
   onMouseEnter,
   onMouseLeave,
 }: {
   detail: EpisodeDetail | null
   loading: boolean
+  trajectoryLoading: boolean
   error: string
   playVideo: boolean
+  videoCurrentTime: number
+  onVideoTimeUpdate: (seconds: number) => void
   onClose: () => void
   onMouseEnter: () => void
   onMouseLeave: () => void
@@ -823,14 +684,34 @@ function EpisodeHoverPreview({
             <EpisodePlaybackSurface
               detail={detail}
               playVideo={playVideo}
+              videoCurrentTime={videoCurrentTime}
+              onVideoTimeUpdate={onVideoTimeUpdate}
               emptyLabel="No video stream available for this episode."
             />
+
+            {!hasTrajectoryData(detail) && trajectoryLoading && (
+              <div className="explorer-hover-preview__empty">
+                Loading trajectory comparison...
+              </div>
+            )}
           </>
         )}
       </div>
     </div>,
     document.body,
   )
+}
+
+function buildExplorerQuery(ref: ExplorerDatasetRef): string {
+  const params = new URLSearchParams()
+  params.set('source', ref.source)
+  if (ref.dataset) {
+    params.set('dataset', ref.dataset)
+  }
+  if (ref.path) {
+    params.set('path', ref.path)
+  }
+  return params.toString()
 }
 
 function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
@@ -848,25 +729,45 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
     clearEpisode,
   } = useExplorer()
   const episodes = episodePage?.episodes ?? []
-  const selectedDataset = episodePage?.dataset ?? ''
+  const selectedDataset = datasetRef.dataset ?? episodePage?.dataset ?? ''
   const hoverTimerRef = useRef<number | null>(null)
   const closeTimerRef = useRef<number | null>(null)
+  const playReadyTimerRef = useRef<number | null>(null)
   const requestTokenRef = useRef(0)
   const previewCacheRef = useRef<Map<number, EpisodeDetail>>(new Map())
+  const previewDetailStateRef = useRef<Map<number, 'loading' | 'loaded'>>(new Map())
+  const hoverRequestAbortRef = useRef<AbortController | null>(null)
   const [hoveredEpisodeIndex, setHoveredEpisodeIndex] = useState<number | null>(null)
   const [hoveredPreview, setHoveredPreview] = useState<EpisodeDetail | null>(null)
   const [hoveredPreviewLoading, setHoveredPreviewLoading] = useState(false)
+  const [hoveredPreviewTrajectoryLoading, setHoveredPreviewTrajectoryLoading] = useState(false)
   const [hoveredPreviewError, setHoveredPreviewError] = useState('')
   const [previewPlayReady, setPreviewPlayReady] = useState(false)
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0)
+  const [detailVideoCurrentTime, setDetailVideoCurrentTime] = useState(0)
 
   useEffect(() => {
     previewCacheRef.current.clear()
+    previewDetailStateRef.current.clear()
+    hoverRequestAbortRef.current?.abort()
+    hoverRequestAbortRef.current = null
+    if (playReadyTimerRef.current) {
+      window.clearTimeout(playReadyTimerRef.current)
+      playReadyTimerRef.current = null
+    }
     setHoveredEpisodeIndex(null)
     setHoveredPreview(null)
     setHoveredPreviewLoading(false)
+    setHoveredPreviewTrajectoryLoading(false)
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
+    setVideoCurrentTime(0)
+    setDetailVideoCurrentTime(0)
   }, [selectedDataset, datasetRef.path, datasetRef.source])
+
+  useEffect(() => {
+    setDetailVideoCurrentTime(0)
+  }, [episodeDetail?.episode_index])
 
   useEffect(() => {
     return () => {
@@ -876,8 +777,25 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
       if (closeTimerRef.current) {
         window.clearTimeout(closeTimerRef.current)
       }
+      if (playReadyTimerRef.current) {
+        window.clearTimeout(playReadyTimerRef.current)
+      }
+      hoverRequestAbortRef.current?.abort()
     }
   }, [])
+
+  useEffect(() => {
+    if (
+      hoveredEpisodeIndex === null ||
+      !hoveredPreview ||
+      hasTrajectoryData(hoveredPreview) ||
+      previewDetailStateRef.current.get(hoveredEpisodeIndex) === 'loaded'
+    ) {
+      return
+    }
+
+    void hydrateHoverPreviewDetail(datasetRef, hoveredEpisodeIndex, requestTokenRef.current)
+  }, [hoveredEpisodeIndex, hoveredPreview, datasetRef, selectedDataset])
 
   if (episodePageLoading && !episodePage) {
     return <div className="explorer-empty">{t('running')}...</div>
@@ -909,25 +827,125 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
       window.clearTimeout(hoverTimerRef.current)
       hoverTimerRef.current = null
     }
+    if (playReadyTimerRef.current) {
+      window.clearTimeout(playReadyTimerRef.current)
+      playReadyTimerRef.current = null
+    }
     closeTimerRef.current = window.setTimeout(() => {
+      hoverRequestAbortRef.current?.abort()
+      hoverRequestAbortRef.current = null
+      previewDetailStateRef.current.forEach((state, key) => {
+        if (state === 'loading') {
+          previewDetailStateRef.current.delete(key)
+        }
+      })
       setHoveredEpisodeIndex(null)
       setHoveredPreview(null)
       setHoveredPreviewLoading(false)
+      setHoveredPreviewTrajectoryLoading(false)
       setHoveredPreviewError('')
       setPreviewPlayReady(false)
+      setVideoCurrentTime(0)
     }, 180)
   }
 
+  const armPreviewPlayback = (requestToken: number, delayMs = 180) => {
+    if (playReadyTimerRef.current) {
+      window.clearTimeout(playReadyTimerRef.current)
+    }
+    playReadyTimerRef.current = window.setTimeout(() => {
+      if (requestToken === requestTokenRef.current) {
+        setPreviewPlayReady(true)
+      }
+    }, delayMs)
+  }
+
+  const hydrateHoverPreviewDetail = async (
+    ref: ExplorerDatasetRef,
+    episodeIndex: number,
+    requestToken: number,
+  ) => {
+    const currentState = previewDetailStateRef.current.get(episodeIndex)
+    if (currentState === 'loading' || currentState === 'loaded') {
+      return
+    }
+
+    const controller = new AbortController()
+    hoverRequestAbortRef.current = controller
+    previewDetailStateRef.current.set(episodeIndex, 'loading')
+    if (requestToken === requestTokenRef.current) {
+      setHoveredPreviewTrajectoryLoading(true)
+    }
+
+    try {
+      const response = await fetch(
+        `/api/explorer/episode?${buildExplorerQuery(ref)}&episode_index=${episodeIndex}`,
+        { signal: controller.signal },
+      )
+      if (!response.ok) {
+        throw new Error(`Failed to load trajectory comparison (${response.status})`)
+      }
+      const detail: EpisodeDetail = await response.json()
+      previewCacheRef.current.set(episodeIndex, detail)
+      previewDetailStateRef.current.set(episodeIndex, 'loaded')
+      if (requestToken === requestTokenRef.current) {
+        setHoveredPreview(detail)
+        armPreviewPlayback(requestToken)
+      }
+    } catch (error) {
+      previewDetailStateRef.current.delete(episodeIndex)
+      if (
+        error instanceof DOMException &&
+        error.name === 'AbortError'
+      ) {
+        return
+      }
+      if (requestToken === requestTokenRef.current) {
+        setHoveredPreviewError(
+          error instanceof Error ? error.message : 'Failed to load trajectory comparison',
+        )
+        armPreviewPlayback(requestToken)
+      }
+    } finally {
+      if (requestToken === requestTokenRef.current) {
+        setHoveredPreviewTrajectoryLoading(false)
+      }
+    }
+  }
+
   const scheduleHoverPreview = (episodeIndex: number) => {
+    if (
+      hoveredEpisodeIndex === episodeIndex &&
+      (hoveredPreview !== null || hoveredPreviewLoading || hoveredPreviewTrajectoryLoading)
+    ) {
+      cancelClosePreview()
+      return
+    }
+
     cancelClosePreview()
     if (hoverTimerRef.current) {
       window.clearTimeout(hoverTimerRef.current)
       hoverTimerRef.current = null
     }
+    if (playReadyTimerRef.current) {
+      window.clearTimeout(playReadyTimerRef.current)
+      playReadyTimerRef.current = null
+    }
+    hoverRequestAbortRef.current?.abort()
+    previewDetailStateRef.current.forEach((state, key) => {
+      if (state === 'loading') {
+        previewDetailStateRef.current.delete(key)
+      }
+    })
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
+    setVideoCurrentTime(0)
+    setHoveredPreviewTrajectoryLoading(false)
 
     hoverTimerRef.current = window.setTimeout(async () => {
+      const controller = new AbortController()
+      hoverRequestAbortRef.current = controller
+      const requestToken = ++requestTokenRef.current
       setHoveredEpisodeIndex(episodeIndex)
       setPreviewPlayReady(true)
 
@@ -935,34 +953,42 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
       if (cached) {
         setHoveredPreview(cached)
         setHoveredPreviewLoading(false)
+        if (hasTrajectoryData(cached) || previewDetailStateRef.current.get(episodeIndex) === 'loaded') {
+          armPreviewPlayback(requestToken)
+        }
         return
       }
 
       setHoveredPreview(null)
       setHoveredPreviewLoading(true)
 
-      const requestToken = ++requestTokenRef.current
       try {
         const response = await fetch(
-          `/api/explorer/episode?${buildExplorerQuery(datasetRef)}&episode_index=${episodeIndex}&preview=true`,
+          `/api/explorer/episode?${buildExplorerQuery(datasetRef)}&episode_index=${episodeIndex}&preview=1`,
+          { signal: controller.signal },
         )
         if (!response.ok) {
           throw new Error(`Failed to load episode preview (${response.status})`)
         }
         const detail: EpisodeDetail = await response.json()
         previewCacheRef.current.set(episodeIndex, detail)
-        if (previewCacheRef.current.size > 20) {
-          const oldestEpisodeIndex = previewCacheRef.current.keys().next().value
-          if (oldestEpisodeIndex !== undefined) {
-            previewCacheRef.current.delete(oldestEpisodeIndex)
-          }
-        }
         if (requestToken === requestTokenRef.current) {
           setHoveredPreview(detail)
         }
+        if (hasTrajectoryData(detail)) {
+          previewDetailStateRef.current.set(episodeIndex, 'loaded')
+          armPreviewPlayback(requestToken)
+        }
       } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === 'AbortError'
+        ) {
+          return
+        }
         if (requestToken === requestTokenRef.current) {
           setHoveredPreviewError(error instanceof Error ? error.message : 'Failed to load preview')
+          armPreviewPlayback(requestToken)
         }
       } finally {
         if (requestToken === requestTokenRef.current) {
@@ -1029,13 +1055,18 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
         <EpisodeHoverPreview
           detail={hoveredPreview}
           loading={hoveredPreviewLoading}
+          trajectoryLoading={hoveredPreviewTrajectoryLoading}
           error={hoveredPreviewError}
+          videoCurrentTime={videoCurrentTime}
+          onVideoTimeUpdate={setVideoCurrentTime}
           onClose={() => {
             setHoveredEpisodeIndex(null)
             setHoveredPreview(null)
             setHoveredPreviewLoading(false)
+            setHoveredPreviewTrajectoryLoading(false)
             setHoveredPreviewError('')
             setPreviewPlayReady(false)
+            setVideoCurrentTime(0)
           }}
           playVideo={previewPlayReady}
           onMouseEnter={cancelClosePreview}
@@ -1070,6 +1101,8 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
               <EpisodePlaybackSurface
                 detail={episodeDetail}
                 playVideo
+                videoCurrentTime={detailVideoCurrentTime}
+                onVideoTimeUpdate={setDetailVideoCurrentTime}
                 emptyLabel="No video stream available for this episode."
               />
             </div>
@@ -1135,11 +1168,7 @@ function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
 export default function DatasetExplorerView() {
   const { t } = useI18n()
   const navigate = useNavigate()
-  const {
-    prepareRemoteDatasetForWorkflow,
-    createLocalDirectorySession,
-    selectDataset,
-  } = useWorkflow()
+  const { prepareRemoteDatasetForWorkflow, createLocalDirectorySession } = useWorkflow()
   const {
     summary,
     summaryRefKey,
@@ -1247,6 +1276,7 @@ export default function DatasetExplorerView() {
     localDatasetInput,
     localDatasetPathSelected,
     localPathDatasetLabel,
+    currentDataset,
     activeDatasetRef,
     summaryForSource,
     dashboardForSource,
@@ -1263,6 +1293,46 @@ export default function DatasetExplorerView() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    function handlePipelineEvent(event: Event): void {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail
+      if (!detail || detail.type !== 'pipeline.dataset_prepared') {
+        return
+      }
+      const sourceDataset =
+        typeof detail.source_dataset === 'string' && detail.source_dataset.trim()
+          ? detail.source_dataset.trim()
+          : typeof detail.dataset_id === 'string'
+            ? detail.dataset_id.trim()
+            : ''
+      if (!sourceDataset) {
+        return
+      }
+
+      const preparedName = typeof detail.dataset_name === 'string' ? detail.dataset_name : ''
+      const nextRef: ExplorerDatasetRef = { source: 'remote', dataset: sourceDataset }
+      requestedDatasetKeyRef.current = buildExplorerRefKey(nextRef)
+      setActiveDatasetRef(nextRef)
+      setPageState({
+        source: 'remote',
+        datasetIdInput: sourceDataset,
+        remoteDatasetSelected: sourceDataset,
+        prepareError: '',
+        prepareStatus: preparedName
+          ? `${t('preparedForQuality')}: ${preparedName}`
+          : `${t('preparedForQuality')}: ${sourceDataset}`,
+      })
+      void Promise.allSettled([
+        loadSummary(nextRef),
+        loadDashboard(nextRef),
+        loadEpisodePage(nextRef, 1, 50),
+      ])
+    }
+
+    window.addEventListener('roboclaw:pipeline-event', handlePipelineEvent)
+    return () => window.removeEventListener('roboclaw:pipeline-event', handlePipelineEvent)
+  }, [loadDashboard, loadEpisodePage, loadSummary, setActiveDatasetRef, setPageState, t])
 
   useEffect(() => {
     if (source !== 'remote') {
@@ -1288,7 +1358,9 @@ export default function DatasetExplorerView() {
     const timer = window.setTimeout(() => {
       void searchDatasetSuggestions(needle, source, 8)
         .then((items) => {
-          if (suggestionRequestRef.current !== requestId) return
+          if (suggestionRequestRef.current !== requestId) {
+            return
+          }
           setDatasetSuggestions(items)
           setHighlightedSuggestionIndex(items.length > 0 ? 0 : -1)
           if (document.activeElement === datasetInputRef.current) {
@@ -1296,7 +1368,9 @@ export default function DatasetExplorerView() {
           }
         })
         .catch(() => {
-          if (suggestionRequestRef.current !== requestId) return
+          if (suggestionRequestRef.current !== requestId) {
+            return
+          }
           setDatasetSuggestions([])
           setHighlightedSuggestionIndex(-1)
         })
@@ -1311,32 +1385,6 @@ export default function DatasetExplorerView() {
       window.clearTimeout(timer)
     }
   }, [datasetIdInput, currentDataset, source])
-
-  function openSuggestions(): void {
-    if (blurTimerRef.current != null) {
-      window.clearTimeout(blurTimerRef.current)
-      blurTimerRef.current = null
-    }
-    if (datasetIdInput.trim().length >= 2) {
-      setSuggestionsOpen(true)
-    }
-  }
-
-  function closeSuggestionsSoon(): void {
-    if (blurTimerRef.current != null) {
-      window.clearTimeout(blurTimerRef.current)
-    }
-    blurTimerRef.current = window.setTimeout(() => {
-      setSuggestionsOpen(false)
-    }, 120)
-  }
-
-  function markExplorerDraft(nextSource: ExplorerSource): void {
-    requestedDatasetKeyRef.current = ''
-    if (activeDatasetRef?.source === nextSource) {
-      setActiveDatasetRef(null)
-    }
-  }
 
   async function handleLoad(
     override?: Partial<ExplorerDatasetRef> & { datasetOverride?: string },
@@ -1359,7 +1407,6 @@ export default function DatasetExplorerView() {
     if (!nextRef.dataset && !nextRef.path) {
       return
     }
-    setPageState({ prepareStatus: '', prepareError: '' })
     if (nextSource === 'remote' && nextRef.dataset) {
       setPageState({
         datasetIdInput: nextRef.dataset,
@@ -1380,25 +1427,46 @@ export default function DatasetExplorerView() {
     setDatasetSuggestions([])
     setHighlightedSuggestionIndex(-1)
     await loadDataset(nextRef)
-    if (nextRef.source !== 'remote' && nextRef.dataset) {
-      try {
-        await selectDataset(nextRef.dataset)
-      } catch (error) {
-        setPageState({
-          prepareError: error instanceof Error ? error.message : t('qualityRunFailed'),
-        })
-      }
+  }
+
+  function openSuggestions(): void {
+    if (blurTimerRef.current != null) {
+      window.clearTimeout(blurTimerRef.current)
+      blurTimerRef.current = null
     }
+    if (datasetIdInput.trim().length >= 2) {
+      setSuggestionsOpen(true)
+    }
+  }
+
+  function markExplorerDraft(nextSource: ExplorerSource): void {
+    requestedDatasetKeyRef.current = ''
+    if (activeDatasetRef?.source === nextSource) {
+      setActiveDatasetRef(null)
+    }
+  }
+
+  function closeSuggestionsSoon(): void {
+    if (blurTimerRef.current != null) {
+      window.clearTimeout(blurTimerRef.current)
+    }
+    blurTimerRef.current = window.setTimeout(() => {
+      setSuggestionsOpen(false)
+    }, 120)
   }
 
   async function handleSuggestionSelect(datasetId: string): Promise<void> {
     await handleLoad({ source: 'remote', datasetOverride: datasetId })
   }
 
-  async function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>): Promise<void> {
+  async function handleInputKeyDown(
+    event: KeyboardEvent<HTMLInputElement>,
+  ): Promise<void> {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      if (!suggestionsOpen) openSuggestions()
+      if (!suggestionsOpen) {
+        openSuggestions()
+      }
       if (datasetSuggestions.length > 0) {
         setHighlightedSuggestionIndex((current) => (current + 1) % datasetSuggestions.length)
       }
@@ -1406,7 +1474,9 @@ export default function DatasetExplorerView() {
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      if (!suggestionsOpen) openSuggestions()
+      if (!suggestionsOpen) {
+        openSuggestions()
+      }
       if (datasetSuggestions.length > 0) {
         setHighlightedSuggestionIndex((current) =>
           current <= 0 ? datasetSuggestions.length - 1 : current - 1,
@@ -1453,7 +1523,9 @@ export default function DatasetExplorerView() {
     }
   }
 
-  async function handleChooseLocalDirectory(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+  async function handleChooseLocalDirectory(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ): Promise<void> {
     const files = Array.from(event.target.files || [])
     if (files.length === 0) {
       return
@@ -1480,7 +1552,6 @@ export default function DatasetExplorerView() {
         path: payload.local_path,
         datasetOverride: payload.dataset_name,
       })
-      setPageState({ prepareStatus: payload.display_name })
     } catch (error) {
       setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
     } finally {
@@ -1489,37 +1560,9 @@ export default function DatasetExplorerView() {
   }
 
   const datasetSummary = summaryForSource?.summary
-  const modalitiesNode = dashboardLoadingForSource && !dashboardForSource ? (
-    <div className="explorer-empty">{t('running')}...</div>
-  ) : dashboardForSource ? (
-    <ModalityChips items={dashboardForSource.modality_summary} />
-  ) : (
-    <div className="explorer-empty">{dashboardErrorForSource || t('noStats')}</div>
-  )
-  const featureStatsNode = dashboardForSource ? (
-    <>
-      <p className="explorer-section__sub">
-        {dashboardForSource.feature_names.length} features
-        {dashboardForSource.dataset_stats.features_with_stats > 0 &&
-          ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
-      </p>
-      <FeatureStatsTable stats={dashboardForSource.feature_stats} />
-    </>
-  ) : (
-    <div className="explorer-empty">
-      {dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}
-    </div>
-  )
-  const typeDistributionNode = dashboardForSource ? (
-    <TypeDistribution items={dashboardForSource.feature_type_distribution} />
-  ) : (
-    <div className="explorer-empty">
-      {dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}
-    </div>
-  )
 
   return (
-    <div className="page-enter quality-view">
+    <div className="page-enter quality-view pipeline-page pipeline-compact-shell pipeline-compact-datasets">
       <div className="quality-view__hero">
         <div>
           <h2 className="quality-view__title">{t('explorerTitle')}</h2>
@@ -1588,15 +1631,8 @@ export default function DatasetExplorerView() {
                     : undefined
                 }
               />
-              {suggestionsOpen
-                && (suggestionsLoading
-                  || datasetSuggestions.length > 0
-                  || datasetIdInput.trim().length >= 2) && (
-                <div
-                  className="dataset-workbench__suggestions"
-                  id="explorer-dataset-suggestions"
-                  role="listbox"
-                >
+              {suggestionsOpen && (suggestionsLoading || datasetSuggestions.length > 0 || datasetIdInput.trim().length >= 2) && (
+                <div className="dataset-workbench__suggestions" id="explorer-dataset-suggestions" role="listbox">
                   {suggestionsLoading ? (
                     <div className="dataset-workbench__suggestion-status">
                       {t('datasetSuggestionsLoading')}
@@ -1657,7 +1693,7 @@ export default function DatasetExplorerView() {
           {source === 'path' && (
             <label className="dataset-workbench__control dataset-workbench__control--wide">
               <span>{t('localDirectory')}</span>
-              <div className="dataset-workbench__path-row">
+              <div className="dataset-workbench__controls">
                 <ActionButton
                   type="button"
                   variant="secondary"
@@ -1734,7 +1770,7 @@ export default function DatasetExplorerView() {
       {/* Info bar */}
       {currentDataset && datasetSummary ? (
         <div className="workflow-view__info-bar">
-          <span>{summaryForSource!.dataset}</span>
+          <span>{prepareStatus || summaryForSource!.dataset}</span>
           <span>{datasetSummary.total_episodes} {t('episodes')}</span>
           <span>{datasetSummary.fps} fps</span>
           <span>{datasetSummary.robot_type}</span>
@@ -1755,41 +1791,69 @@ export default function DatasetExplorerView() {
       )}
 
       {currentDataset && (datasetSummary || dashboardForSource || episodePageForSource) && (
-        <div className="dataset-explorer-workspace">
-          <div className="dataset-explorer-workspace__main">
-            {datasetSummary && (
-              <div className="dataset-explorer-summary-strip" aria-label="Dataset summary">
-                <span>{prepareStatus || summaryForSource!.dataset}</span>
-                <span>{datasetSummary.total_episodes} {t('episodes')}</span>
-                <span>{datasetSummary.total_frames.toLocaleString()} frames</span>
-                <span>{datasetSummary.fps} fps</span>
-                {datasetSummary.robot_type && <span>{datasetSummary.robot_type}</span>}
-                {dashboardForSource && (
-                  <span>{dashboardForSource.files.parquet_files} parquet / {dashboardForSource.files.video_files} videos</span>
+        <>
+          <div className="quality-kpis pipeline-metric-strip">
+            <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
+            <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
+            <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
+            <MetricCard label={t('parquetFiles')} value={dashboardForSource?.files.parquet_files ?? '--'} accent="teal" />
+            <MetricCard label={t('videoFiles')} value={dashboardForSource?.files.video_files ?? '--'} accent="coral" />
+          </div>
+
+          <DatasetInsightStack
+            summary={datasetSummary}
+            dashboard={dashboardForSource}
+            episodePage={episodePageForSource}
+            dashboardLoading={dashboardLoadingForSource}
+            dashboardError={dashboardErrorForSource}
+            episodesNode={<EpisodeBrowser datasetRef={datasetRef} />}
+            modalitiesNode={
+              <div className="explorer-section">
+                <h3>{t('modalities')}</h3>
+                {dashboardForSource ? (
+                  <ModalityChips items={dashboardForSource.modality_summary} />
+                ) : (
+                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
                 )}
               </div>
-            )}
-            <DatasetInsightStack
-              summary={datasetSummary}
-              dashboard={dashboardForSource}
-              episodePage={episodePageForSource}
-              dashboardLoading={dashboardLoadingForSource}
-              dashboardError={dashboardErrorForSource}
-              modalitiesNode={modalitiesNode}
-              featureStatsNode={featureStatsNode}
-              typeDistributionNode={typeDistributionNode}
-            />
-          </div>
-          <aside className="dataset-explorer-workspace__episodes" aria-label={t('episodeBrowser')}>
-            <div className="dataset-explorer-episodes__header">
-              <h3>{t('episodeBrowser')}</h3>
-              {episodePageForSource && (
-                <span>{episodePageForSource.total_episodes} total</span>
-              )}
-            </div>
-            <EpisodeBrowser datasetRef={datasetRef} />
-          </aside>
-        </div>
+            }
+            featureStatsNode={
+              <div className="explorer-section">
+                <h3>{t('featureStats')}</h3>
+                {dashboardForSource ? (
+                  <>
+                    <p className="explorer-section__sub">
+                      {dashboardForSource.feature_names.length} features
+                      {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+                        ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
+                    </p>
+                    <FeatureStatsTable stats={dashboardForSource.feature_stats} />
+                  </>
+                ) : (
+                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
+                )}
+              </div>
+            }
+            typeDistributionNode={
+              <div className="explorer-section">
+                <h3>{t('featureType')}</h3>
+                {dashboardForSource ? (
+                  <>
+                    <TypeDistribution items={dashboardForSource.feature_type_distribution} />
+                    <div className="explorer-sidebar-stats dataset-stack-file-stats">
+                      <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboardForSource.files.total_files}</span></div>
+                      <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboardForSource.files.parquet_files}</span></div>
+                      <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboardForSource.files.video_files}</span></div>
+                      <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboardForSource.files.meta_files}</span></div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="explorer-empty">{dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}</div>
+                )}
+              </div>
+            }
+          />
+        </>
       )}
     </div>
   )

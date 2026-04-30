@@ -177,7 +177,7 @@ function normalizeStoredExplorerPageState(value: unknown): ExplorerPageState {
     localDatasetPathInput: normalizeString(record.localDatasetPathInput),
     localDatasetPathSelected: normalizeString(record.localDatasetPathSelected),
     localPathDatasetLabel: normalizeString(record.localPathDatasetLabel),
-    prepareStatus: '',
+    prepareStatus: normalizeString(record.prepareStatus),
     prepareError: '',
     preparingForQuality: false,
     activeDatasetRef: normalizeStoredDatasetRef(record.activeDatasetRef),
@@ -212,7 +212,7 @@ function persistExplorerPageState(state: ExplorerPageState): void {
     localDatasetPathInput: state.localDatasetPathInput,
     localDatasetPathSelected: state.localDatasetPathSelected,
     localPathDatasetLabel: state.localPathDatasetLabel,
-    prepareStatus: '',
+    prepareStatus: state.preparingForQuality ? '' : state.prepareStatus,
     prepareError: '',
     preparingForQuality: false,
     activeDatasetRef: normalizeStoredDatasetRef(state.activeDatasetRef),
@@ -310,7 +310,7 @@ export function buildExplorerRefKey(ref: ExplorerDatasetRef | null | undefined):
   return `${ref.source}|${ref.dataset?.trim() ?? ''}|${ref.path?.trim() ?? ''}`
 }
 
-export function buildExplorerQuery(ref: ExplorerDatasetRef): string {
+function buildExplorerQuery(ref: ExplorerDatasetRef): string {
   const params = new URLSearchParams()
   params.set('source', ref.source)
   if (ref.dataset) {
