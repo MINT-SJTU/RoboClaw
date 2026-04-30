@@ -7,6 +7,10 @@ import {
 } from '@/domains/chat/model/messages'
 import { useSessionStore } from '@/domains/session/store/useSessionStore'
 import { useHubTransferStore } from '@/domains/hub/store/useHubTransferStore'
+import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
+import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
+import { useWorkflow } from '@/domains/curation/store/useCurationStore'
+import { useExplorer } from '@/domains/datasets/explorer/store/useExplorerStore'
 
 export type { MessageRole, Message }
 
@@ -52,6 +56,153 @@ function resolveWebSocketUrl(sessionId: string): string {
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.searchParams.set('chat_id', sessionId)
   return url.toString()
+}
+
+function buildAppContext(): Record<string, unknown> {
+  const workflow = useWorkflow.getState()
+  const explorer = useExplorer.getState()
+  const training = useTrainingStore.getState()
+  const session = useSessionStore.getState().session
+  const hardware = useHardwareStore.getState().hardwareStatus
+  const stageStatuses = workflow.workflowState
+    ? Object.fromEntries(
+      Object.entries(workflow.workflowState.stages).map(([name, stage]: [string, any]) => [
+        name,
+        stage?.status ?? 'unknown',
+      ]),
+    )
+    : null
+
+  return {
+    route: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
+    href: window.location.href,
+    selected_dataset: workflow.selectedDataset,
+    selected_dataset_label: workflow.datasetInfo?.label ?? null,
+    selected_dataset_prepared: workflow.selectedDatasetIsRemotePrepared,
+    explorer: {
+      source: explorer.source,
+      active_dataset_ref: explorer.activeDatasetRef,
+      summary_dataset: explorer.summary?.dataset ?? null,
+      summary_total_episodes: explorer.summary?.summary.total_episodes ?? null,
+      episode_page: explorer.episodePage
+        ? {
+            page: explorer.episodePage.page,
+            page_size: explorer.episodePage.page_size,
+            total_episodes: explorer.episodePage.total_episodes,
+            total_pages: explorer.episodePage.total_pages,
+          }
+        : null,
+      selected_episode_index: explorer.selectedEpisodeIndex,
+    },
+    workflow: stageStatuses,
+    quality: {
+      running: workflow.qualityRunning,
+      validators: workflow.selectedValidators,
+      defaults_loaded: Boolean(workflow.qualityDefaults),
+    },
+    training: {
+      current_job_id: training.currentTrainJobId,
+      loading: training.trainingLoading,
+      stop_loading: training.trainingStopLoading,
+    },
+    session: {
+      state: session.state,
+      dataset: session.dataset,
+      episode_phase: session.record_phase,
+    },
+    hardware: hardware
+      ? {
+        ready: hardware.ready,
+        missing: hardware.missing,
+        arms: hardware.arms.map((arm) => ({
+          alias: arm.alias,
+          connected: arm.connected,
+          calibrated: arm.calibrated,
+        })),
+        cameras: hardware.cameras.map((camera) => ({
+          alias: camera.alias,
+          connected: camera.connected,
+        })),
+      }
+      : null,
+    client_timestamp: Date.now(),
+  }
+}
+
+function navigateClient(route: string): void {
+  if (!route.startsWith('/') || route.startsWith('//')) {
+    return
+  }
+  const target = `${route}`
+  if (`${window.location.pathname}${window.location.search}${window.location.hash}` === target) {
+    return
+  }
+  window.history.pushState(null, '', target)
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}
+
+function emitPipelineEvent(appEvent: Record<string, unknown>): void {
+  window.dispatchEvent(new CustomEvent('roboclaw:pipeline-event', { detail: appEvent }))
+}
+
+function syncPreparedDataset(appEvent: Record<string, unknown>): void {
+  const datasetName = typeof appEvent.dataset_name === 'string' ? appEvent.dataset_name : ''
+  if (!datasetName) {
+    return
+  }
+  emitPipelineEvent(appEvent)
+  void (async () => {
+    try {
+      const workflow = useWorkflow.getState()
+      await workflow.loadDatasets()
+      await workflow.selectDataset(datasetName)
+    } catch (error) {
+      console.warn('Failed to sync prepared dataset from AI event', error)
+    }
+  })()
+}
+
+function syncWorkflowEvent(appEvent: Record<string, unknown>): void {
+  emitPipelineEvent(appEvent)
+  void (async () => {
+    try {
+      const dataset = typeof appEvent.dataset === 'string' ? appEvent.dataset : ''
+      let workflow = useWorkflow.getState()
+      if (dataset && workflow.selectedDataset !== dataset) {
+        await workflow.loadDatasets()
+        await workflow.selectDataset(dataset)
+        workflow = useWorkflow.getState()
+      }
+      workflow.startPolling()
+      await workflow.refreshState()
+    } catch (error) {
+      console.warn('Failed to sync workflow state from AI event', error)
+    }
+  })()
+}
+
+function handleAppEvent(appEvent: any): boolean {
+  if (!appEvent || typeof appEvent !== 'object') {
+    return false
+  }
+  if (appEvent.type === 'app.navigate' && typeof appEvent.route === 'string') {
+    navigateClient(appEvent.route)
+    return true
+  }
+  if (appEvent.type === 'pipeline.dataset_prepared') {
+    syncPreparedDataset(appEvent)
+    return true
+  }
+  if (
+    appEvent.type === 'pipeline.quality_run_started'
+    || appEvent.type === 'pipeline.quality_state_changed'
+  ) {
+    syncWorkflowEvent(appEvent)
+    return true
+  }
+  return false
 }
 
 export const useChatSocket = create<WebSocketStore>((set, get) => ({
@@ -106,6 +257,12 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
       }
 
       if (data.type === 'chat.message') {
+        const appEvent = data.metadata?.app_event
+        if (handleAppEvent(appEvent)) {
+          if (!String(data.content ?? '').trim()) {
+            return
+          }
+        }
         get().addMessage({
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: data.role === 'user' ? 'user' : 'assistant',
@@ -165,7 +322,9 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
       JSON.stringify({
         type: 'chat.send',
         content,
-        metadata: {},
+        metadata: {
+          app_context: buildAppContext(),
+        },
       }),
     )
   },

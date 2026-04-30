@@ -71,3 +71,36 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_runtime_context_includes_current_web_app_metadata(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    messages = builder.build_messages(
+        history=[],
+        current_message="现在数据总览是什么状态？",
+        channel="web",
+        chat_id="chat-1",
+        metadata={
+            "app_context": {
+                "route": "/curation/data-overview",
+                "selected_dataset": "session:remote:demo",
+                "selected_dataset_label": "demo dataset",
+                "workflow": {"quality_validation": "completed", "annotation": "completed"},
+                "explorer": {
+                    "source": "remote",
+                    "active_dataset_ref": {"source": "remote", "dataset": "demo/raw"},
+                    "summary_total_episodes": 271,
+                },
+            }
+        },
+    )
+
+    user_content = messages[-1]["content"]
+    assert isinstance(user_content, str)
+    assert "Current Web App Context:" in user_content
+    assert "- route: /curation/data-overview" in user_content
+    assert "- selected_dataset: session:remote:demo" in user_content
+    assert "quality_validation=completed" in user_content
+    assert "- explorer.active_dataset_ref: {'source': 'remote', 'dataset': 'demo/raw'}" in user_content
