@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
-from roboclaw.data.curation.exports import (
-    dataset_quality_parquet_path,
-    dataset_text_annotations_parquet_path,
-    workflow_quality_parquet_path,
-)
 from roboclaw.data.curation.features import (
     build_joint_trajectory_payload,
     extract_action_names,
@@ -21,9 +16,13 @@ from roboclaw.data.curation.features import (
 from roboclaw.data.curation.state import (
     load_annotations,
     load_propagation_results,
+    load_quality_results,
 )
-from roboclaw.data.curation.validators import load_episode_data
-
+from roboclaw.data.curation.validators import (
+    load_episode_data,
+    resolve_video_relative_paths,
+    safe_float,
+)
 
 # ---------------------------------------------------------------------------
 # Scalar helpers
@@ -66,6 +65,87 @@ def derive_task_value(data: dict[str, Any]) -> str:
     return ""
 
 
+def video_feature_keys(info: dict[str, Any]) -> list[str]:
+    """Return LeRobot feature keys that point to video streams."""
+    features = info.get("features", {})
+    keys: list[str] = []
+    for name, config in features.items():
+        if isinstance(config, dict) and config.get("dtype") == "video":
+            keys.append(str(name))
+    return keys
+
+
+def video_key_from_relative_path(relative_path: str, info: dict[str, Any]) -> str | None:
+    """Resolve the LeRobot video feature key represented by a repo-relative path."""
+    normalized_path = relative_path.replace("\\", "/")
+    for video_key in sorted(video_feature_keys(info), key=len, reverse=True):
+        if normalized_path.startswith(f"videos/{video_key}/"):
+            return video_key
+
+    parts = PurePosixPath(normalized_path).parts
+    if len(parts) >= 2 and parts[0] == "videos":
+        candidate = parts[1]
+        if not candidate.startswith(("chunk-", "episode_")):
+            return candidate
+    return None
+
+
+def stream_name_from_video_key(video_key: str | None, relative_path: str) -> str:
+    """Build a concise stream label from a video key or legacy video path."""
+    if video_key:
+        if video_key.startswith("observation.images."):
+            return video_key.split("observation.images.", 1)[1]
+        if "." in video_key:
+            return video_key.rsplit(".", 1)[-1]
+        return video_key
+    return Path(relative_path).stem
+
+
+def video_clip_bounds(
+    episode_meta: dict[str, Any],
+    video_key: str | None,
+    duration_s: float,
+) -> tuple[float, float | None]:
+    """Return absolute video clip bounds for the episode's stream."""
+    from_timestamp = None
+    to_timestamp = None
+    if video_key:
+        prefix = f"videos/{video_key}/"
+        from_timestamp = safe_float(episode_meta.get(f"{prefix}from_timestamp"))
+        to_timestamp = safe_float(episode_meta.get(f"{prefix}to_timestamp"))
+
+    if from_timestamp is None:
+        from_timestamp = safe_float(episode_meta.get("video_from_timestamp"))
+    if to_timestamp is None:
+        to_timestamp = safe_float(episode_meta.get("video_to_timestamp"))
+
+    clip_start = from_timestamp if from_timestamp is not None else 0.0
+    clip_end = to_timestamp
+    if clip_end is None and duration_s > 0:
+        clip_end = clip_start + duration_s
+
+    return clip_start, clip_end
+
+
+def serialize_workspace_video(
+    dataset: str,
+    info: dict[str, Any],
+    episode_meta: dict[str, Any],
+    relative_path: str,
+    duration_s: float,
+) -> dict[str, Any]:
+    """Serialize one episode video with its absolute shared-video clip window."""
+    video_key = video_key_from_relative_path(relative_path, info)
+    clip_start, clip_end = video_clip_bounds(episode_meta, video_key, duration_s)
+    return {
+        "path": relative_path,
+        "url": f"/api/curation/video/{quote(relative_path, safe='/')}?dataset={quote(dataset, safe='')}",
+        "stream": stream_name_from_video_key(video_key, relative_path),
+        "from_timestamp": clip_start,
+        "to_timestamp": clip_end,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Result serializers
 # ---------------------------------------------------------------------------
@@ -98,6 +178,10 @@ def serialize_prototype_results(results: dict[str, Any] | None) -> dict[str, Any
             "cluster_count": 0,
             "anchor_record_keys": [],
             "clusters": [],
+            "selection_mode": "",
+            "distance_pair_count": 0,
+            "distance_backend": "cpu",
+            "groups": [],
         }
 
     refinement = results.get("refinement", {})
@@ -142,7 +226,84 @@ def serialize_prototype_results(results: dict[str, Any] | None) -> dict[str, Any
         "entry_count": int(results.get("entry_count", 0) or 0),
         "cluster_count": int(results.get("cluster_count", len(clusters)) or len(clusters)),
         "anchor_record_keys": anchor_record_keys,
+        "selection_mode": str(clustering.get("selection_mode") or ""),
+        "distance_pair_count": int(clustering.get("distance_pair_count", 0) or 0),
+        "distance_backend": str(clustering.get("distance_backend") or "cpu"),
+        "distance_backend_detail": clustering.get("distance_backend_detail") or {},
+        "groups": _serialize_prototype_groups(clustering.get("groups") or []),
+        "quality_filter_mode": str(results.get("quality_filter_mode", "passed") or "passed"),
+        "selected_episode_indices": [
+            coerce_int(value)
+            for value in results.get("selected_episode_indices", [])
+            if coerce_int(value) is not None
+        ],
         "clusters": clusters,
+    }
+
+
+def _serialize_prototype_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for group in groups:
+        serialized.append({
+            "group_index": int(group.get("group_index", len(serialized)) or len(serialized)),
+            "bucket_key": str(group.get("bucket_key") or ""),
+            "task_key": str(group.get("task_key") or ""),
+            "robot_type": str(group.get("robot_type") or ""),
+            "canonical_mode": str(group.get("canonical_mode") or ""),
+            "entry_count": int(group.get("entry_count", 0) or 0),
+            "cluster_count": int(group.get("cluster_count", 0) or 0),
+            "selection_mode": str(group.get("selection_mode") or ""),
+            "distance_pair_count": int(group.get("distance_pair_count", 0) or 0),
+            "distance_backend": str(group.get("distance_backend") or "cpu"),
+            "selection_diagnostics": _serialize_selection_diagnostics(
+                group.get("selection_diagnostics"),
+            ),
+        })
+    return serialized
+
+
+def _serialize_selection_diagnostics(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    evaluated = value.get("evaluated")
+    return {
+        "strategy": str(value.get("strategy") or ""),
+        "selected_k": coerce_int(value.get("selected_k")) or 0,
+        "selected_score": float(value.get("selected_score", 0.0) or 0.0),
+        "best_k": coerce_int(value.get("best_k")) or 0,
+        "best_score": float(value.get("best_score", 0.0) or 0.0),
+        "tolerance": float(value.get("tolerance", 0.0) or 0.0),
+        "max_candidate_k": coerce_int(value.get("max_candidate_k")) or 0,
+        "evaluated_count": coerce_int(value.get("evaluated_count")) or 0,
+        "candidate_pool_count": coerce_int(value.get("candidate_pool_count")) or 0,
+        "rejected_singleton_heavy_count": (
+            coerce_int(value.get("rejected_singleton_heavy_count")) or 0
+        ),
+        "selection_reason": str(value.get("selection_reason") or ""),
+        "min_member_count": coerce_int(value.get("min_member_count")) or 0,
+        "evaluated": [
+            _serialize_selection_evaluation(item)
+            for item in evaluated
+            if isinstance(item, dict)
+        ] if isinstance(evaluated, list) else [],
+    }
+
+
+def _serialize_selection_evaluation(item: dict[str, Any]) -> dict[str, Any]:
+    member_counts = item.get("member_counts")
+    return {
+        "k": coerce_int(item.get("k")) or 0,
+        "score": float(item.get("score", 0.0) or 0.0),
+        "smallest_member_count": coerce_int(item.get("smallest_member_count")) or 0,
+        "member_counts": [
+            int(value)
+            for value in member_counts
+            if coerce_int(value) is not None
+        ] if isinstance(member_counts, list) else [],
+        "eligible": bool(item.get("eligible")),
+        "rejection_reason": item.get("rejection_reason"),
+        "selected": bool(item.get("selected")),
+        "within_tolerance": bool(item.get("within_tolerance")),
     }
 
 
@@ -151,10 +312,21 @@ def serialize_propagation_results(results: dict[str, Any] | None) -> dict[str, A
     if not results:
         return {
             "source_episode_index": None,
+            "source_episode_indices": [],
             "target_count": 0,
             "propagated": [],
         }
-    return results
+    payload = dict(results)
+    source_episode_indices = [
+        index
+        for value in payload.get("source_episode_indices", [])
+        if (index := coerce_int(value)) is not None
+    ]
+    source_episode_index = coerce_int(payload.get("source_episode_index"))
+    if source_episode_index is not None and source_episode_index not in source_episode_indices:
+        source_episode_indices.append(source_episode_index)
+    payload["source_episode_indices"] = sorted(source_episode_indices)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +340,9 @@ def build_workspace_payload(
     episode_index: int,
 ) -> dict[str, Any]:
     """Assemble the full annotation-workspace payload for a single episode."""
-    data = load_episode_data(dataset_path, episode_index)
+    data = load_episode_data(dataset_path, episode_index, include_videos=False)
     info = data.get("info", {})
+    episode_meta = data.get("episode_meta") or {}
     rows = data.get("rows", [])
     start_timestamp, end_timestamp = episode_time_bounds(rows)
     duration_s = 0.0
@@ -180,9 +353,14 @@ def build_workspace_payload(
     state_names = extract_state_names(info)
     joint_trajectory = build_joint_trajectory_payload(rows, action_names, state_names)
     relative_videos = [
-        video_path.relative_to(dataset_path).as_posix()
-        for video_path in data.get("video_files", [])
+        relative_path.as_posix()
+        for relative_path in resolve_video_relative_paths(info, episode_meta, episode_index)
     ]
+    if not relative_videos:
+        relative_videos = [
+            video_path.relative_to(dataset_path).as_posix()
+            for video_path in data.get("video_files", [])
+        ]
     task_value = derive_task_value(data)
     saved_annotations = load_annotations(dataset_path, episode_index) or {
         "episode_index": episode_index,
@@ -194,6 +372,25 @@ def build_workspace_payload(
     latest_propagation = None
     if propagation and propagation.get("source_episode_index") == episode_index:
         latest_propagation = propagation
+    quality = load_quality_results(dataset_path) or {}
+    quality_entry = next(
+        (
+            episode
+            for episode in quality.get("episodes", [])
+            if coerce_int(episode.get("episode_index")) == episode_index
+        ),
+        None,
+    )
+    failed_validators = []
+    quality_tags = []
+    if isinstance(quality_entry, dict):
+        validators = quality_entry.get("validators", {}) or {}
+        failed_validators = [
+            str(name)
+            for name, validator in validators.items()
+            if isinstance(validator, dict) and not validator.get("passed", False)
+        ]
+        quality_tags = ["quality-pass" if quality_entry.get("passed") else "quality-risk"]
 
     return {
         "episode_index": episode_index,
@@ -209,18 +406,38 @@ def build_workspace_payload(
             "end_timestamp": end_timestamp,
             "duration_s": duration_s,
             "video_count": len(relative_videos),
+            "quality_status": (
+                "passed"
+                if quality_entry and quality_entry.get("passed")
+                else "failed"
+                if quality_entry
+                else "unvalidated"
+            ),
+            "quality_score": float(quality_entry.get("score", 0.0) or 0.0)
+            if isinstance(quality_entry, dict)
+            else None,
         },
         "videos": [
-            {
-                "path": relative_path,
-                "url": f"/api/curation/video/{quote(relative_path, safe='/')}?dataset={quote(dataset, safe='')}",
-                "stream": Path(relative_path).stem,
-                "from_timestamp": 0,
-                "to_timestamp": duration_s if duration_s > 0 else None,
-            }
+            serialize_workspace_video(
+                dataset,
+                info,
+                episode_meta,
+                relative_path,
+                duration_s,
+            )
             for relative_path in relative_videos
         ],
         "joint_trajectory": joint_trajectory,
         "annotations": saved_annotations,
         "latest_propagation": latest_propagation,
+        "quality": {
+            "validated": bool(quality_entry),
+            "passed": bool(quality_entry.get("passed")) if isinstance(quality_entry, dict) else None,
+            "score": float(quality_entry.get("score", 0.0) or 0.0)
+            if isinstance(quality_entry, dict)
+            else None,
+            "failed_validators": failed_validators,
+            "quality_tags": quality_tags,
+            "issues": quality_entry.get("issues", []) if isinstance(quality_entry, dict) else [],
+        },
     }

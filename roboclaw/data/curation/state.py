@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 # ---------------------------------------------------------------------------
 # Storage layout:
@@ -40,7 +41,9 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +63,7 @@ def init_workflow_state(dataset_path: Path) -> dict[str, Any]:
                 "status": "idle",
                 "selected_validators": [],
                 "latest_run": None,
+                "active_run_id": None,
                 "pause_requested": False,
                 "summary": None,
             },
@@ -67,10 +71,13 @@ def init_workflow_state(dataset_path: Path) -> dict[str, Any]:
                 "status": "idle",
                 "latest_run": None,
                 "summary": None,
+                "quality_filter_mode": "passed",
+                "selected_episode_indices": [],
             },
             "annotation": {
                 "status": "idle",
                 "annotated_episodes": [],
+                "propagated_source_episodes": [],
                 "propagation_run": None,
                 "summary": None,
             },
@@ -95,6 +102,7 @@ def _normalize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     quality_stage.setdefault("status", "idle")
     quality_stage.setdefault("selected_validators", [])
     quality_stage.setdefault("latest_run", None)
+    quality_stage.setdefault("active_run_id", None)
     quality_stage.setdefault("pause_requested", False)
     quality_stage.setdefault("summary", None)
 
@@ -102,10 +110,13 @@ def _normalize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     prototype_stage.setdefault("status", "idle")
     prototype_stage.setdefault("latest_run", None)
     prototype_stage.setdefault("summary", None)
+    prototype_stage.setdefault("quality_filter_mode", "passed")
+    prototype_stage.setdefault("selected_episode_indices", [])
 
     annotation_stage = stages.setdefault("annotation", {})
     annotation_stage.setdefault("status", "idle")
     annotation_stage.setdefault("annotated_episodes", [])
+    annotation_stage.setdefault("propagated_source_episodes", [])
     annotation_stage.setdefault("propagation_run", None)
     annotation_stage.setdefault("summary", None)
 

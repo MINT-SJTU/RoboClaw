@@ -3,35 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import shutil
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from loguru import logger
 
-from .canonical import build_canonical_trajectory
-from .clustering import discover_prototype_clusters, refine_clusters_with_dba
-from .dtw import resolve_dtw_configuration
+from . import propagation_history
+from .alignment_overview import build_alignment_overview
 from .exports import (
     dataset_quality_parquet_path,
     dataset_text_annotations_parquet_path,
     save_working_quality_parquet,
     workflow_quality_parquet_path,
 )
-from .features import (
-    build_episode_sequence,
-    build_joint_trajectory_payload,
-    extract_action_names,
-    extract_state_names,
-    normalize_joint_names,
-    resolve_action_vector,
-    resolve_state_vector,
-)
-from .propagation import (
-    build_confidence_payload,
-    derive_quality_tags,
-    detect_grasp_place_events,
-    propagate_annotation_spans,
-)
+from .features import resolve_timestamp
+from .propagation import propagate_annotation_spans
+from .prototypes import discover_grouped_prototypes
+from .quality_defaults import build_quality_defaults
+from .quality_results import aggregate_quality_results, run_base_quality_validators
+from .reference_tube import TRAJECTORY_DTW_VALIDATOR
 from .serializers import (
     build_workspace_payload,
     coerce_int,
@@ -52,10 +45,14 @@ from .state import (
     save_prototype_results,
     save_quality_results,
     save_workflow_state,
-    set_stage_pause_requested,
 )
-from .validators import VALIDATOR_REGISTRY, load_episode_data, run_quality_validators
-
+from .trajectory_entries import (
+    build_propagation_entry,
+    build_prototype_entry,
+    propagation_dtw_config,
+)
+from .trajectory_quality import append_trajectory_dtw_results
+from .validators import load_episode_data, run_quality_validators
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,6 +67,211 @@ def _episode_range(info: dict[str, Any]) -> list[int]:
     return list(range(total))
 
 
+def _is_remote_session_dataset(dataset_path: Path) -> bool:
+    from roboclaw.data import dataset_sessions
+
+    parsed = dataset_sessions.parse_session_handle(dataset_path.name)
+    if parsed is not None:
+        return parsed[0] == "remote"
+
+    resolved = dataset_path.resolve()
+    remote_root = (dataset_sessions._session_root() / "remote").resolve()
+    try:
+        relative = resolved.relative_to(remote_root)
+    except ValueError:
+        return False
+    return len(relative.parts) == 2 and relative.parts[1] == "dataset"
+
+
+def _safe_rmtree(path: Path, root: Path) -> None:
+    if not path.exists():
+        return
+    resolved = path.resolve()
+    resolved_root = root.resolve()
+    if resolved == resolved_root or not str(resolved).startswith(str(resolved_root) + "/"):
+        return
+    shutil.rmtree(resolved)
+
+
+def _safe_unlink(path: Path, root: Path) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    resolved = path.resolve()
+    resolved_root = root.resolve()
+    if not str(resolved).startswith(str(resolved_root) + "/"):
+        return False
+    resolved.unlink()
+    return True
+
+
+def _prune_empty_parents(path: Path, stop_at: Path) -> None:
+    current = path.parent
+    resolved_stop = stop_at.resolve()
+    while current.exists() and current.resolve() != resolved_stop:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _remote_cache_download_root(dataset_path: Path) -> Path:
+    return dataset_path / ".cache" / "huggingface" / "download"
+
+
+def _cleanup_remote_quality_cache(dataset_path: Path) -> dict[str, Any]:
+    if not _is_remote_session_dataset(dataset_path):
+        return {"removed_paths": [], "removed_count": 0}
+
+    removed_paths: list[str] = []
+    for path in (dataset_path / "videos", dataset_path / ".remote-cache", _remote_cache_download_root(dataset_path)):
+        if not path.exists():
+            continue
+        _safe_rmtree(path, dataset_path)
+        removed_paths.append(str(path))
+    return {"removed_paths": removed_paths, "removed_count": len(removed_paths)}
+
+
+def _video_file_references(
+    dataset_path: Path,
+    info: dict[str, Any],
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> list[Path]:
+    template = info.get("video_path")
+    features = info.get("features", {})
+    if not isinstance(template, str) or not isinstance(features, dict):
+        return []
+
+    video_paths: list[Path] = []
+    chunk_size = int(info.get("chunks_size", 1000) or 1000)
+    for video_key, config in features.items():
+        if not isinstance(config, dict) or config.get("dtype") != "video":
+            continue
+        prefix = f"videos/{video_key}/"
+        chunk_index = coerce_int(episode_meta.get(f"{prefix}chunk_index"))
+        if chunk_index is None:
+            chunk_index = coerce_int(episode_meta.get("video_chunk_index"))
+        if chunk_index is None:
+            chunk_index = episode_index // max(chunk_size, 1)
+
+        file_index = coerce_int(episode_meta.get(f"{prefix}file_index"))
+        if file_index is None:
+            file_index = coerce_int(episode_meta.get("video_file_index"))
+        rendered = template.format(
+            video_key=video_key,
+            chunk_index=chunk_index,
+            file_index=file_index if file_index is not None else 0,
+            episode_index=episode_index,
+            episode_chunk=chunk_index,
+        )
+        video_paths.append(dataset_path / rendered)
+    return video_paths
+
+
+def _load_episode_meta_map(dataset_path: Path) -> dict[int, dict[str, Any]]:
+    episodes_path = dataset_path / "meta" / "episodes.jsonl"
+    if episodes_path.is_file():
+        rows: dict[int, dict[str, Any]] = {}
+        for line in episodes_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            index = coerce_int(payload.get("episode_index"))
+            if index is not None:
+                rows[index] = payload
+        return rows
+
+    episodes_root = dataset_path / "meta" / "episodes"
+    if not episodes_root.exists():
+        return {}
+    rows = {}
+    from .bridge import read_parquet_rows
+
+    for parquet_path in sorted(episodes_root.rglob("*.parquet")):
+        for payload in read_parquet_rows(parquet_path):
+            index = coerce_int(payload.get("episode_index"))
+            if index is not None:
+                rows[index] = payload
+    return rows
+
+
+def _cleanup_completed_remote_episode_assets(
+    dataset_path: Path,
+    info: dict[str, Any],
+    completed_episode_index: int,
+    remaining_episode_indices: set[int],
+) -> dict[str, Any]:
+    if not _is_remote_session_dataset(dataset_path):
+        return {"removed_paths": [], "removed_count": 0}
+
+    episode_meta_map = _load_episode_meta_map(dataset_path)
+    completed_meta = episode_meta_map.get(completed_episode_index, {})
+    candidate_paths = set(
+        _video_file_references(dataset_path, info, completed_meta, completed_episode_index)
+    )
+    if not candidate_paths:
+        return {"removed_paths": [], "removed_count": 0}
+
+    future_paths: set[Path] = set()
+    for episode_index in remaining_episode_indices:
+        future_paths.update(
+            _video_file_references(
+                dataset_path,
+                info,
+                episode_meta_map.get(episode_index, {}),
+                episode_index,
+            )
+        )
+
+    removed_paths: list[str] = []
+    for path in sorted(candidate_paths - future_paths):
+        if _safe_unlink(path, dataset_path):
+            removed_paths.append(str(path))
+            _prune_empty_parents(path, dataset_path / "videos")
+    return {"removed_paths": removed_paths, "removed_count": len(removed_paths)}
+
+
+def _cleanup_existing_remote_quality_assets(
+    dataset_path: Path,
+    info: dict[str, Any],
+    completed_episode_indices: set[int],
+    remaining_episode_indices: set[int],
+) -> dict[str, Any]:
+    if not _is_remote_session_dataset(dataset_path):
+        return {"removed_paths": [], "removed_count": 0}
+
+    episode_meta_map = _load_episode_meta_map(dataset_path)
+    future_paths: set[Path] = set()
+    for episode_index in remaining_episode_indices:
+        future_paths.update(
+            _video_file_references(
+                dataset_path,
+                info,
+                episode_meta_map.get(episode_index, {}),
+                episode_index,
+            )
+        )
+
+    candidate_paths: set[Path] = set()
+    for episode_index in completed_episode_indices:
+        candidate_paths.update(
+            _video_file_references(
+                dataset_path,
+                info,
+                episode_meta_map.get(episode_index, {}),
+                episode_index,
+            )
+        )
+
+    removed_paths: list[str] = []
+    for path in sorted(candidate_paths - future_paths):
+        if _safe_unlink(path, dataset_path):
+            removed_paths.append(str(path))
+            _prune_empty_parents(path, dataset_path / "videos")
+    return {"removed_paths": removed_paths, "removed_count": len(removed_paths)}
+
+
 def _set_stage_status(
     dataset_path: Path,
     stage_key: str,
@@ -79,6 +281,64 @@ def _set_stage_status(
     state["stages"][stage_key]["status"] = status
     save_workflow_state(dataset_path, state)
     return state
+
+
+def _set_prototype_stage_context(
+    dataset_path: Path,
+    *,
+    quality_filter_mode: str,
+    selected_episode_indices: list[int],
+    summary: dict[str, Any] | None = None,
+) -> None:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["prototype_discovery"]
+    stage["quality_filter_mode"] = quality_filter_mode
+    stage["selected_episode_indices"] = list(selected_episode_indices)
+    if summary is not None:
+        stage["summary"] = summary
+    save_workflow_state(dataset_path, state)
+
+
+def _update_prototype_running_summary(
+    dataset_path: Path,
+    summary_update: dict[str, Any],
+) -> None:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["prototype_discovery"]
+    summary = stage.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    summary.update(summary_update)
+    stage["summary"] = summary
+    save_workflow_state(dataset_path, state)
+
+
+def _update_annotation_running_summary(
+    dataset_path: Path,
+    summary_update: dict[str, Any],
+) -> None:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["annotation"]
+    summary = stage.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    summary.update(summary_update)
+    stage["summary"] = summary
+    save_workflow_state(dataset_path, state)
+
+
+def _update_quality_running_summary(
+    dataset_path: Path,
+    summary_update: dict[str, Any],
+) -> None:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    summary = stage.get("summary")
+    if not isinstance(summary, dict):
+        summary = _quality_summary_from_results(dataset_path, state)
+    summary.update(summary_update)
+    stage["summary"] = summary
+    save_workflow_state(dataset_path, state)
 
 
 def _update_stage_summary(
@@ -100,24 +360,106 @@ def _configure_quality_stage(
     *,
     status: str,
     selected_validators: list[str],
+    active_run_id: str | None = None,
 ) -> None:
     state = load_workflow_state(dataset_path)
     stage = state["stages"]["quality_validation"]
     stage["status"] = status
     stage["selected_validators"] = list(selected_validators)
+    stage["active_run_id"] = active_run_id
     stage["pause_requested"] = False
     if status == "running":
         stage["summary"] = None
     save_workflow_state(dataset_path, state)
 
 
+def _quality_run_is_current(dataset_path: Path, run_id: str | None) -> bool:
+    if run_id is None:
+        return True
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    return stage.get("active_run_id") == run_id
+
+
+def _quality_summary_from_results(
+    dataset_path: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    results = load_quality_results(dataset_path) or {}
+    episodes = results.get("episodes", [])
+    if not isinstance(episodes, list):
+        episodes = []
+
+    total = coerce_int(results.get("total"))
+    if total is None:
+        existing_summary = state["stages"]["quality_validation"].get("summary")
+        if isinstance(existing_summary, dict):
+            total = coerce_int(existing_summary.get("total"))
+    if total is None:
+        total = coerce_int(_load_info(dataset_path).get("total_episodes")) or len(episodes)
+
+    passed = coerce_int(results.get("passed"))
+    if passed is None:
+        passed = sum(1 for episode in episodes if episode.get("passed"))
+
+    failed = coerce_int(results.get("failed"))
+    if failed is None:
+        failed = max(len(episodes) - passed, 0)
+
+    overall_score = results.get("overall_score", 0.0)
+    completed = len(episodes)
+    return {
+        "total": total,
+        "completed": completed,
+        "remaining": max(total - completed, 0),
+        "passed": passed,
+        "failed": failed,
+        "overall_score": overall_score,
+        "progress_percent": round((completed / max(total, 1)) * 100, 1),
+        "quality_parquet_path": None,
+    }
+
+
+def _mark_quality_stage_paused(
+    dataset_path: Path,
+    *,
+    pause_requested: bool,
+) -> dict[str, Any]:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    stage["status"] = "paused"
+    stage["summary"] = _quality_summary_from_results(dataset_path, state)
+    stage["pause_requested"] = pause_requested
+    stage["active_run_id"] = None
+    save_workflow_state(dataset_path, state)
+    return state
+
+
+def _finish_quality_stage(
+    dataset_path: Path,
+    *,
+    status: str,
+    summary: dict[str, Any],
+    run_id: str | None,
+) -> bool:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"]["quality_validation"]
+    if run_id is not None and stage.get("active_run_id") != run_id:
+        return False
+    stage["status"] = status
+    stage["summary"] = summary
+    stage["pause_requested"] = False
+    stage["active_run_id"] = None
+    save_workflow_state(dataset_path, state)
+    return True
+
+
 def _load_episode_duration(dataset_path: Path, episode_index: int) -> float:
     """Return episode duration in seconds from parquet timestamps."""
-    data = load_episode_data(dataset_path, episode_index)
+    data = load_episode_data(dataset_path, episode_index, include_videos=False)
     rows = data["rows"]
     if len(rows) < 2:
         return 0.0
-    from .features import resolve_timestamp
     timestamps = [resolve_timestamp(r) for r in rows]
     valid = [t for t in timestamps if t is not None]
     if len(valid) < 2:
@@ -154,6 +496,20 @@ class CurationService:
     # Task management
     # ------------------------------------------------------------------
 
+    def _task_key(self, dataset_path: Path, stage_key: str) -> tuple[str, str]:
+        return (str(dataset_path.resolve()), stage_key)
+
+    def _active_stage_task(
+        self,
+        dataset_path: Path,
+        stage_key: str,
+    ) -> asyncio.Task[Any] | None:
+        return self._active_tasks.get(self._task_key(dataset_path, stage_key))
+
+    def _stage_task_is_running(self, dataset_path: Path, stage_key: str) -> bool:
+        task = self._active_stage_task(dataset_path, stage_key)
+        return task is not None and not task.done()
+
     async def _run_in_background(
         self,
         coro: Any,
@@ -161,21 +517,27 @@ class CurationService:
         stage_key: str,
     ) -> None:
         """Wrapper that logs errors and updates state on failure."""
-        task_key = (str(dataset_path.resolve()), stage_key)
+        task_key = self._task_key(dataset_path, stage_key)
+        current_task = asyncio.current_task()
         try:
             await coro
         except asyncio.CancelledError:
-            state = load_workflow_state(dataset_path)
-            state["stages"][stage_key]["status"] = "error"
-            save_workflow_state(dataset_path, state)
+            if self._active_tasks.get(task_key) is current_task:
+                state = load_workflow_state(dataset_path)
+                stage = state["stages"][stage_key]
+                if stage.get("status") != "paused" and not stage.get("pause_requested"):
+                    stage["status"] = "error"
+                    save_workflow_state(dataset_path, state)
             raise
         except Exception:
             logger.exception("Background workflow task failed")
-            state = load_workflow_state(dataset_path)
-            state["stages"][stage_key]["status"] = "error"
-            save_workflow_state(dataset_path, state)
+            if self._active_tasks.get(task_key) is current_task:
+                state = load_workflow_state(dataset_path)
+                state["stages"][stage_key]["status"] = "error"
+                save_workflow_state(dataset_path, state)
         finally:
-            self._active_tasks.pop(task_key, None)
+            if self._active_tasks.get(task_key) is current_task:
+                self._active_tasks.pop(task_key, None)
 
     def _register_workflow_task(
         self,
@@ -184,8 +546,8 @@ class CurationService:
         coro: Any,
     ) -> None:
         """Schedule *coro* as the active background task for a stage."""
-        task_key = (str(dataset_path.resolve()), stage_key)
-        existing = self._active_tasks.get(task_key)
+        task_key = self._task_key(dataset_path, stage_key)
+        existing = self._active_stage_task(dataset_path, stage_key)
         if existing is not None and not existing.done():
             existing.cancel()
         task = asyncio.create_task(
@@ -208,6 +570,9 @@ class CurationService:
             if active_task is not None and not active_task.done():
                 continue
             stage["status"] = "error"
+            if stage_key == "quality_validation":
+                stage["active_run_id"] = None
+                stage["pause_requested"] = False
             summary = stage.get("summary")
             if not isinstance(summary, dict):
                 summary = {}
@@ -231,6 +596,7 @@ class CurationService:
         threshold_overrides: dict[str, float] | None,
     ) -> dict[str, str]:
         svc = _LegacyCurationService(dataset_path, dataset_name)
+        run_id = uuid4().hex
 
         async def _task() -> None:
             await asyncio.to_thread(
@@ -238,11 +604,36 @@ class CurationService:
                 selected_validators,
                 episode_indices,
                 threshold_overrides,
+                None,
+                False,
+                run_id,
             )
 
         self._register_workflow_task(dataset_path, "quality_validation", _task())
         logger.info("Quality run queued for dataset '{}'", dataset_name)
         return {"status": "started"}
+
+    def pause_quality_run(
+        self,
+        dataset_path: Path,
+        dataset_name: str,
+    ) -> dict[str, Any]:
+        state = load_workflow_state(dataset_path)
+        quality_stage = state["stages"]["quality_validation"]
+        if quality_stage.get("status") != "running":
+            raise ValueError("Quality validation is not running")
+
+        active_task = self._active_stage_task(dataset_path, "quality_validation")
+        pause_requested = (
+            active_task is not None
+            and not active_task.done()
+            and quality_stage.get("active_run_id") is None
+        )
+        _mark_quality_stage_paused(dataset_path, pause_requested=pause_requested)
+        if active_task is not None and not active_task.done():
+            active_task.cancel()
+        logger.info("Quality pause applied for dataset '{}'", dataset_name)
+        return {"status": "paused", "pause_requested": pause_requested}
 
     async def start_quality_resume(
         self,
@@ -275,6 +666,35 @@ class CurationService:
         svc = _LegacyCurationService(dataset_path, dataset_name)
         resolved_validators = existing.get("selected_validators") or selected_validators
         resolved_overrides = existing.get("threshold_overrides") or threshold_overrides
+        run_id = uuid4().hex
+        last_progress_phase: str | None = None
+        last_progress_bucket = -1
+
+        def _progress(payload: dict[str, Any]) -> None:
+            nonlocal last_progress_phase, last_progress_bucket
+            phase = str(payload.get("phase", "quality_validation"))
+            progress_percent = float(payload.get("progress_percent", 0.0) or 0.0)
+            progress_bucket = int(progress_percent)
+            is_complete = payload.get("completed") == payload.get("total")
+            if (
+                phase == last_progress_phase
+                and progress_bucket == last_progress_bucket
+                and not is_complete
+            ):
+                return
+            last_progress_phase = phase
+            last_progress_bucket = progress_bucket
+            summary = {
+                "phase": phase,
+                "progress_percent": progress_percent,
+            }
+            if "total" in payload:
+                summary["total"] = payload["total"]
+            if "completed" in payload:
+                summary["completed"] = payload["completed"]
+            if "episode_index" in payload:
+                summary["episode_index"] = payload["episode_index"]
+            _update_quality_running_summary(dataset_path, summary)
 
         async def _task() -> None:
             await asyncio.to_thread(
@@ -282,8 +702,9 @@ class CurationService:
                 resolved_validators,
                 remaining,
                 resolved_overrides,
-                None,
+                _progress,
                 True,
+                run_id,
             )
 
         self._register_workflow_task(dataset_path, "quality_validation", _task())
@@ -299,15 +720,70 @@ class CurationService:
         dataset_path: Path,
         dataset_name: str,
         cluster_count: int | None,
-        candidate_limit: int,
+        candidate_limit: int | None,
+        episode_indices: list[int] | None = None,
+        quality_filter_mode: str = "passed",
     ) -> dict[str, str]:
         svc = _LegacyCurationService(dataset_path, dataset_name)
+        selected_episode_indices = list(episode_indices or [])
+        _set_prototype_stage_context(
+            dataset_path,
+            quality_filter_mode=quality_filter_mode,
+            selected_episode_indices=selected_episode_indices,
+            summary={
+                "candidate_count": len(selected_episode_indices),
+                "entry_count": 0,
+                "cluster_count": 0,
+                "group_count": 0,
+                "quality_filter_mode": quality_filter_mode,
+                "phase": "queued",
+                "progress_percent": 0,
+            },
+        )
+
+        last_progress_phase: str | None = None
+        last_progress_bucket = -1
+
+        def _progress(payload: dict[str, Any]) -> None:
+            nonlocal last_progress_phase, last_progress_bucket
+            phase = str(payload.get("phase", "running"))
+            progress_percent = float(payload.get("progress_percent", 0) or 0)
+            progress_bucket = int(progress_percent)
+            is_complete = (
+                payload.get("completed") == payload.get("total")
+                or payload.get("pairs_completed") == payload.get("pairs_total")
+            )
+            if (
+                phase == last_progress_phase
+                and progress_bucket == last_progress_bucket
+                and not is_complete
+            ):
+                return
+            last_progress_phase = phase
+            last_progress_bucket = progress_bucket
+            summary_update = {
+                "quality_filter_mode": quality_filter_mode,
+                "phase": phase,
+                "progress_percent": progress_percent,
+            }
+            if "total" in payload:
+                summary_update["candidate_count"] = payload["total"]
+            if "completed" in payload:
+                summary_update["entry_count"] = payload["completed"]
+            if "pairs_total" in payload:
+                summary_update["distance_pair_count"] = payload["pairs_total"]
+            if "pairs_completed" in payload:
+                summary_update["distance_pairs_completed"] = payload["pairs_completed"]
+            _update_prototype_running_summary(dataset_path, summary_update)
 
         async def _task() -> None:
             await asyncio.to_thread(
                 svc.run_prototype_discovery,
                 cluster_count,
                 candidate_limit,
+                _progress,
+                selected_episode_indices or None,
+                quality_filter_mode,
             )
 
         self._register_workflow_task(dataset_path, "prototype_discovery", _task())
@@ -320,11 +796,56 @@ class CurationService:
         dataset_name: str,
         source_episode_index: int,
     ) -> dict[str, str]:
+        if self._stage_task_is_running(dataset_path, "annotation"):
+            logger.info(
+                "Propagation run already active for dataset '{}'; ignoring duplicate request",
+                dataset_name,
+            )
+            return {"status": "already_running"}
+
+        _set_stage_status(dataset_path, "annotation", "running")
+        _update_annotation_running_summary(
+            dataset_path,
+            {
+                "source_episode_index": source_episode_index,
+                "phase": "queued",
+                "completed": 0,
+                "total": 0,
+                "progress_percent": 0,
+            },
+        )
         svc = _LegacyCurationService(dataset_path, dataset_name)
+        last_progress_bucket = -1
+
+        def _progress(payload: dict[str, Any]) -> None:
+            nonlocal last_progress_bucket
+            progress_percent = float(payload.get("progress_percent", 0) or 0)
+            progress_bucket = int(progress_percent)
+            is_complete = payload.get("completed") == payload.get("total")
+            if progress_bucket == last_progress_bucket and not is_complete:
+                return
+            last_progress_bucket = progress_bucket
+            summary_update = {
+                "source_episode_index": source_episode_index,
+                "phase": str(payload.get("phase", "semantic_propagation")),
+                "progress_percent": progress_percent,
+            }
+            if "completed" in payload:
+                summary_update["completed"] = payload["completed"]
+            if "total" in payload:
+                summary_update["total"] = payload["total"]
+                summary_update["target_count"] = payload["total"]
+            _update_annotation_running_summary(dataset_path, summary_update)
 
         async def _task() -> None:
+            def _run(_source_episode_index: int) -> dict[str, Any]:
+                return svc.run_semantic_propagation(
+                    source_episode_index,
+                    _progress,
+                )
+
             await asyncio.to_thread(
-                svc.run_semantic_propagation,
+                _run,
                 source_episode_index,
             )
 
@@ -346,6 +867,9 @@ class CurationService:
         payload["published_parquet_path"] = str(dataset_quality_parquet_path(dataset_path))
         return payload
 
+    def get_quality_defaults(self, dataset_path: Path, dataset_name: str | None = None) -> dict[str, Any]:
+        return build_quality_defaults(dataset_path, dataset_name)
+
     def get_prototype_results(self, dataset_path: Path) -> dict[str, Any]:
         return serialize_prototype_results(load_prototype_results(dataset_path))
 
@@ -356,7 +880,16 @@ class CurationService:
 
     def get_workflow_state(self, dataset_path: Path) -> dict[str, Any]:
         state = load_workflow_state(dataset_path)
-        return self.reconcile_stale_state(dataset_path, state)
+        propagation_results = load_propagation_results(dataset_path)
+        changed = propagation_history.reconcile_propagated_source_episodes(
+            dataset_path,
+            state,
+            propagation_results,
+        )
+        state = self.reconcile_stale_state(dataset_path, state)
+        if changed:
+            save_workflow_state(dataset_path, state)
+        return state
 
     def delete_quality_results(
         self,
@@ -382,6 +915,7 @@ class CurationService:
         quality_stage["status"] = "idle"
         quality_stage["selected_validators"] = []
         quality_stage["latest_run"] = None
+        quality_stage["active_run_id"] = None
         quality_stage["pause_requested"] = False
         quality_stage["summary"] = None
         save_workflow_state(dataset_path, state)
@@ -408,6 +942,9 @@ class CurationService:
         episode_index: int,
     ) -> dict[str, Any]:
         return build_workspace_payload(dataset, dataset_path, episode_index)
+
+    def get_alignment_overview(self, dataset_path: Path) -> dict[str, Any]:
+        return build_alignment_overview(dataset_path)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -457,6 +994,7 @@ class _LegacyCurationService:
         threshold_overrides: dict[str, float] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         resume_existing: bool = False,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         """Run quality validation across episodes.
 
@@ -466,11 +1004,17 @@ class _LegacyCurationService:
             self.dataset_path,
             status="running",
             selected_validators=selected_validators,
+            active_run_id=run_id,
         )
         logger.info("Quality batch started for {}", self.dataset_path.name)
 
         info = _load_info(self.dataset_path)
-        indices = episode_indices or _episode_range(info)
+        indices = list(episode_indices) if episode_indices is not None else _episode_range(info)
+        include_trajectory_dtw = TRAJECTORY_DTW_VALIDATOR in selected_validators
+        base_validators = [
+            name for name in selected_validators
+            if name != TRAJECTORY_DTW_VALIDATOR
+        ]
         per_episode: list[dict[str, Any]] = []
         passed_count = 0
         failed_count = 0
@@ -492,8 +1036,39 @@ class _LegacyCurationService:
             except (TypeError, ValueError):
                 total = len(per_episode) + len(indices)
 
+        remaining_indices = set(indices)
+        if per_episode:
+            completed_indices = {
+                index
+                for episode in per_episode
+                if (index := coerce_int(episode.get("episode_index"))) is not None
+            }
+            cleanup = _cleanup_existing_remote_quality_assets(
+                self.dataset_path,
+                info,
+                completed_indices,
+                remaining_indices,
+            )
+            if cleanup["removed_count"]:
+                logger.info(
+                    "Removed {} remote quality cache files from completed episodes",
+                    cleanup["removed_count"],
+                )
+
+        def current_or_saved_results() -> dict[str, Any]:
+            return load_quality_results(self.dataset_path) or aggregate_quality_results(
+                per_episode,
+                selected_validators,
+                passed_count,
+                failed_count,
+                total,
+                threshold_overrides,
+            )
+
         def finalize_quality_run(stage_status: str) -> dict[str, Any]:
-            aggregated = _aggregate_quality_results(
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
+            aggregated = aggregate_quality_results(
                 per_episode,
                 selected_validators,
                 passed_count,
@@ -523,13 +1098,14 @@ class _LegacyCurationService:
                 "progress_percent": round((len(per_episode) / max(total, 1)) * 100, 1),
                 "quality_parquet_path": parquet_path,
             }
-            _update_stage_summary(
+            finished = _finish_quality_stage(
                 self.dataset_path,
-                "quality_validation",
-                summary,
                 status=stage_status,
+                summary=summary,
+                run_id=run_id,
             )
-            set_stage_pause_requested(self.dataset_path, "quality_validation", False)
+            if not finished:
+                return load_quality_results(self.dataset_path) or aggregated
             if stage_status == "paused":
                 logger.info(
                     "Quality batch paused after {}/{} episodes",
@@ -546,15 +1122,20 @@ class _LegacyCurationService:
             return aggregated
 
         for position, ep_idx in enumerate(indices):
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             if is_stage_pause_requested(self.dataset_path, "quality_validation"):
                 return finalize_quality_run("paused")
             logger.info("Validating episode {}/{}", initial_completed + position + 1, total)
-            result = run_quality_validators(
+            result = run_base_quality_validators(
                 self.dataset_path,
                 ep_idx,
-                selected_validators=selected_validators,
+                selected_validators=base_validators,
                 threshold_overrides=threshold_overrides,
+                runner=run_quality_validators,
             )
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
             entry = {
                 "episode_index": ep_idx,
                 "passed": result["passed"],
@@ -567,16 +1148,35 @@ class _LegacyCurationService:
                 passed_count += 1
             else:
                 failed_count += 1
+            remaining_indices.discard(ep_idx)
 
             save_quality_results(
                 self.dataset_path,
-                _aggregate_quality_results(
-                    per_episode, selected_validators, passed_count, failed_count, total, threshold_overrides,
+                aggregate_quality_results(
+                    per_episode,
+                    selected_validators,
+                    passed_count,
+                    failed_count,
+                    total,
+                    threshold_overrides,
                 ),
             )
 
             if is_stage_pause_requested(self.dataset_path, "quality_validation"):
                 return finalize_quality_run("paused")
+
+            cleanup = _cleanup_completed_remote_episode_assets(
+                self.dataset_path,
+                info,
+                ep_idx,
+                remaining_indices,
+            )
+            if cleanup["removed_count"]:
+                logger.info(
+                    "Removed {} remote quality cache files after episode {}",
+                    cleanup["removed_count"],
+                    ep_idx,
+                )
 
             if progress_callback is not None:
                 progress_callback({
@@ -590,7 +1190,28 @@ class _LegacyCurationService:
                     ),
                 })
 
-        return finalize_quality_run("completed")
+        if include_trajectory_dtw:
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
+            append_trajectory_dtw_results(
+                self.dataset_path,
+                per_episode,
+                threshold_overrides=threshold_overrides,
+                progress_callback=progress_callback,
+            )
+            if not _quality_run_is_current(self.dataset_path, run_id):
+                return current_or_saved_results()
+            passed_count = sum(1 for episode in per_episode if episode.get("passed"))
+            failed_count = max(len(per_episode) - passed_count, 0)
+
+        completed = finalize_quality_run("completed")
+        cleanup = _cleanup_remote_quality_cache(self.dataset_path)
+        if cleanup["removed_count"]:
+            logger.info(
+                "Removed {} remote quality cache directories after completion",
+                cleanup["removed_count"],
+            )
+        return completed
 
     # ------------------------------------------------------------------
     # Stage 2: Prototype discovery
@@ -599,32 +1220,63 @@ class _LegacyCurationService:
     def run_prototype_discovery(
         self,
         cluster_count: int | None = None,
-        candidate_limit: int = 50,
+        candidate_limit: int | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        episode_indices: list[int] | None = None,
+        quality_filter_mode: str = "passed",
     ) -> dict[str, Any]:
-        """Run DTW + k-medoids prototype discovery on quality-passed episodes."""
+        """Run DTW + k-medoids prototype discovery on the selected episode subset."""
         _set_stage_status(self.dataset_path, "prototype_discovery", "running")
         logger.info("Prototype discovery started for {}", self.dataset_path.name)
 
-        passed_episodes = _collect_passed_episodes(self.dataset_path)
-        if not passed_episodes:
+        if episode_indices is not None:
+            selected_episodes = list(episode_indices)
+        elif quality_filter_mode == "raw":
+            selected_episodes = _episode_range(_load_info(self.dataset_path))
+        else:
+            selected_episodes = _collect_passed_episodes(self.dataset_path)
+        if not selected_episodes:
             return _finish_prototype_empty(self.dataset_path)
 
-        candidates = passed_episodes[:candidate_limit]
+        candidates = (
+            selected_episodes
+            if candidate_limit is None
+            else selected_episodes[:candidate_limit]
+        )
+        _set_prototype_stage_context(
+            self.dataset_path,
+            quality_filter_mode=quality_filter_mode,
+            selected_episode_indices=candidates,
+            summary={
+                "candidate_count": len(candidates),
+                "entry_count": 0,
+                "cluster_count": 0,
+                "group_count": 0,
+                "quality_filter_mode": quality_filter_mode,
+                "phase": "building_canonical",
+                "progress_percent": 0,
+            },
+        )
         entries = _build_canonical_entries(self.dataset_path, candidates, progress_callback)
         if not entries:
             return _finish_prototype_empty(self.dataset_path)
 
-        clustering = discover_prototype_clusters(
+        _update_prototype_running_summary(
+            self.dataset_path,
+            {
+                "candidate_count": len(candidates),
+                "entry_count": len(entries),
+                "phase": "building_dtw_graph",
+                "progress_percent": 0,
+            },
+        )
+        prototypes = discover_grouped_prototypes(
             entries,
             cluster_count=cluster_count,
             progress_callback=progress_callback,
         )
-        refined = refine_clusters_with_dba(
-            entries,
-            clusters=clustering.get("clusters", []),
-            progress_callback=progress_callback,
-        )
+        clustering = prototypes["clustering"]
+        refined = prototypes["refinement"]
 
         results = {
             "clustering": clustering,
@@ -632,6 +1284,9 @@ class _LegacyCurationService:
             "candidate_count": len(candidates),
             "entry_count": len(entries),
             "cluster_count": refined.get("cluster_count", clustering.get("cluster_count", 0)),
+            "group_count": prototypes["group_count"],
+            "quality_filter_mode": quality_filter_mode,
+            "selected_episode_indices": candidates,
         }
         save_prototype_results(self.dataset_path, results)
         _update_stage_summary(
@@ -641,6 +1296,11 @@ class _LegacyCurationService:
                 "candidate_count": len(candidates),
                 "entry_count": len(entries),
                 "cluster_count": results["cluster_count"],
+                "group_count": results["group_count"],
+                "quality_filter_mode": quality_filter_mode,
+                "selection_mode": clustering.get("selection_mode"),
+                "distance_pair_count": clustering.get("distance_pair_count", 0),
+                "distance_backend": clustering.get("distance_backend", "cpu"),
             },
         )
         logger.info(
@@ -674,8 +1334,9 @@ class _LegacyCurationService:
             return _finish_propagation_empty(self.dataset_path, source_episode_index)
 
         source_duration = _load_episode_duration(self.dataset_path, source_episode_index)
+        source_entry = build_propagation_entry(self.dataset_path, source_episode_index)
         prototype_results = load_prototype_results(self.dataset_path)
-        targets = _collect_propagation_targets(
+        targets = propagation_history.collect_propagation_targets(
             prototype_results, source_episode_index,
         )
 
@@ -688,6 +1349,7 @@ class _LegacyCurationService:
                 target,
                 spans,
                 source_duration,
+                source_entry,
                 source_annotations,
                 source_episode_index,
             )
@@ -702,28 +1364,41 @@ class _LegacyCurationService:
                     "progress_percent": round(((position + 1) / max(total, 1)) * 100, 1),
                 })
 
+        previous_results = load_propagation_results(self.dataset_path)
+        state = load_workflow_state(self.dataset_path)
+        annotation_stage = state["stages"]["annotation"]
+        propagated_source_episodes = propagation_history.collect_propagated_source_episodes(
+            annotation_stage,
+            previous_results,
+            source_episode_index,
+        )
         results = {
             "source_episode_index": source_episode_index,
+            "source_episode_indices": propagated_source_episodes,
             "target_count": len(propagated),
             "propagated": propagated,
         }
         save_propagation_results(self.dataset_path, results)
-        state = load_workflow_state(self.dataset_path)
-        annotation_stage = state["stages"]["annotation"]
         existing_targets = {
             int(value)
             for value in annotation_stage.get("annotated_episodes", [])
             if isinstance(value, int) or str(value).isdigit()
         }
         annotation_stage["annotated_episodes"] = sorted(existing_targets | persisted_annotation_targets)
+        annotation_stage["propagated_source_episodes"] = propagated_source_episodes
         save_workflow_state(self.dataset_path, state)
         _update_stage_summary(
             self.dataset_path,
             "annotation",
             {
                 "source_episode_index": source_episode_index,
+                "propagated_source_episodes": propagated_source_episodes,
                 "target_count": len(propagated),
                 "annotated_count": len(annotation_stage["annotated_episodes"]),
+                "completed": len(propagated),
+                "total": len(propagated),
+                "phase": "semantic_propagation",
+                "progress_percent": 100,
             },
         )
         logger.info(
@@ -731,32 +1406,6 @@ class _LegacyCurationService:
             len(propagated), source_episode_index,
         )
         return results
-
-
-# ---------------------------------------------------------------------------
-# Quality aggregation
-# ---------------------------------------------------------------------------
-
-
-def _aggregate_quality_results(
-    per_episode: list[dict[str, Any]],
-    selected_validators: list[str],
-    passed_count: int,
-    failed_count: int,
-    total: int,
-    threshold_overrides: dict[str, float] | None = None,
-) -> dict[str, Any]:
-    scores = [ep["score"] for ep in per_episode]
-    overall_score = (sum(scores) / len(scores)) if scores else 0.0
-    return {
-        "total": total,
-        "passed": passed_count,
-        "failed": failed_count,
-        "overall_score": round(overall_score, 1),
-        "selected_validators": selected_validators,
-        "threshold_overrides": threshold_overrides or {},
-        "episodes": per_episode,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -784,26 +1433,19 @@ def _build_canonical_entries(
     total = len(episode_indices)
     for position, ep_idx in enumerate(episode_indices):
         logger.info("Building canonical trajectory for episode {}/{}", position + 1, total)
-        data = load_episode_data(dataset_path, ep_idx)
+        data = load_episode_data(dataset_path, ep_idx, include_videos=False)
         rows = data["rows"]
         if not rows:
             continue
-
-        joint_traj = build_joint_trajectory_payload(
-            rows,
-            _extract_action_names(data["info"]),
-            _extract_state_names(data["info"]),
+        entry = build_prototype_entry(
+            dataset_path,
+            ep_idx,
+            quality=_episode_quality_summary(dataset_path, ep_idx),
+            data=data,
         )
-        canonical = build_canonical_trajectory(rows, joint_traj)
-        entries.append({
-            "record_key": str(ep_idx),
-            "episode_index": ep_idx,
-            "sequence": canonical.sequence,
-            "feature_vector": canonical.feature_vector,
-            "canonical_mode": canonical.mode,
-            "canonical_groups": canonical.groups,
-            "quality": _episode_quality_summary(dataset_path, ep_idx),
-        })
+        if not entry.get("sequence"):
+            continue
+        entries.append(entry)
 
         if progress_callback is not None:
             progress_callback({
@@ -814,10 +1456,6 @@ def _build_canonical_entries(
             })
 
     return entries
-
-
-_extract_action_names = extract_action_names
-_extract_state_names = extract_state_names
 
 
 def _episode_quality_summary(dataset_path: Path, episode_index: int) -> dict[str, Any]:
@@ -858,22 +1496,30 @@ def _propagate_single_target(
     target: dict[str, Any],
     spans: list[dict[str, Any]],
     source_duration: float,
+    source_entry: dict[str, Any],
     source_annotations: dict[str, Any],
     source_episode_index: int,
 ) -> tuple[dict[str, Any], bool]:
     target_idx = target["episode_index"]
     target_duration = _load_episode_duration(dataset_path, target_idx)
+    target_entry = build_propagation_entry(dataset_path, target_idx)
     target_spans = propagate_annotation_spans(
         spans,
         source_duration=source_duration,
         target_duration=target_duration,
         target_record_key=str(target_idx),
         prototype_score=target.get("prototype_score", 0.0),
+        source_sequence=source_entry.get("sequence"),
+        target_sequence=target_entry.get("sequence"),
+        source_time_axis=source_entry.get("time_axis"),
+        target_time_axis=target_entry.get("time_axis"),
+        dtw_config=propagation_dtw_config(source_entry, target_entry),
     )
     result = {
         "episode_index": target_idx,
         "spans": target_spans,
         "prototype_score": target.get("prototype_score", 0.0),
+        "alignment_method": "dtw" if any(span.get("source") == "dtw_propagated" for span in target_spans) else "scale",
     }
     existing = load_annotations(dataset_path, target_idx) or {}
     existing_annotations = existing.get("annotations", []) or []
@@ -899,50 +1545,39 @@ def _propagate_single_target(
     return result, True
 
 
-def _collect_propagation_targets(
-    prototype_results: dict[str, Any] | None,
-    source_episode_index: int,
-) -> list[dict[str, Any]]:
-    """Find cluster members sharing a cluster with the source episode."""
-    if prototype_results is None:
-        return []
-
-    refinement = prototype_results.get("refinement", {})
-    clusters = refinement.get("clusters", [])
-    if not clusters:
-        clusters = prototype_results.get("clustering", {}).get("clusters", [])
-
-    targets: list[dict[str, Any]] = []
-    source_key = str(source_episode_index)
-    for cluster in clusters:
-        member_keys = [str(m.get("record_key", "")) for m in cluster.get("members", [])]
-        if source_key not in member_keys:
-            continue
-        for member in cluster.get("members", []):
-            member_key = str(member.get("record_key", ""))
-            if member_key == source_key:
-                continue
-            targets.append({
-                "episode_index": int(member_key),
-                "prototype_score": 1.0 - float(member.get("distance_to_barycenter", member.get("distance_to_prototype", 0.0))),
-            })
-    return targets
-
-
 def _finish_propagation_empty(
     dataset_path: Path,
     source_episode_index: int,
 ) -> dict[str, Any]:
+    previous_results = load_propagation_results(dataset_path)
+    state = load_workflow_state(dataset_path)
+    annotation_stage = state["stages"]["annotation"]
+    propagated_source_episodes = propagation_history.collect_propagated_source_episodes(
+        annotation_stage,
+        previous_results,
+        source_episode_index,
+    )
     results: dict[str, Any] = {
         "source_episode_index": source_episode_index,
+        "source_episode_indices": propagated_source_episodes,
         "target_count": 0,
         "propagated": [],
     }
     save_propagation_results(dataset_path, results)
+    annotation_stage["propagated_source_episodes"] = propagated_source_episodes
+    save_workflow_state(dataset_path, state)
     _update_stage_summary(
         dataset_path,
         "annotation",
-        {"source_episode_index": source_episode_index, "target_count": 0},
+        {
+            "source_episode_index": source_episode_index,
+            "propagated_source_episodes": propagated_source_episodes,
+            "target_count": 0,
+            "completed": 0,
+            "total": 0,
+            "phase": "semantic_propagation",
+            "progress_percent": 100,
+        },
     )
     logger.warning("Semantic propagation: no annotations found for episode {}", source_episode_index)
     return results

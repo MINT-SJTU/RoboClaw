@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from .dtw import (
     average_vectors,
-    build_distance_matrix_with_progress,
+    build_distance_matrix_with_progress_and_stats,
     dtw_alignment,
     resolve_dtw_configuration,
     vector_distance,
@@ -16,6 +16,10 @@ from .features import mean
 # K-medoids clustering with automatic cluster count selection
 # ---------------------------------------------------------------------------
 
+AUTO_CLUSTER_MIN_MEMBER_COUNT = 2
+AUTO_CLUSTER_ABS_SILHOUETTE_TOLERANCE = 0.05
+AUTO_CLUSTER_REL_SILHOUETTE_TOLERANCE = 0.10
+
 
 def discover_prototype_clusters(
     entries: list[dict[str, Any]],
@@ -24,10 +28,11 @@ def discover_prototype_clusters(
     max_iterations: int = 8,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    entries = [entry for entry in entries if entry.get("sequence")]
     if not entries:
         return _empty_clustering_result(max_iterations)
 
-    distance_matrix, total_pairs = _build_matrix_with_reporting(
+    distance_matrix, total_pairs, distance_stats = _build_matrix_with_reporting(
         entries, progress_callback,
     )
     runner = _KMedoidsRunner(entries, distance_matrix, max_iterations, progress_callback)
@@ -38,6 +43,8 @@ def discover_prototype_clusters(
             **clustering,
             "distance_matrix": distance_matrix,
             "distance_pair_count": total_pairs,
+            "distance_backend": distance_stats.get("backend", "cpu"),
+            "distance_backend_detail": distance_stats,
             "selection_mode": "fixed",
         }
 
@@ -46,6 +53,8 @@ def discover_prototype_clusters(
         **best_clustering,
         "distance_matrix": distance_matrix,
         "distance_pair_count": total_pairs,
+        "distance_backend": distance_stats.get("backend", "cpu"),
+        "distance_backend_detail": distance_stats,
         "selection_mode": "auto",
     }
 
@@ -66,7 +75,7 @@ def _empty_clustering_result(max_iterations: int) -> dict[str, Any]:
 def _build_matrix_with_reporting(
     entries: list[dict[str, Any]],
     progress_callback: Callable[[dict[str, Any]], None] | None,
-) -> tuple[dict[str, dict[str, float]], int]:
+) -> tuple[dict[str, dict[str, float]], int, dict[str, Any]]:
     def report(completed_pairs: int, total_pairs: int) -> None:
         if progress_callback is None:
             return
@@ -78,7 +87,7 @@ def _build_matrix_with_reporting(
             "progress_percent": pct,
         })
 
-    return build_distance_matrix_with_progress(entries, progress_callback=report)
+    return build_distance_matrix_with_progress_and_stats(entries, progress_callback=report)
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +236,8 @@ class _KMedoidsRunner:
         cluster_members: list[list[str]],
     ) -> float:
         same = [k for k in cluster_members[cluster_index] if k != member_key]
+        if not same:
+            return 0.0
         intra = mean([float(self._dm[member_key][k]) for k in same]) if same else 0.0
         inter_dists: list[float] = []
         for oi, other_keys in enumerate(cluster_members):
@@ -244,26 +255,112 @@ def _auto_select_cluster_count(
     entries: list[dict[str, Any]],
     runner: _KMedoidsRunner,
 ) -> dict[str, Any]:
-    best_clustering: dict[str, Any] | None = None
-    best_score = float("-inf")
+    evaluated: list[dict[str, Any]] = []
     max_candidate = min(len(entries), max(len(entries) // 5, 15))
 
     for k in range(1, max_candidate + 1):
         candidate = runner.run(k, emit_progress=False)
-        smallest = min(
-            (c.get("member_count", 0) for c in candidate["clusters"]),
-            default=0,
-        )
-        if k > 1 and smallest < 1:
-            continue
+        member_counts = [int(c.get("member_count", 0) or 0) for c in candidate["clusters"]]
+        smallest = min(member_counts, default=0)
         score = runner.average_silhouette(candidate["clusters"])
-        if score > best_score:
-            best_score = score
-            best_clustering = candidate
+        eligible = k == 1 or smallest >= AUTO_CLUSTER_MIN_MEMBER_COUNT
+        evaluated.append({
+            "k": k,
+            "candidate": candidate,
+            "score": score,
+            "smallest_member_count": smallest,
+            "member_counts": member_counts,
+            "eligible": eligible,
+            "rejection_reason": None if eligible else "singleton_heavy",
+        })
 
-    if best_clustering is None:
+    if not evaluated:
         return runner.run(1, emit_progress=True)
-    return runner.run(best_clustering["cluster_count"], emit_progress=True)
+
+    preferred = [
+        item
+        for item in evaluated
+        if item["k"] == 1 or item["smallest_member_count"] >= AUTO_CLUSTER_MIN_MEMBER_COUNT
+    ]
+    candidate_pool = preferred if any(item["k"] > 1 for item in preferred) else evaluated
+
+    best_score = max(item["score"] for item in candidate_pool)
+    tolerance = _silhouette_tolerance(best_score)
+    qualifying = [
+        item
+        for item in candidate_pool
+        if item["score"] >= best_score - tolerance
+    ]
+    selected = min(
+        qualifying,
+        key=lambda item: (int(item["k"]), -float(item["score"])),
+    )
+    final = runner.run(selected["candidate"]["cluster_count"], emit_progress=True)
+    final["selection_diagnostics"] = _format_selection_diagnostics(
+        evaluated,
+        candidate_pool,
+        selected,
+        best_score,
+        tolerance,
+        max_candidate,
+    )
+    return final
+
+
+def _format_selection_diagnostics(
+    evaluated: list[dict[str, Any]],
+    candidate_pool: list[dict[str, Any]],
+    selected: dict[str, Any],
+    best_score: float,
+    tolerance: float,
+    max_candidate: int,
+) -> dict[str, Any]:
+    best = max(candidate_pool, key=lambda item: (float(item["score"]), -int(item["k"])))
+    selected_k = int(selected["k"])
+    best_k = int(best["k"])
+    return {
+        "strategy": "silhouette_with_small_k_bias",
+        "selected_k": selected_k,
+        "selected_score": float(selected["score"]),
+        "best_k": best_k,
+        "best_score": float(best_score),
+        "tolerance": float(tolerance),
+        "max_candidate_k": int(max_candidate),
+        "evaluated_count": len(evaluated),
+        "candidate_pool_count": len(candidate_pool),
+        "rejected_singleton_heavy_count": sum(
+            1 for item in evaluated if item.get("rejection_reason") == "singleton_heavy"
+        ),
+        "selection_reason": (
+            "smallest_k_within_tolerance"
+            if selected_k != best_k else "best_score"
+        ),
+        "min_member_count": AUTO_CLUSTER_MIN_MEMBER_COUNT,
+        "evaluated": [
+            {
+                "k": int(item["k"]),
+                "score": float(item["score"]),
+                "smallest_member_count": int(item["smallest_member_count"]),
+                "member_counts": [int(count) for count in item["member_counts"]],
+                "eligible": bool(item["eligible"]),
+                "rejection_reason": item.get("rejection_reason"),
+                "selected": int(item["k"]) == selected_k,
+                "within_tolerance": bool(item in candidate_pool and item["score"] >= best_score - tolerance),
+            }
+            for item in evaluated
+        ],
+    }
+
+
+def _silhouette_tolerance(best_score: float) -> float:
+    return min(
+        0.08,
+        max(
+            0.03,
+            float(best_score) * AUTO_CLUSTER_REL_SILHOUETTE_TOLERANCE,
+            AUTO_CLUSTER_ABS_SILHOUETTE_TOLERANCE,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -485,12 +582,15 @@ def _refine_single_cluster(
         entry_lookup[str(m.get("record_key"))]
         for m in member_records
         if str(m.get("record_key")) in entry_lookup
+        and entry_lookup[str(m.get("record_key"))].get("sequence")
     ]
     if not member_entries:
         return None
 
     prototype_key = str(cluster.get("prototype_record_key") or member_entries[0]["record_key"])
     reference = entry_lookup.get(prototype_key, member_entries[0])
+    if not reference.get("sequence"):
+        reference = member_entries[0]
     ref_groups = reference.get("canonical_groups") or {}
     dtw_cfg = resolve_dtw_configuration(
         left_mode=reference.get("canonical_mode"),
@@ -500,8 +600,8 @@ def _refine_single_cluster(
     )
 
     bary = compute_dba_barycenter(
-        [e.get("sequence") or [[0.0]] for e in member_entries],
-        reference_sequence=reference.get("sequence") or [[0.0]],
+        [e["sequence"] for e in member_entries],
+        reference_sequence=reference["sequence"],
         max_iterations=max_iterations,
         groups=ref_groups,
         dtw_configuration=dtw_cfg,
@@ -512,6 +612,8 @@ def _refine_single_cluster(
         member_entries, member_records, bary_seq, dtw_cfg,
     )
     summaries.sort(key=lambda m: m["distance_to_barycenter"])
+    if not summaries:
+        return None
     for rank, member in enumerate(summaries, start=1):
         member["assignment_rank"] = rank
 
@@ -540,11 +642,12 @@ def _compute_member_summaries(
     summaries: list[dict[str, Any]] = []
     for entry in member_entries:
         rk = str(entry["record_key"])
-        dist, _align = dtw_alignment(
-            barycenter_sequence,
-            entry.get("sequence") or [[0.0]],
-            **dtw_cfg,
-        )
+        sequence = entry.get("sequence") or []
+        if not sequence:
+            continue
+        dist, _align = dtw_alignment(barycenter_sequence, sequence, **dtw_cfg)
+        if not math.isfinite(dist):
+            continue
         proto_member = next(
             (m for m in member_records if str(m.get("record_key")) == rk),
             {},

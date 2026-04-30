@@ -2,24 +2,38 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import statistics
 from pathlib import Path
 from typing import Any, Callable
 
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 from huggingface_hub import hf_hub_download
 from loguru import logger
-import numpy as np
+
+from roboclaw.data.dataset_sessions import (
+    is_session_handle,
+    parse_session_handle,
+    read_session_metadata,
+)
 
 from .bridge import read_parquet_rows
-from .features import percentile
+from .features import resolve_task_value
 from .propagation import (
     _extract_gripper_series,
     _find_gripper_index,
     detect_grasp_place_events,
 )
 from .state import load_dataset_info
+from .task_descriptions import payload_has_task_description, value_has_task_description
 
 QUALITY_THRESHOLD_DEFAULTS: dict[str, float] = {
+    "metadata_require_info_json": 1.0,
+    "metadata_require_episode_metadata": 1.0,
+    "metadata_require_data_files": 1.0,
+    "metadata_require_videos": 1.0,
+    "metadata_require_task_description": 1.0,
     "metadata_min_duration_s": 1.0,
     "timing_min_monotonicity": 0.99,
     "timing_max_interval_cv": 0.05,
@@ -49,6 +63,32 @@ QUALITY_THRESHOLD_DEFAULTS: dict[str, float] = {
     "depth_continuity_min": 0.90,
     "ee_min_event_count": 1.0,
     "ee_min_gripper_span": 0.05,
+    "trajectory_dtw_position_floor": 0.05,
+    "trajectory_dtw_velocity_floor": 0.01,
+    "trajectory_dtw_distance_quantile": 0.999,
+    "trajectory_dtw_velocity_quantile": 0.999,
+    "trajectory_dtw_deviation_multiplier": 1.2,
+    "trajectory_dtw_hesitation_multiplier": 2.0,
+    "trajectory_dtw_stall_frame_threshold": 30.0,
+    "trajectory_dtw_min_segment_s": 0.2,
+    "trajectory_dtw_min_reference_count": 6.0,
+}
+
+ISSUE_LEVEL_WEIGHTS: dict[str, float] = {
+    "critical": 1.0,
+    "major": 0.7,
+    "minor": 0.3,
+    "info": 0.05,
+}
+
+VALIDATOR_CATEGORY_WEIGHTS: dict[str, float] = {
+    "metadata": 0.20,
+    "timing": 0.15,
+    "action": 0.20,
+    "visual": 0.15,
+    "depth": 0.10,
+    "ee_trajectory": 0.10,
+    "trajectory_dtw": 0.10,
 }
 
 # ---------------------------------------------------------------------------
@@ -88,9 +128,7 @@ def finalize_validator(
     issues: list[dict[str, Any]],
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    total = max(len(issues), 1)
-    passed_count = sum(1 for issue in issues if issue["passed"])
-    score = round((passed_count / total) * 100, 1)
+    score = weighted_issue_score(issues)
     blocking_levels = {"critical", "major"}
     passed = all(issue["passed"] for issue in issues if issue["level"] in blocking_levels)
     return {
@@ -102,13 +140,41 @@ def finalize_validator(
     }
 
 
+def weighted_issue_score(issues: list[dict[str, Any]]) -> float:
+    weights = [
+        ISSUE_LEVEL_WEIGHTS.get(str(issue.get("level", "major")), ISSUE_LEVEL_WEIGHTS["major"])
+        for issue in issues
+    ]
+    total_weight = sum(weights) or 1.0
+    passed_weight = sum(
+        weight
+        for issue, weight in zip(issues, weights)
+        if issue.get("passed")
+    )
+    return round((passed_weight / total_weight) * 100, 1)
+
+
+def weighted_validator_score(results: list[dict[str, Any]]) -> float:
+    weighted_scores = []
+    for result in results:
+        name = str(result.get("name", ""))
+        weight = VALIDATOR_CATEGORY_WEIGHTS.get(name, 0.10)
+        weighted_scores.append((float(result.get("score", 0.0) or 0.0), weight))
+    total_weight = sum(weight for _score, weight in weighted_scores) or 1.0
+    score = sum(score * weight for score, weight in weighted_scores) / total_weight
+    return round(score, 1)
+
+
 def safe_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def _merge_threshold_overrides(threshold_overrides: dict[str, float] | None = None) -> dict[str, float]:
@@ -130,40 +196,50 @@ def _merge_threshold_overrides(threshold_overrides: dict[str, float] | None = No
 # ---------------------------------------------------------------------------
 
 
-def load_episode_data(dataset_path: Path, episode_index: int) -> dict[str, Any]:
-    """Load episode parquet data, metadata, and video paths from LeRobot directory."""
+def load_episode_data(
+    dataset_path: Path,
+    episode_index: int,
+    *,
+    include_videos: bool = True,
+) -> dict[str, Any]:
+    """Load episode parquet data, metadata, and optionally video paths from LeRobot directory."""
     info = _load_info_json(dataset_path)
     episodes_meta = _load_episode_meta(dataset_path, episode_index)
     chunk = _resolve_chunk(info, episode_index)
-    parquet_relative_path = Path("data") / f"chunk-{chunk}" / f"episode_{episode_index:06d}.parquet"
+    parquet_relative_path = _resolve_data_relative_path(info, episodes_meta, episode_index)
     parquet_path = dataset_path / parquet_relative_path
+    remote_cache_root = _remote_cache_root(dataset_path)
     if parquet_path.exists():
-        rows = _read_parquet_rows(parquet_path)
+        rows = _read_episode_parquet_rows(parquet_path, episodes_meta, episode_index)
     else:
         remote_dataset_id = _resolve_remote_dataset_id(dataset_path, info)
         parquet_path = _download_remote_file(
             remote_dataset_id,
             parquet_relative_path,
-            local_root=dataset_path,
+            local_root=remote_cache_root,
         )
-        rows = _read_parquet_rows(parquet_path)
+        rows = _read_episode_parquet_rows(parquet_path, episodes_meta, episode_index)
 
     video_dir = dataset_path / "videos" / f"chunk-{chunk}" / f"episode_{episode_index:06d}"
-    if video_dir.exists():
-        video_files = _list_video_files(video_dir)
-    else:
-        remote_dataset_id = _resolve_remote_dataset_id(dataset_path, info)
-        video_files = _download_remote_videos(
-            remote_dataset_id,
-            info,
-            episode_index,
-            local_root=dataset_path,
-        )
+    video_files: list[Path] = []
+    if include_videos:
+        if video_dir.exists():
+            video_files = _list_video_files(video_dir)
+        else:
+            remote_dataset_id = _resolve_remote_dataset_id(dataset_path, info)
+            video_files = _download_remote_videos(
+                remote_dataset_id,
+                info,
+                episodes_meta,
+                episode_index,
+                local_root=remote_cache_root,
+            )
 
     return {
         "info": info,
         "episode_meta": episodes_meta,
         "rows": rows,
+        "dataset_path": dataset_path,
         "parquet_path": parquet_path,
         "video_dir": video_dir,
         "video_files": video_files,
@@ -172,6 +248,16 @@ def load_episode_data(dataset_path: Path, episode_index: int) -> dict[str, Any]:
 
 
 def _resolve_remote_dataset_id(dataset_path: Path, info: dict[str, Any]) -> str:
+    session_name = dataset_path.name
+    if is_session_handle(session_name):
+        try:
+            metadata = read_session_metadata(session_name)
+            source_dataset = metadata.get("source_dataset")
+            if isinstance(source_dataset, str) and source_dataset.strip():
+                return source_dataset.strip()
+        except Exception:
+            logger.debug("Failed to resolve remote dataset id from session metadata", exc_info=True)
+
     source_dataset = info.get("source_dataset") or info.get("repo_id") or info.get("dataset_id")
     if isinstance(source_dataset, str) and source_dataset.strip():
         return source_dataset.strip()
@@ -186,13 +272,24 @@ def _resolve_remote_dataset_id(dataset_path: Path, info: dict[str, Any]) -> str:
     return dataset_path.name
 
 
+def _remote_cache_root(dataset_path: Path) -> Path | None:
+    session_name = dataset_path.name
+    parsed = parse_session_handle(session_name)
+    if parsed is None:
+        return dataset_path
+    kind, _session_id = parsed
+    if kind != "remote":
+        return dataset_path
+    return dataset_path / ".remote-cache"
+
+
 _load_info_json = load_dataset_info
 
 
 def _load_episode_meta(dataset_path: Path, episode_index: int) -> dict[str, Any]:
     episodes_path = dataset_path / "meta" / "episodes.jsonl"
     if not episodes_path.exists():
-        return {}
+        return _load_episode_meta_from_parquet(dataset_path, episode_index)
     for line in episodes_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -200,7 +297,48 @@ def _load_episode_meta(dataset_path: Path, episode_index: int) -> dict[str, Any]
         entry = json.loads(line)
         if entry.get("episode_index") == episode_index:
             return entry
+    return _load_episode_meta_from_parquet(dataset_path, episode_index)
+
+
+def _load_episode_meta_from_parquet(dataset_path: Path, episode_index: int) -> dict[str, Any]:
+    episodes_root = dataset_path / "meta" / "episodes"
+    if not episodes_root.exists():
+        return {}
+    for parquet_path in sorted(episodes_root.rglob("*.parquet")):
+        for entry in _read_parquet_rows(parquet_path, filters=[("episode_index", "=", episode_index)]):
+            if _safe_int(entry.get("episode_index")) == episode_index:
+                return entry
     return {}
+
+
+def _filter_episode_rows(
+    rows: list[dict[str, Any]],
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+
+    start_index = _safe_int(episode_meta.get("dataset_from_index"))
+    end_index = _safe_int(episode_meta.get("dataset_to_index"))
+    if start_index is not None and end_index is not None and end_index >= start_index:
+        sliced = [
+            row
+            for row in rows
+            if (row_index := _safe_int(row.get("index"))) is not None
+            and start_index <= row_index < end_index
+        ]
+        if sliced:
+            return sliced
+
+    filtered = [
+        row
+        for row in rows
+        if _safe_int(row.get("episode_index")) == episode_index
+    ]
+    if filtered:
+        return filtered
+    return rows
 
 
 def _resolve_chunk(info: dict[str, Any], episode_index: int) -> str:
@@ -210,10 +348,144 @@ def _resolve_chunk(info: dict[str, Any], episode_index: int) -> str:
     return f"{episode_index // chunks_size:03d}"
 
 
-def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _render_repo_path(template: str | None, **values: Any) -> str | None:
+    if not isinstance(template, str) or not template.strip():
+        return None
+    try:
+        return template.format(**values)
+    except (IndexError, KeyError, ValueError):
+        return None
+
+
+def _resolve_data_relative_path(
+    info: dict[str, Any],
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> Path:
+    chunk_index = _safe_int(episode_meta.get("data/chunk_index"))
+    if chunk_index is None:
+        chunk_index = _safe_int(episode_meta.get("data_chunk_index"))
+    if chunk_index is None:
+        chunk_index = episode_index // max(int(info.get("chunks_size", 1000) or 1000), 1)
+
+    file_index = _safe_int(episode_meta.get("data/file_index"))
+    if file_index is None:
+        file_index = _safe_int(episode_meta.get("data_file_index"))
+
+    rendered = _render_repo_path(
+        info.get("data_path"),
+        chunk_index=chunk_index,
+        file_index=file_index if file_index is not None else 0,
+        episode_index=episode_index,
+        episode_chunk=chunk_index,
+    )
+    if rendered:
+        return Path(rendered)
+
+    return Path("data") / f"chunk-{chunk_index:03d}" / f"episode_{episode_index:06d}.parquet"
+
+
+def resolve_video_relative_paths(
+    info: dict[str, Any],
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> list[Path]:
+    template = info.get("video_path")
+    if not isinstance(template, str) or not template:
+        return []
+
+    paths: list[Path] = []
+    for video_key in _extract_video_keys(info):
+        relative_path = _resolve_video_relative_path(
+            template,
+            video_key,
+            info,
+            episode_meta,
+            episode_index,
+        )
+        if relative_path is not None:
+            paths.append(relative_path)
+    return paths
+
+
+def _resolve_video_relative_path(
+    template: str,
+    video_key: str,
+    info: dict[str, Any],
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> Path | None:
+    prefix = f"videos/{video_key}/"
+    chunk_index = _safe_int(episode_meta.get(f"{prefix}chunk_index"))
+    if chunk_index is None:
+        chunk_index = _safe_int(episode_meta.get("video_chunk_index"))
+    if chunk_index is None:
+        chunk_index = episode_index // max(int(info.get("chunks_size", 1000) or 1000), 1)
+
+    file_index = _safe_int(episode_meta.get(f"{prefix}file_index"))
+    if file_index is None:
+        file_index = _safe_int(episode_meta.get("video_file_index"))
+
+    rendered = _render_repo_path(
+        template,
+        video_key=video_key,
+        chunk_index=chunk_index,
+        file_index=file_index if file_index is not None else 0,
+        episode_index=episode_index,
+        episode_chunk=chunk_index,
+    )
+    return Path(rendered) if rendered else None
+
+
+def _read_parquet_rows(
+    path: Path,
+    *,
+    filters: Any | None = None,
+    columns: list[str] | None = None,
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return read_parquet_rows(path)
+    return read_parquet_rows(path, filters=filters, columns=columns)
+
+
+def _read_episode_parquet_rows(
+    path: Path,
+    episode_meta: dict[str, Any],
+    episode_index: int,
+) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+
+    filter_candidates: list[list[tuple[str, str, int]]] = []
+    start_index = _safe_int(episode_meta.get("dataset_from_index"))
+    end_index = _safe_int(episode_meta.get("dataset_to_index"))
+    if start_index is not None and end_index is not None and end_index >= start_index:
+        filter_candidates.append([
+            ("index", ">=", start_index),
+            ("index", "<", end_index),
+        ])
+    filter_candidates.append([("episode_index", "=", episode_index)])
+
+    for filters in filter_candidates:
+        try:
+            rows = read_parquet_rows(path, filters=filters)
+        except Exception:
+            logger.debug("Filtered parquet read failed for {}", path, exc_info=True)
+            continue
+        filtered = _filter_episode_rows(rows, episode_meta, episode_index)
+        if filtered:
+            return filtered
+
+    return _filter_episode_rows(_read_parquet_rows(path), episode_meta, episode_index)
 
 
 def _download_remote_file(
@@ -247,6 +519,7 @@ def _extract_video_keys(info: dict[str, Any]) -> list[str]:
 def _download_remote_videos(
     dataset_id: str,
     info: dict[str, Any],
+    episode_meta: dict[str, Any],
     episode_index: int,
     *,
     local_root: Path | None = None,
@@ -255,21 +528,23 @@ def _download_remote_videos(
     if not isinstance(template, str) or not template:
         return []
 
-    chunk = _resolve_chunk(info, episode_index)
-    chunk_index = int(chunk)
     video_keys = _extract_video_keys(info)
     results: list[Path] = []
     for video_key in video_keys:
         try:
-            relative_path = template.format(
-                episode_chunk=chunk_index,
-                video_key=video_key,
-                episode_index=episode_index,
+            relative_path = _resolve_video_relative_path(
+                template,
+                video_key,
+                info,
+                episode_meta,
+                episode_index,
             )
+            if relative_path is None:
+                continue
             results.append(
                 _download_remote_file(
                     dataset_id,
-                    Path(relative_path),
+                    relative_path,
                     local_root=local_root,
                 ),
             )
@@ -285,8 +560,7 @@ def _list_video_files(video_dir: Path) -> list[Path]:
     return sorted(video_dir.glob("*.mp4"))
 
 
-from .visual_validators import validate_depth_assets, validate_visual_assets
-
+from .visual_validators import validate_depth_assets, validate_visual_assets  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Metadata validator
@@ -304,20 +578,22 @@ def validate_metadata(
     issues: list[dict[str, Any]] = []
 
     if not info:
+        require_info = thresholds["metadata_require_info_json"] >= 0.5
         issues.append(make_issue(
             operator_name=operator_name,
             check_name="info.json",
-            passed=False,
+            passed=not require_info,
             message="Missing meta/info.json",
             level="critical",
         ))
         return finalize_validator(operator_name, issues)
 
     episode_index = data.get("episode_meta", {}).get("episode_index")
-    _check_episode_identity(issues, operator_name, episode_meta, episode_index)
+    _check_episode_identity(issues, operator_name, episode_meta, episode_index, thresholds)
     _check_info_fields(issues, operator_name, info)
-    _check_data_files(issues, operator_name, data)
-    _check_duration(issues, operator_name, episode_meta, thresholds)
+    _check_data_files(issues, operator_name, data, thresholds)
+    _check_task_description(issues, operator_name, data, thresholds)
+    _check_duration(issues, operator_name, data, episode_meta, thresholds)
 
     return finalize_validator(operator_name, issues, details={"info": info, "episode_meta": episode_meta})
 
@@ -327,14 +603,16 @@ def _check_episode_identity(
     operator_name: str,
     episode_meta: dict[str, Any],
     episode_index: int,
+    thresholds: dict[str, float],
 ) -> None:
     has_identity = episode_meta.get("episode_index") is not None
+    required = thresholds["metadata_require_episode_metadata"] >= 0.5
     issues.append(make_issue(
         operator_name=operator_name,
         check_name="episode identity",
-        passed=has_identity,
-        message=f"episode_index={'present' if has_identity else 'missing'} in episodes.jsonl",
-        level="major" if not has_identity else "minor",
+        passed=has_identity or not required,
+        message=f"episode_index={'present' if has_identity else 'missing'} in episode metadata",
+        level="major" if required and not has_identity else "minor",
     ))
 
 
@@ -362,32 +640,114 @@ def _check_data_files(
     issues: list[dict[str, Any]],
     operator_name: str,
     data: dict[str, Any],
+    thresholds: dict[str, float],
 ) -> None:
-    parquet_exists = data["parquet_path"].exists()
+    require_data_files = thresholds["metadata_require_data_files"] >= 0.5
+    require_videos = thresholds["metadata_require_videos"] >= 0.5
+    parquet_path = data.get("parquet_path")
+    parquet_exists = isinstance(parquet_path, Path) and parquet_path.exists()
     issues.append(make_issue(
         operator_name=operator_name,
         check_name="parquet_data",
-        passed=parquet_exists,
+        passed=parquet_exists or not require_data_files,
         message=f"parquet data={'exists' if parquet_exists else 'missing'}",
-        level="major",
+        level="major" if require_data_files else "minor",
     ))
-    has_videos = bool(data["video_files"])
+    has_videos = bool(data.get("video_files", []))
     issues.append(make_issue(
         operator_name=operator_name,
         check_name="videos",
-        passed=has_videos,
+        passed=has_videos or not require_videos,
         message=f"video files={'found' if has_videos else 'missing'}",
-        level="minor",
+        level="major" if require_videos and not has_videos else "minor",
     ))
+
+
+def _check_task_description(
+    issues: list[dict[str, Any]],
+    operator_name: str,
+    data: dict[str, Any],
+    thresholds: dict[str, float],
+) -> None:
+    required = thresholds["metadata_require_task_description"] >= 0.5
+    present = _has_task_description(data)
+    issues.append(make_issue(
+        operator_name=operator_name,
+        check_name="task_description",
+        passed=present or not required,
+        message=f"task description={'present' if present else 'missing'}",
+        level="major" if required and not present else "minor",
+    ))
+
+
+def _has_task_description(data: dict[str, Any]) -> bool:
+    episode_meta = data.get("episode_meta") or {}
+    if payload_has_task_description(episode_meta):
+        return True
+
+    task_index = episode_meta.get("task_index")
+    dataset_path = data.get("dataset_path")
+    if task_index is not None and isinstance(dataset_path, Path):
+        if _task_index_has_description(dataset_path, task_index):
+            return True
+
+    for row in data.get("rows", [])[:20]:
+        value = resolve_task_value(row)
+        if value_has_task_description(value):
+            return True
+        row_task_index = row.get("task_index")
+        if row_task_index is not None and isinstance(dataset_path, Path):
+            if _task_index_has_description(dataset_path, row_task_index):
+                return True
+    return False
+
+
+def _task_index_has_description(dataset_path: Path, task_index: Any) -> bool:
+    expected = safe_float(task_index)
+    if expected is None:
+        return False
+    for row in _load_task_rows(dataset_path):
+        row_index = safe_float(row.get("task_index"))
+        if row_index is None or int(row_index) != int(expected):
+            continue
+        if _task_row_has_description(row):
+            return True
+    return False
+
+
+def _load_task_rows(dataset_path: Path) -> list[dict[str, Any]]:
+    tasks_jsonl = dataset_path / "meta" / "tasks.jsonl"
+    if tasks_jsonl.is_file():
+        rows: list[dict[str, Any]] = []
+        for line in tasks_jsonl.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+        return rows
+    tasks_parquet = dataset_path / "meta" / "tasks.parquet"
+    if tasks_parquet.is_file():
+        return read_parquet_rows(tasks_parquet)
+    return []
+
+
+def _task_row_has_description(row: dict[str, Any]) -> bool:
+    return payload_has_task_description(row)
 
 
 def _check_duration(
     issues: list[dict[str, Any]],
     operator_name: str,
+    data: dict[str, Any],
     episode_meta: dict[str, Any],
     thresholds: dict[str, float],
 ) -> None:
-    duration = safe_float(episode_meta.get("length")) or 0.0
+    duration = _derive_episode_duration_s(data, episode_meta)
     issues.append(make_issue(
         operator_name=operator_name,
         check_name="length",
@@ -396,6 +756,31 @@ def _check_duration(
         level="major",
         value={"length": duration},
     ))
+
+
+def _derive_episode_duration_s(
+    data: dict[str, Any],
+    episode_meta: dict[str, Any],
+) -> float:
+    timestamps = _extract_timestamps(data.get("rows", []))
+    if len(timestamps) >= 2:
+        return max(timestamps[-1] - timestamps[0], 0.0)
+
+    for key, value in episode_meta.items():
+        if not key.endswith("/to_timestamp"):
+            continue
+        end_time = safe_float(value)
+        if end_time is None:
+            continue
+        start_key = key.replace("/to_timestamp", "/from_timestamp")
+        start_time = safe_float(episode_meta.get(start_key)) or 0.0
+        return max(end_time - start_time, 0.0)
+
+    raw_length = safe_float(episode_meta.get("length")) or 0.0
+    fps = safe_float(data.get("info", {}).get("fps"))
+    if fps and fps > 0 and raw_length > fps:
+        return max(raw_length / fps, 0.0)
+    return max(raw_length, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -530,243 +915,9 @@ def validate_action(
     data: dict[str, Any],
     threshold_overrides: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    operator_name = "action"
-    thresholds = _merge_threshold_overrides(threshold_overrides)
-    rows = data["rows"]
-    issues: list[dict[str, Any]] = []
-    timestamps = _extract_timestamps(rows)
+    from .action_validator import validate_action as _validate_action
 
-    if len(timestamps) < 2:
-        issues.append(make_issue(
-            operator_name=operator_name,
-            check_name="timestamps",
-            passed=False,
-            message="Insufficient timestamps for action validation",
-            level="critical",
-        ))
-        return finalize_validator(operator_name, issues)
-
-    primary_series = _collect_primary_series(rows, data.get("info"))
-    if not primary_series:
-        issues.append(make_issue(
-            operator_name=operator_name,
-            check_name="joint_series",
-            passed=False,
-            message="No joint series found for validation",
-            level="critical",
-        ))
-        return finalize_validator(operator_name, issues)
-
-    _check_static_duration(issues, operator_name, primary_series, timestamps, thresholds)
-    _check_velocity_and_quality(issues, operator_name, primary_series, timestamps, thresholds)
-
-    return finalize_validator(
-        operator_name, issues,
-        details={"joint_count": len(primary_series), "frame_count": len(timestamps)},
-    )
-
-
-def _action_candidate_columns(rows: list[dict[str, Any]]) -> list[str]:
-    return sorted({
-        key for row in rows for key in row.keys()
-        if key.startswith("state_")
-        or key.startswith("action_")
-        or key == "action"
-        or key.startswith("action.")
-        or key == "observation.state"
-        or key.startswith("observation.state.")
-    })
-
-
-def _extract_numeric_components(value: Any) -> list[float | None]:
-    if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            return [safe_float(value.item())]
-        if value.ndim == 1:
-            return [safe_float(item) for item in value.tolist()]
-        return []
-    if isinstance(value, (list, tuple)):
-        return [safe_float(item) for item in value]
-    return [safe_float(value)]
-
-
-def _feature_axis_names(
-    info: dict[str, Any] | None,
-    key: str,
-    component_count: int,
-) -> list[str]:
-    if not isinstance(info, dict):
-        return [str(index) for index in range(component_count)]
-
-    feature = info.get("features", {}).get(key, {})
-    names = feature.get("names") if isinstance(feature, dict) else None
-    if isinstance(names, dict):
-        axes = names.get("axes")
-        if isinstance(axes, list) and len(axes) == component_count:
-            return [str(axis) for axis in axes]
-    if isinstance(names, list) and len(names) == component_count:
-        return [str(name) for name in names]
-    return [str(index) for index in range(component_count)]
-
-
-def _collect_primary_series(
-    rows: list[dict[str, Any]],
-    info: dict[str, Any] | None = None,
-) -> dict[str, list[float | None]]:
-    series: dict[str, list[float | None]] = {}
-    for name in _action_candidate_columns(rows):
-        row_components = [_extract_numeric_components(row.get(name)) for row in rows]
-        component_count = max((len(components) for components in row_components), default=0)
-        if component_count == 0:
-            continue
-
-        if component_count == 1:
-            series[name] = [
-                components[0] if components else None
-                for components in row_components
-            ]
-            continue
-
-        component_names = _feature_axis_names(info, name, component_count)
-        for index in range(component_count):
-            component_label = component_names[index] if index < len(component_names) else str(index)
-            series[f"{name}.{component_label}"] = [
-                components[index] if index < len(components) else None
-                for components in row_components
-            ]
-
-    populated = {
-        key: values for key, values in series.items()
-        if any(value is not None for value in values)
-    }
-    non_gripper = {
-        key: values for key, values in populated.items()
-        if "gripper" not in key.lower()
-    }
-    return non_gripper or populated or series
-
-
-def _longest_static_duration(
-    series: dict[str, list[float | None]],
-    timestamps: list[float],
-    threshold: float,
-) -> float:
-    if not series or len(timestamps) < 2:
-        return 0.0
-    keys = list(series.keys())
-    longest = 0.0
-    current = 0.0
-    for index in range(1, len(timestamps)):
-        max_diff = 0.0
-        valid = False
-        for key in keys:
-            cv = series[key][index]
-            pv = series[key][index - 1]
-            if cv is None or pv is None:
-                continue
-            valid = True
-            max_diff = max(max_diff, abs(cv - pv))
-        if valid and max_diff < threshold:
-            current += max(timestamps[index] - timestamps[index - 1], 0.0)
-            longest = max(longest, current)
-        else:
-            current = 0.0
-    return longest
-
-
-def _check_static_duration(
-    issues: list[dict[str, Any]],
-    operator_name: str,
-    primary_series: dict[str, list[float | None]],
-    timestamps: list[float],
-    thresholds: dict[str, float],
-) -> None:
-    static_threshold = thresholds["action_static_threshold"]
-    all_static = _longest_static_duration(primary_series, timestamps, static_threshold)
-    key_subset = dict(list(primary_series.items())[:min(6, len(primary_series))])
-    key_static = _longest_static_duration(key_subset, timestamps, static_threshold)
-    issues.extend([
-        make_issue(
-            operator_name=operator_name,
-            check_name="all_static_duration",
-            passed=all_static <= thresholds["action_max_all_static_s"],
-            message=f"All-joint longest static {all_static:.2f}s",
-            level="major",
-            value={"all_static_duration_s": all_static},
-        ),
-        make_issue(
-            operator_name=operator_name,
-            check_name="key_static_duration",
-            passed=key_static <= thresholds["action_max_key_static_s"],
-            message=f"Key-joint longest static {key_static:.2f}s",
-            level="major",
-            value={"key_static_duration_s": key_static},
-        ),
-    ])
-
-
-def _check_velocity_and_quality(
-    issues: list[dict[str, Any]],
-    operator_name: str,
-    primary_series: dict[str, list[float | None]],
-    timestamps: list[float],
-    thresholds: dict[str, float],
-) -> None:
-    velocities: list[float] = []
-    nan_like_count = 0
-    total_value_count = 0
-    absolute_values = [
-        abs(v)
-        for vals in primary_series.values()
-        for v in vals
-        if v is not None
-    ]
-    for values in primary_series.values():
-        limit = min(len(values), len(timestamps))
-        for index in range(1, limit):
-            cv = values[index]
-            pv = values[index - 1]
-            if cv is None or pv is None:
-                nan_like_count += 1
-                total_value_count += 1
-                continue
-            dt = max(timestamps[index] - timestamps[index - 1], 1e-6)
-            velocities.append(abs(cv - pv) / dt)
-            total_value_count += 1
-
-    unit_scale = (math.pi / 180.0) if percentile(absolute_values, 0.95) > 10.0 else 1.0
-    scaled = [v * unit_scale for v in velocities]
-    max_velocity = percentile(scaled, 0.99) if scaled else 0.0
-    nan_ratio = (nan_like_count / total_value_count) if total_value_count else 0.0
-    duration = timestamps[-1] - timestamps[0]
-
-    issues.extend([
-        make_issue(
-            operator_name=operator_name,
-            check_name="max_velocity",
-            passed=max_velocity < thresholds["action_max_velocity_rad_s"],
-            message=f"P99 velocity {max_velocity:.3f} rad/s",
-            level="major",
-            value={"max_velocity": max_velocity, "unit_scale": unit_scale},
-        ),
-        make_issue(
-            operator_name=operator_name,
-            check_name="duration",
-            passed=duration >= thresholds["action_min_duration_s"],
-            message=f"Action duration {duration:.2f}s",
-            level="major",
-            value={"duration_s": duration},
-        ),
-        make_issue(
-            operator_name=operator_name,
-            check_name="nan_ratio",
-            passed=nan_ratio < thresholds["action_max_nan_ratio"],
-            message=f"Missing value ratio {nan_ratio * 100:.2f}%",
-            level="major",
-            value={"nan_ratio": nan_ratio},
-        ),
-    ])
-
+    return _validate_action(data, threshold_overrides)
 
 
 
@@ -795,7 +946,7 @@ def validate_ee_trajectory(
         check_name="grasp_event_count",
         passed=len(spans) >= int(thresholds["ee_min_event_count"]),
         message=f"Detected grasp/place events {len(spans)}",
-        level="minor",
+        level="major",
         value={"event_count": len(spans)},
     ))
 
@@ -810,11 +961,40 @@ def validate_ee_trajectory(
             check_name="gripper_motion_span",
             passed=span >= thresholds["ee_min_gripper_span"],
             message=f"Gripper span {span:.3f}",
-            level="minor",
+            level="major",
             value={"gripper_span": span},
+        ))
+    elif thresholds["ee_min_gripper_span"] > 0:
+        issues.append(make_issue(
+            operator_name=operator_name,
+            check_name="gripper_motion_span",
+            passed=False,
+            message=f"Gripper span unavailable (min {thresholds['ee_min_gripper_span']:.3f})",
+            level="major",
+            value={"gripper_span": None},
         ))
 
     return finalize_validator(operator_name, issues, details={"event_count": len(spans)})
+
+
+def validate_trajectory_dtw(
+    data: dict[str, Any],
+    threshold_overrides: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    operator_name = "trajectory_dtw"
+    issue = make_issue(
+        operator_name=operator_name,
+        check_name="requires_batch_context",
+        passed=False,
+        message="trajectory_dtw runs after batch quality validation",
+        level="major",
+        value={"skipped": True, "reason": "requires_batch_context"},
+    )
+    return finalize_validator(
+        operator_name,
+        [issue],
+        details={"skipped": True, "reason": "requires_batch_context"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -828,6 +1008,7 @@ VALIDATOR_REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "visual": validate_visual_assets,
     "depth": validate_depth_assets,
     "ee_trajectory": validate_ee_trajectory,
+    "trajectory_dtw": validate_trajectory_dtw,
 }
 
 
@@ -849,7 +1030,7 @@ def run_quality_validators(
         results.append(VALIDATOR_REGISTRY[name](data, threshold_overrides))
 
     all_issues = [issue for result in results for issue in result["issues"]]
-    total_score = statistics.fmean([r["score"] for r in results]) if results else 0.0
+    total_score = weighted_validator_score(results) if results else 0.0
     passed = all(r["passed"] for r in results)
     validators_dict = {
         r["name"]: {"passed": r["passed"], "score": r["score"]}

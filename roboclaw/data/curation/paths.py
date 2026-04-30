@@ -4,8 +4,9 @@ from pathlib import Path
 
 
 def datasets_root() -> Path:
-    from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home, get_manifest_path
     import json
+
+    from roboclaw.embodied.embodiment.manifest.helpers import get_manifest_path, get_roboclaw_home
 
     manifest_path = get_manifest_path()
     if manifest_path.exists():

@@ -7,10 +7,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-def read_parquet_rows(path: Path) -> list[dict[str, Any]]:
+def read_parquet_rows(
+    path: Path,
+    *,
+    filters: Any | None = None,
+    columns: list[str] | None = None,
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    table = pq.read_table(path)
+    table = pq.read_table(path, filters=filters, columns=columns)
     return table.to_pylist()
 
 

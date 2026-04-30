@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import statistics
 from typing import Any
 
+from .dtw import dtw_alignment
 from .features import (
     clamp,
     mean,
+    normalize_scalar_series,
     percentile,
     resolve_action_vector,
     resolve_state_vector,
     resolve_timestamp,
+    sample_indices,
 )
 
 # ---------------------------------------------------------------------------
@@ -108,6 +112,154 @@ def build_confidence_payload(
 # Annotation propagation
 # ---------------------------------------------------------------------------
 
+def build_alignment_series(
+    rows: list[dict[str, Any]],
+    *,
+    max_dims: int = 6,
+    max_points: int = 90,
+) -> tuple[list[list[float]], list[float]]:
+    """Build a normalized per-row vector series plus a relative time axis.
+
+    This intentionally mirrors ``build_episode_sequence`` behavior but also
+    returns a monotonic time axis so annotations can be aligned with DTW.
+    """
+    if max_dims <= 0:
+        return [[0.0]], [0.0]
+
+    raw_vectors: list[list[float]] = []
+    raw_times: list[float] = []
+
+    for fallback_index, row in enumerate(rows):
+        state = resolve_state_vector(row)
+        action = resolve_action_vector(row)
+        source = state or action
+        if not source:
+            continue
+
+        capped: list[float] = []
+        capped_size = min(max_dims, len(source))
+        for index in range(capped_size):
+            value = source[index]
+            try:
+                capped.append(float(value) if value is not None else 0.0)
+            except (TypeError, ValueError):
+                capped.append(0.0)
+
+        # If the source has more dims, prefer keeping the last dim (often gripper)
+        # by replacing the last slot. This helps alignment across different robots.
+        if len(source) > max_dims and capped:
+            try:
+                capped[-1] = float(source[-1]) if source[-1] is not None else 0.0
+            except (TypeError, ValueError):
+                capped[-1] = 0.0
+
+        if not capped:
+            continue
+        raw_vectors.append(capped)
+
+        timestamp = resolve_timestamp(row)
+        raw_times.append(float(timestamp) if timestamp is not None else float(fallback_index))
+
+    if len(raw_vectors) < 2:
+        return [[0.0] * max_dims], [0.0]
+
+    indices = sample_indices(len(raw_vectors), max_points=max_points)
+    sampled_vectors = [raw_vectors[index] for index in indices]
+    sampled_times = [raw_times[index] for index in indices]
+
+    base_time = sampled_times[0] if sampled_times else 0.0
+    rel_times = [max(float(t) - float(base_time), 0.0) for t in sampled_times]
+    # Enforce monotonicity for downstream interpolation.
+    for index in range(1, len(rel_times)):
+        if rel_times[index] < rel_times[index - 1]:
+            rel_times[index] = rel_times[index - 1]
+
+    dim_count = max(len(vector) for vector in sampled_vectors)
+    normalized_dimensions: list[list[float]] = []
+    for dim_index in range(dim_count):
+        dim_values = [
+            vector[dim_index] if dim_index < len(vector) else 0.0
+            for vector in sampled_vectors
+        ]
+        normalized_dimensions.append(normalize_scalar_series(dim_values))
+
+    normalized_sequence: list[list[float]] = []
+    for row_index in range(len(sampled_vectors)):
+        normalized_sequence.append([
+            normalized_dimensions[dim_index][row_index]
+            for dim_index in range(dim_count)
+        ])
+
+    return normalized_sequence, rel_times
+
+
+def _build_monotonic_index_map(
+    path: list[tuple[int, int]],
+    source_len: int,
+    target_len: int,
+) -> list[int]:
+    if source_len <= 0 or target_len <= 0:
+        return []
+    buckets: list[list[int]] = [[] for _ in range(source_len)]
+    for left_index, right_index in path:
+        if 0 <= left_index < source_len and 0 <= right_index < target_len:
+            buckets[left_index].append(right_index)
+
+    mapping: list[int] = [0 for _ in range(source_len)]
+    last = 0
+    for index, right_indices in enumerate(buckets):
+        if right_indices:
+            mapped = int(round(sum(right_indices) / len(right_indices)))
+        else:
+            mapped = last
+        mapped = max(mapped, last)  # enforce monotonic non-decreasing
+        mapped = min(max(mapped, 0), target_len - 1)
+        mapping[index] = mapped
+        last = mapped
+    return mapping
+
+
+def _target_time_by_nearest_source(
+    source_times: list[float],
+    target_times: list[float],
+    path: list[tuple[int, int]],
+    source_time: float,
+) -> float:
+    if not source_times or not target_times or not path:
+        return 0.0
+
+    safe_source_time = clamp(float(source_time), 0.0, float(source_times[-1] or 0.0))
+    source_index = min(
+        range(len(source_times)),
+        key=lambda index: abs(float(source_times[index]) - safe_source_time),
+    )
+    target_indices = sorted({
+        right_index for left_index, right_index in path
+        if left_index == source_index and 0 <= right_index < len(target_times)
+    })
+    if not target_indices:
+        index_map = _build_monotonic_index_map(
+            path,
+            source_len=len(source_times),
+            target_len=len(target_times),
+        )
+        return float(target_times[index_map[source_index]]) if index_map else 0.0
+    return float(statistics.fmean(float(target_times[index]) for index in target_indices))
+
+
+def _map_time_by_alignment(
+    source_times: list[float],
+    target_times: list[float],
+    alignment_path: list[tuple[int, int]],
+    source_time: float,
+) -> float:
+    return _target_time_by_nearest_source(
+        source_times,
+        target_times,
+        alignment_path,
+        source_time,
+    )
+
 
 def propagate_annotation_spans(
     spans: list[dict[str, Any]],
@@ -116,25 +268,84 @@ def propagate_annotation_spans(
     target_duration: float,
     target_record_key: str,
     prototype_score: float,
+    source_sequence: list[list[float]] | None = None,
+    target_sequence: list[list[float]] | None = None,
+    source_time_axis: list[float] | None = None,
+    target_time_axis: list[float] | None = None,
+    alignment_path: list[tuple[int, int]] | None = None,
+    dtw_config: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     safe_source_duration = max(source_duration, 1e-6)
     scale = max(target_duration, 0.0) / safe_source_duration
 
+    usable_alignment_path: list[tuple[int, int]] | None = None
+    alignment_path = alignment_path or _build_alignment_path(
+        source_sequence,
+        target_sequence,
+        dtw_config,
+    )
+    if (
+        alignment_path
+        and source_time_axis
+        and target_time_axis
+        and len(source_time_axis) > 1
+        and len(target_time_axis) > 1
+    ):
+        usable_alignment_path = alignment_path
+
     propagated: list[dict[str, Any]] = []
     for span in spans:
-        start_time = float(span.get("startTime", 0.0)) * scale
+        raw_start = float(span.get("startTime", 0.0))
+        if usable_alignment_path and source_time_axis and target_time_axis:
+            start_time = _map_time_by_alignment(
+                source_time_axis,
+                target_time_axis,
+                usable_alignment_path,
+                raw_start,
+            )
+        else:
+            start_time = raw_start * scale
         raw_end = span.get("endTime")
-        end_time = float(raw_end) * scale if raw_end is not None else None
+        if raw_end is None:
+            end_time = None
+        else:
+            end_source = float(raw_end)
+            if usable_alignment_path and source_time_axis and target_time_axis:
+                end_time = _map_time_by_alignment(
+                    source_time_axis,
+                    target_time_axis,
+                    usable_alignment_path,
+                    end_source,
+                )
+            else:
+                end_time = end_source * scale
+
+        if end_time is not None and end_time < start_time:
+            end_time = start_time
+
         propagated.append({
             **span,
             "startTime": round(start_time, 4),
             "endTime": round(end_time, 4) if end_time is not None else None,
             "target_record_key": target_record_key,
             "propagated": True,
-            "source": "propagated",
-            "prototype_score": round(prototype_score, 4),
+            "source": "dtw_propagated" if usable_alignment_path else "duration_scaled",
+            "prototype_score": round(clamp(prototype_score, 0.0, 1.0), 4),
         })
     return propagated
+
+
+def _build_alignment_path(
+    source_sequence: list[list[float]] | None,
+    target_sequence: list[list[float]] | None,
+    dtw_config: dict[str, Any] | None,
+) -> list[tuple[int, int]] | None:
+    if not source_sequence or not target_sequence:
+        return None
+    _distance, path = dtw_alignment(source_sequence, target_sequence, **(dtw_config or {}))
+    if _distance == float("inf"):
+        return None
+    return path or None
 
 
 # ---------------------------------------------------------------------------
