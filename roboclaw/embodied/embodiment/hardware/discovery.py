@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import replace
 
+from roboclaw.embodied.embodiment.hardware.motion import resolve_active_motion
 from roboclaw.embodied.embodiment.hardware.probers import _REGISTRY, get_prober
 from roboclaw.embodied.embodiment.hardware.scan import (
     capture_camera_frames,
@@ -47,6 +48,7 @@ class HardwareDiscovery:
         self._scanned_ports: list[SerialInterface] = []
         self._scanned_cameras: list[VideoInterface] = []
         self._motion_active: bool = False
+        self._active_motion_port_id: str = ""
 
     @property
     def scanned_ports(self) -> list[SerialInterface]:
@@ -116,6 +118,7 @@ class HardwareDiscovery:
                 port.motion_detector.capture_baseline()
         finally:
             restore_stderr(saved)
+        self._active_motion_port_id = ""
         self._motion_active = True
         return len(self._scanned_ports)
 
@@ -138,37 +141,61 @@ class HardwareDiscovery:
                 })
         finally:
             restore_stderr(saved)
-        return results
+        normalized, active_id = resolve_active_motion(results, self._active_motion_port_id)
+        self._active_motion_port_id = active_id
+        return normalized
 
     def stop_motion_detection(self) -> None:
         """Clear baselines and stop motion detection."""
         for port in self._scanned_ports:
             port.motion_detector.reset()
+        self._active_motion_port_id = ""
         self._motion_active = False
 
     def _probe_ports(
         self, ports: list[SerialInterface], prober, protocol: str = "",
         motor_ids: list[int] | None = None, baudrate: int = 1_000_000,
     ) -> list[SerialInterface]:
-        """Probe ports with a single prober, handling permission errors."""
+        """Probe ports with a single prober, handling permission errors.
+
+        Pre-checks os.access() because the motor SDKs silently return
+        empty results when openPort() fails due to permissions.
+        """
         from roboclaw.embodied.embodiment.hardware.scan import fix_serial_permissions
+
+        self._ensure_serial_access(ports, fix_serial_permissions)
 
         saved = suppress_stderr()
         tty_saved = _save_tty()
         try:
-            try:
-                return self._do_probe(ports, prober, protocol, motor_ids=motor_ids, baudrate=baudrate)
-            except Exception as exc:
-                if "Permission denied" not in str(exc) and "Errno 13" not in str(exc):
-                    raise
-                if fix_serial_permissions():
-                    return self._do_probe(ports, prober, protocol, motor_ids=motor_ids, baudrate=baudrate)
-                raise PermissionError(
-                    "Serial port permission denied. Run: bash scripts/setup-udev.sh"
-                ) from exc
+            return self._do_probe(ports, prober, protocol, motor_ids=motor_ids, baudrate=baudrate)
         finally:
             _restore_tty(tty_saved)
             restore_stderr(saved)
+
+    @staticmethod
+    def _ensure_serial_access(ports: list[SerialInterface], fix_fn) -> None:
+        """Raise PermissionError early if serial ports are not accessible.
+
+        The motor SDKs (scservo_sdk / dynamixel_sdk) silently return empty
+        results when openPort() fails, so we must check before probing.
+        """
+        has_denied = any(
+            not os.access(p.dev or p.by_id or p.by_path, os.R_OK | os.W_OK)
+            for p in ports
+            if p.dev or p.by_id or p.by_path
+        )
+        if not has_denied:
+            return
+        if fix_fn():
+            has_denied = any(
+                not os.access(p.dev or p.by_id or p.by_path, os.R_OK | os.W_OK)
+                for p in ports
+                if p.dev or p.by_id or p.by_path
+            )
+            if not has_denied:
+                return
+        raise PermissionError("serial_permission_denied")
 
     @staticmethod
     def _do_probe(

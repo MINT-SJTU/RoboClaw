@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("nh3")
+pytest.importorskip("nio")
+
 import roboclaw.channels.matrix as matrix_module
 from roboclaw.bus.events import OutboundMessage
 from roboclaw.bus.queue import MessageBus

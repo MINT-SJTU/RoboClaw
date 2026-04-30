@@ -1,6 +1,7 @@
 """Tests for InspireController with mocked Modbus + hardware integration tests."""
 
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +15,11 @@ from roboclaw.embodied.embodiment.hand.inspire_rh56 import (
 from roboclaw.embodied.embodiment.hand.registry import INSPIRE_RH56
 
 PORT = "/dev/ttyUSB0"
+
+
+def _require_hand_hardware() -> None:
+    if not Path(PORT).exists():
+        pytest.skip(f"Inspire hand hardware not present at {PORT}")
 
 
 # -- Unit tests (mocked Modbus) --
@@ -105,6 +111,7 @@ def test_finger_labels() -> None:
 
 @pytest.mark.hardware
 def test_hw_get_status() -> None:
+    _require_hand_hardware()
     result = InspireController().get_status(PORT, slave_id=2)
     assert "angles=" in result
     assert "forces=" in result
@@ -112,11 +119,13 @@ def test_hw_get_status() -> None:
 
 @pytest.mark.hardware
 def test_hw_open_hand() -> None:
+    _require_hand_hardware()
     result = InspireController().open_hand(PORT, slave_id=2)
     assert result == "Hand opened."
 
 
 @pytest.mark.hardware
 def test_hw_close_hand() -> None:
+    _require_hand_hardware()
     result = InspireController().close_hand(PORT, slave_id=2)
     assert result == "Hand closed."

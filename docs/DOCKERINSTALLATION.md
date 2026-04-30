@@ -9,7 +9,7 @@ If you do not want Docker, use [INSTALLATION.md](./INSTALLATION.md).
 Start from a clean clone:
 
 ```bash
-git clone https://github.com/MINT-SJTU/RoboClaw.git
+git clone --recurse-submodules https://github.com/MINT-SJTU/RoboClaw.git
 cd RoboClaw
 ```
 

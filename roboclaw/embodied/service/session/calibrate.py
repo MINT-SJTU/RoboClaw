@@ -7,8 +7,6 @@ Same architecture as TeleopSession / RecordSession:
 
 from __future__ import annotations
 
-import importlib
-import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,7 +16,6 @@ from loguru import logger
 from roboclaw.embodied.board.constants import Command, SessionState
 from roboclaw.embodied.board.consumer import InputConsumer, OutputConsumer
 from roboclaw.embodied.command import CommandBuilder, resolve_action_arms
-from roboclaw.embodied.embodiment.arm.registry import get_model
 from roboclaw.embodied.embodiment.manifest.binding import Binding
 from roboclaw.embodied.service.session.base import Session
 
@@ -26,30 +23,9 @@ if TYPE_CHECKING:
     from roboclaw.embodied.embodiment.manifest import Manifest
     from roboclaw.embodied.service import EmbodiedService
 
-# Minimal spec data needed for EEPROM sync after calibration.
-_MOTOR_SPECS: dict[str, dict[str, Any]] = {
-    "so101": {
-        "motor_bus_module": "lerobot.motors.feetech",
-        "motor_bus_class": "FeetechMotorsBus",
-        "default_motor": "sts3215",
-    },
-    "koch": {
-        "motor_bus_module": "lerobot.motors.dynamixel",
-        "motor_bus_class": "DynamixelMotorsBus",
-        "default_motor": "xl330-m288",
-    },
-}
-
 _RE_POSITION_ROW = re.compile(
     r"(\w+)\s+\|\s+(-?\d+)\s+\|\s+(-?\d+)\s+\|\s+(-?\d+)"
 )
-
-
-def _get_spec(arm_type: str) -> dict[str, Any]:
-    model = get_model(arm_type)
-    if model not in _MOTOR_SPECS:
-        raise ValueError(f"No motor spec for model '{model}'")
-    return _MOTOR_SPECS[model]
 
 
 # ── Consumers ────────────────────────────────────────────────────────────
@@ -75,15 +51,19 @@ class CalibrationOutputConsumer(OutputConsumer):
 
         low = line.lower()
         if "press enter to use provided calibration" in low:
-            await self.board.update(state=SessionState.CALIBRATING, calibration_step="choose")
+            await self.board.update(
+                state=SessionState.CALIBRATING,
+                calibration_step="choose",
+                calibration_phase="choose",
+            )
         elif "running calibration" in low:
-            await self.board.update(calibration_step="starting")
+            await self.board.update(calibration_step="starting", calibration_phase="starting")
         elif "move" in low and "middle" in low and "press enter" in low:
-            await self.board.update(calibration_step="homing")
+            await self.board.update(calibration_step="homing", calibration_phase="homing")
         elif "recording positions" in low and "press enter to stop" in low:
-            await self.board.update(calibration_step="recording")
+            await self.board.update(calibration_step="recording", calibration_phase="recording")
         elif "calibration saved" in low:
-            await self.board.update(calibration_step="done")
+            await self.board.update(calibration_step="done", calibration_phase="done")
 
 
 class CalibrationInputConsumer(InputConsumer):
@@ -125,21 +105,81 @@ class CalibrationSession(Session):
         argv = CommandBuilder.calibrate(arm)
         await self.start(argv, initial_state=SessionState.CALIBRATING, auto_confirm=False)
         # Set after start() — start() calls board.reset() which would clear it
-        await self.board.update(calibration_arm=arm.alias)
+        await self.board.update(
+            calibration_mode="manual",
+            calibration_scope="single",
+            calibration_phase="starting",
+            calibration_current_arm=arm.alias,
+            calibration_index=1,
+            calibration_total=1,
+            calibration_results=[{
+                "alias": arm.alias,
+                "status": "running",
+                "reason": "",
+                "started_at": None,
+                "finished_at": None,
+            }],
+            calibration_arm=arm.alias,
+        )
 
     async def _wait_process(self) -> None:
-        """Override to sync EEPROM and release embodiment lock on exit."""
+        """Finalize calibration only after lerobot saves the standard JSON."""
         assert self._process is not None
-        rc = self._process.returncode
-        if rc is None:
-            rc = await self._process.wait()
-        await super()._wait_process()
+        try:
+            rc = self._process.returncode
+            if rc is None:
+                rc = await self._process.wait()
+            logger.info("Calibration subprocess exited with code {}", rc)
+            await self._teardown()
 
-        if rc == 0 and self._arm and self._cal_manifest:
-            self._cal_manifest.mark_arm_calibrated(self._arm.alias)
-            _sync_calibration_to_motors(self._arm)
+            if self._stopped:
+                return
 
-        self._parent.release_embodiment()
+            if rc not in (0, None, -2, 130, -15):
+                await self.board.update(
+                    state=SessionState.ERROR,
+                    error=self._format_exit_error(rc),
+                )
+                return
+
+            if rc != 0:
+                await self.board.update(state=SessionState.IDLE)
+                return
+
+            try:
+                _mark_calibration_success(self._arm, self._cal_manifest)
+            except Exception as exc:
+                await self.board.update(
+                    state=SessionState.ERROR,
+                    error=str(exc),
+                    calibration_phase="failed",
+                    calibration_error=str(exc),
+                    calibration_results=[{
+                        "alias": self._arm.alias if self._arm else "",
+                        "status": "failed",
+                        "reason": str(exc),
+                        "started_at": None,
+                        "finished_at": None,
+                    }],
+                )
+                return
+
+            await self.board.update(
+                state=SessionState.IDLE,
+                calibration_phase="done",
+                calibration_results=[{
+                    "alias": self._arm.alias if self._arm else "",
+                    "status": "success",
+                    "reason": "",
+                    "started_at": None,
+                    "finished_at": None,
+                }],
+            )
+        finally:
+            if self._exit_callback and not self._stopped:
+                self._exit_callback(self)
+            elif not self._exit_callback:
+                self._parent.release_embodiment()
 
     # -- CLI protocol (used by TtySession when invoked from agent) ---------
 
@@ -169,10 +209,10 @@ class CalibrationSession(Session):
         state = self.board.state
         step = state.get("calibration_step", "")
         alias = state.get("calibration_arm", "")
-        if step == "done":
-            return f"Calibration of {alias} completed successfully."
         if state.get("state") == SessionState.ERROR:
             return f"Calibration of {alias} failed: {state.get('error', 'unknown error')}"
+        if step == "done":
+            return f"Calibration of {alias} completed successfully."
         return f"Calibration of {alias} ended."
 
     async def stop(self) -> None:
@@ -217,7 +257,6 @@ class CalibrationSession(Session):
                     return "interrupted"
                 results.append(result)
 
-            manifest.reload()
             ok = sum(1 for r in results if r.endswith(": OK"))
             fail = len(results) - ok
             return f"{ok} succeeded, {fail} failed.\n" + "\n".join(results)
@@ -243,8 +282,10 @@ class CalibrationSession(Session):
         if rc in (130, -2):
             return "interrupted"
         if rc == 0:
-            manifest.mark_arm_calibrated(arm.alias)
-            _sync_calibration_to_motors(arm)
+            try:
+                _mark_calibration_success(arm, manifest)
+            except Exception as exc:
+                return f"{display}: FAILED ({exc})"
             return f"{display}: OK"
         msg = f"{display}: FAILED (exit {rc})"
         if stderr_text.strip():
@@ -262,42 +303,17 @@ def _resolve_targets(manifest: Manifest, kwargs: dict[str, Any]) -> list[Binding
     return [arm for arm in selected if not arm.calibrated]
 
 
-def _sync_calibration_to_motors(arm: Binding) -> None:
-    """Sync calibration data to motor EEPROM after successful calibration."""
-    cal_dir = arm.calibration_dir
-    serial = Path(cal_dir).name
-    cal_path = Path(cal_dir) / f"{serial}.json"
+def _mark_calibration_success(arm: Binding | None, manifest: Manifest | None) -> None:
+    """Persist calibration only after lerobot saves the standard JSON."""
+    if arm is None or manifest is None:
+        raise RuntimeError("Calibration session is missing arm context.")
+    if not arm.calibration_dir or not arm.arm_id:
+        raise RuntimeError(f"Calibration for {arm.alias} has no usable calibration directory.")
+
+    cal_path = Path(arm.calibration_dir) / f"{arm.arm_id}.json"
     if not cal_path.exists():
-        return
-
-    from lerobot.motors.motors_bus import Motor, MotorCalibration, MotorNormMode
-
-    spec = _get_spec(arm.type_name)
-    default_motor = spec["default_motor"]
-    cal = json.loads(cal_path.read_text())
-
-    motors = {}
-    calibration = {}
-    for name, cfg in cal.items():
-        motors[name] = Motor(id=cfg["id"], model=default_motor, norm_mode=MotorNormMode.DEGREES)
-        calibration[name] = MotorCalibration(
-            id=cfg["id"],
-            drive_mode=cfg["drive_mode"],
-            homing_offset=cfg["homing_offset"],
-            range_min=cfg["range_min"],
-            range_max=cfg["range_max"],
+        raise RuntimeError(
+            f"Calibration for {arm.alias} did not save {cal_path.name}."
         )
 
-    mod = importlib.import_module(spec["motor_bus_module"])
-    bus_class = getattr(mod, spec["motor_bus_class"])
-    bus = bus_class(port=arm.port, motors=motors, calibration=calibration)
-    try:
-        bus.connect()
-        for name, cfg in cal.items():
-            bus.write("Homing_Offset", name, cfg["homing_offset"], normalize=False)
-            bus.write("Min_Position_Limit", name, cfg["range_min"], normalize=False)
-            bus.write("Max_Position_Limit", name, cfg["range_max"], normalize=False)
-    except (OSError, ConnectionError):
-        logger.warning("Motor EEPROM sync failed for {}", arm.alias)
-    finally:
-        bus.disconnect()
+    manifest.mark_arm_calibrated(arm.alias)

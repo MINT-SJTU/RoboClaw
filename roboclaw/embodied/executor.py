@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import sys
 from collections import deque
 from pathlib import Path
@@ -11,12 +12,34 @@ from uuid import uuid4
 
 
 def _utf8_env() -> dict[str, str]:
-    """Return environment with UTF-8 forced for Python stdio."""
+    """Return environment with UTF-8 forced for Python stdio.
+
+    Also injects HuggingFace config from config.json so that subprocess
+    calls to transformers/huggingface_hub respect the user's mirror/proxy
+    settings.
+    """
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
+    _inject_hf_env(env)
     return env
+
+
+def _inject_hf_env(env: dict[str, str]) -> None:
+    """Set HF_ENDPOINT / HF_TOKEN / HTTPS_PROXY from roboclaw config."""
+    try:
+        from roboclaw.config.loader import load_runtime_config
+        hf = load_runtime_config().huggingface
+        if hf.endpoint:
+            env.setdefault("HF_ENDPOINT", hf.endpoint)
+        if hf.token:
+            env.setdefault("HF_TOKEN", hf.token)
+        if hf.proxy:
+            env.setdefault("HTTPS_PROXY", hf.proxy)
+            env.setdefault("HTTP_PROXY", hf.proxy)
+    except Exception:
+        pass
 
 
 class SubprocessExecutor:
@@ -126,6 +149,98 @@ class SubprocessExecutor:
             "log_tail": self._tail_text(log_path),
         }
 
+    async def latest_running_job(self, log_dir: Path) -> dict[str, str | int | bool | None]:
+        """Return the newest detached job that is still running."""
+        if not log_dir.exists():
+            return {
+                "job_id": "",
+                "status": "missing",
+                "running": False,
+                "pid": None,
+                "log_path": "",
+                "log_tail": "",
+            }
+
+        pid_paths = sorted(
+            log_dir.glob("*.pid"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for pid_path in pid_paths:
+            job_id = pid_path.stem
+            status = await self.job_status(job_id=job_id, log_dir=log_dir)
+            if status.get("running"):
+                return status
+
+        return {
+            "job_id": "",
+            "status": "idle",
+            "running": False,
+            "pid": None,
+            "log_path": "",
+            "log_tail": "",
+        }
+
+    async def stop_job(self, job_id: str, log_dir: Path) -> dict[str, str | int | bool | None]:
+        """Terminate a detached job process group."""
+        pid_path = log_dir / f"{job_id}.pid"
+        log_path = self._job_log_path(job_id, log_dir)
+
+        if not pid_path.exists():
+            return {
+                "job_id": job_id,
+                "status": "missing",
+                "running": False,
+                "pid": None,
+                "log_path": str(log_path),
+                "log_tail": self._tail_text(log_path),
+            }
+
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+        if not self._is_running(pid):
+            return {
+                "job_id": job_id,
+                "status": "finished",
+                "running": False,
+                "pid": pid,
+                "log_path": str(log_path),
+                "log_tail": self._tail_text(log_path),
+            }
+
+        try:
+            os.killpg(pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            return {
+                "job_id": job_id,
+                "status": "permission_denied",
+                "running": True,
+                "pid": pid,
+                "log_path": str(log_path),
+                "log_tail": self._tail_text(log_path),
+            }
+
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if not self._is_running(pid):
+                break
+
+        if self._is_running(pid):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        return {
+            "job_id": job_id,
+            "status": "stopped" if not self._is_running(pid) else "stopping",
+            "running": self._is_running(pid),
+            "pid": pid,
+            "log_path": str(log_path),
+            "log_tail": self._tail_text(log_path),
+        }
+
     def _is_running(self, pid: int) -> bool:
         """Return whether the process is still alive."""
         try:
@@ -134,6 +249,13 @@ class SubprocessExecutor:
             return False
         except PermissionError:
             return True
+        stat_path = Path(f"/proc/{pid}/stat")
+        try:
+            state = stat_path.read_text(encoding="utf-8", errors="replace").split()[2]
+        except (FileNotFoundError, IndexError, OSError):
+            return True
+        if state == "Z":
+            return False
         return True
 
     def _job_log_path(self, job_id: str, log_dir: Path) -> Path:

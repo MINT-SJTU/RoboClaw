@@ -176,6 +176,39 @@ def _register_system_routes(app: FastAPI, runtime: WebRuntime) -> None:
             "proxy": hf.proxy,
         }
 
+    @app.get("/api/system/control-record-config")
+    async def control_record_config() -> dict[str, Any]:
+        config = load_config(get_config_path())
+        return config.control_center.record.model_dump()
+
+    @app.post("/api/system/control-record-config")
+    async def save_control_record_config(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        config = load_config(get_config_path())
+        record = config.control_center.record
+        task = payload.get("task")
+        if isinstance(task, str):
+            record.task = task
+        num_episodes = payload.get("num_episodes")
+        if isinstance(num_episodes, int):
+            record.num_episodes = num_episodes
+        episode_time_s = payload.get("episode_time_s")
+        if isinstance(episode_time_s, int):
+            record.episode_time_s = episode_time_s
+        reset_time_s = payload.get("reset_time_s")
+        if isinstance(reset_time_s, int):
+            record.reset_time_s = reset_time_s
+        dataset_name = payload.get("dataset_name")
+        if isinstance(dataset_name, str):
+            record.dataset_name = dataset_name
+        fps = payload.get("fps")
+        if isinstance(fps, int):
+            record.fps = fps
+        use_cameras = payload.get("use_cameras")
+        if isinstance(use_cameras, bool):
+            record.use_cameras = use_cameras
+        save_config(config, get_config_path())
+        return {"status": "ok", **record.model_dump()}
+
 
 async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) -> dict[str, Any]:
     """Apply provider config changes, swap provider atomically, refresh agent."""
@@ -369,14 +402,27 @@ def _ensure_ui_build() -> None:
     if not ui_src.is_dir():
         return
 
-    # Find newest mtime in src/ vs dist/
-    def _newest_mtime(directory: Path) -> float:
-        return max((f.stat().st_mtime for f in directory.rglob("*") if f.is_file()), default=0)
+    needs_build = False
 
-    src_mtime = _newest_mtime(ui_src)
-    dist_mtime = _newest_mtime(ui_dist) if ui_dist.is_dir() else 0
+    # Check 1: git commit hash — survives git reset --hard which resets mtimes
+    build_hash_file = ui_dist / ".build_commit"
+    current_hash = _git_head_hash(ui_root.parent)
+    if current_hash:
+        saved_hash = build_hash_file.read_text().strip() if build_hash_file.is_file() else ""
+        if saved_hash != current_hash:
+            needs_build = True
 
-    if dist_mtime >= src_mtime:
+    # Check 2: mtime fallback for non-git or dirty working tree
+    if not needs_build:
+        def _newest_mtime(directory: Path) -> float:
+            return max((f.stat().st_mtime for f in directory.rglob("*") if f.is_file()), default=0)
+
+        src_mtime = _newest_mtime(ui_src)
+        dist_mtime = _newest_mtime(ui_dist) if ui_dist.is_dir() else 0
+        if src_mtime > dist_mtime:
+            needs_build = True
+
+    if not needs_build:
         return
 
     npm = shutil.which("npm")
@@ -394,6 +440,21 @@ def _ensure_ui_build() -> None:
         logger.warning("Frontend build failed (exit {}), serving stale dist", result.returncode)
     else:
         logger.info("Frontend rebuild complete")
+        if current_hash:
+            build_hash_file.write_text(current_hash)
+
+
+def _git_head_hash(repo_root: Path) -> str:
+    """Return short HEAD hash, or empty string if not a git repo."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
 
 
 def main(

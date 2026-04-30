@@ -28,8 +28,15 @@ class DeviceInfo:
 def models_for(category: EmbodimentCategory) -> list[Any]:
     """Return all registered specs/infos for a category."""
     if category == EmbodimentCategory.ARM:
-        from roboclaw.embodied.embodiment.arm.registry import _PROBES
-        return [DeviceInfo(name=name, roles=("follower", "leader")) for name in _PROBES]
+        from roboclaw.embodied.embodiment.arm.registry import all_arm_types, get_model
+
+        model_names: list[str] = []
+        for arm_type in all_arm_types():
+            model = get_model(arm_type)
+            if model in model_names:
+                continue
+            model_names.append(model)
+        return [DeviceInfo(name=name, roles=("follower", "leader")) for name in model_names]
     # HAND, HUMANOID, MOBILE — not yet supported in the setup wizard
     return []
 

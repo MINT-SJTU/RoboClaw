@@ -9,7 +9,7 @@ from roboclaw.embodied.board.channels import (
     CH_SESSION,
     WS_TYPES,
 )
-from roboclaw.embodied.board.constants import Command, EpisodePhase, SessionState
+from roboclaw.embodied.board.constants import Command, SessionState
 from roboclaw.embodied.board.consumer import Consumer, InputConsumer, OutputConsumer
 
 __all__ = [
@@ -21,7 +21,6 @@ __all__ = [
     "CH_SESSION",
     "Command",
     "Consumer",
-    "EpisodePhase",
     "InputConsumer",
     "OutputConsumer",
     "SessionState",

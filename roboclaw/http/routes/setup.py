@@ -12,6 +12,10 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from roboclaw.http.routes._previews import serve_preview_image
+
+SETUP_PREVIEW_DIR = Path("/tmp/roboclaw-camera-previews/setup")
+
 
 class ScanRequest(BaseModel):
     model: str = ""
@@ -21,6 +25,11 @@ class AssignRequest(BaseModel):
     interface_stable_id: str
     alias: str
     spec_name: str
+    side: str = ""
+
+
+class DismissRequest(BaseModel):
+    interface_stable_id: str
 
 
 def _map_service_errors(app: FastAPI) -> None:
@@ -39,6 +48,29 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
     """Register /api/setup/* routes on the given app."""
     _map_service_errors(app)
 
+    # -- Permissions ------------------------------------------------------------
+
+    @app.get("/api/setup/permissions")
+    async def setup_permissions() -> dict[str, Any]:
+        from roboclaw.embodied.embodiment.hardware.scan import check_device_permissions
+        return await asyncio.to_thread(check_device_permissions)
+
+    @app.post("/api/setup/permissions/fix")
+    async def setup_permissions_fix() -> dict[str, Any]:
+        import os
+        from roboclaw.embodied.embodiment.hardware.scan import (
+            check_device_permissions, fix_serial_permissions,
+        )
+        fixed = await asyncio.to_thread(fix_serial_permissions)
+        status = await asyncio.to_thread(check_device_permissions)
+        status["fixed"] = fixed
+        if not fixed:
+            user = os.environ.get("USER", "$USER")
+            status["hint"] = f"sudo usermod -aG dialout,video {user}"
+        return status
+
+    # -- Scan -------------------------------------------------------------------
+
     @app.post("/api/setup/scan")
     async def setup_scan(body: ScanRequest | None = None) -> dict[str, Any]:
         model = body.model if body else ""
@@ -48,31 +80,37 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
                 "ports": [{"stable_id": p.stable_id, **p.to_dict()} for p in result["ports"]],
                 "cameras": [{"stable_id": c.stable_id, **c.to_dict()} for c in result["cameras"]],
             }
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
+        except PermissionError:
+            import os
+            raise HTTPException(403, {
+                "code": "serialPermissionDenied",
+                "user": os.environ.get("USER", "?"),
+            })
 
     @app.post("/api/setup/previews")
     async def setup_camera_previews() -> list[dict]:
         from roboclaw.embodied.service import EmbodimentBusyError
 
-        output_dir = str(Path("/tmp/roboclaw-camera-previews"))
+        output_dir = str(SETUP_PREVIEW_DIR)
         try:
-            return await asyncio.to_thread(
+            previews = await asyncio.to_thread(
                 service.setup.capture_previews, output_dir,
             )
+            return [
+                {
+                    **preview,
+                    "preview_url": f"/api/setup/previews/by-key/{preview['preview_key']}",
+                }
+                for preview in previews
+            ]
         except EmbodimentBusyError:
             raise
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
 
-    @app.get("/api/setup/previews/{index}")
-    async def setup_camera_preview_image(index: int):
-        from fastapi.responses import FileResponse
-
-        preview_dir = Path("/tmp/roboclaw-camera-previews")
-        for f in preview_dir.glob(f"{index:02d}_*.jpg"):
-            return FileResponse(str(f), media_type="image/jpeg")
-        raise HTTPException(404, f"Preview not found for camera index {index}")
+    @app.get("/api/setup/previews/by-key/{preview_key}")
+    async def setup_camera_preview_image(preview_key: str):
+        return serve_preview_image(SETUP_PREVIEW_DIR, preview_key)
 
     @app.post("/api/setup/motion/start")
     async def motion_start() -> dict[str, Any]:
@@ -112,6 +150,7 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
         try:
             assignment = service.setup.assign(
                 body.interface_stable_id, body.alias, body.spec_name,
+                side=body.side,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -128,6 +167,14 @@ def register_setup_routes(app: FastAPI, service: Any) -> None:
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"status": "unassigned", "alias": alias}
+
+    @app.post("/api/setup/session/dismiss")
+    async def setup_dismiss(body: DismissRequest) -> dict[str, str]:
+        try:
+            service.setup.dismiss(body.interface_stable_id)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"status": "dismissed", "interface_stable_id": body.interface_stable_id}
 
     @app.post("/api/setup/session/commit")
     async def setup_commit() -> dict[str, Any]:

@@ -12,13 +12,18 @@ class Interface:
 
     @property
     def address(self) -> str:
-        """Best available device path for runtime use."""
+        """Canonical address used for persistence, equality, and guard keying."""
         raise NotImplementedError
 
     @property
     def stable_id(self) -> str:
         """Most stable identifier for persistence and Guard keying."""
         raise NotImplementedError
+
+    @property
+    def runtime_address(self) -> str:
+        """Current endpoint used to talk to the device."""
+        return self.address
 
     @property
     def exists(self) -> bool:

@@ -25,6 +25,7 @@ class MotionDetector:
     def __init__(self, interface: SerialInterface) -> None:
         self._interface = interface
         self._baseline: dict[int, int] = {}
+        self._last_positions: dict[int, int] = {}
 
     @property
     def interface(self) -> SerialInterface:
@@ -37,17 +38,26 @@ class MotionDetector:
     def capture_baseline(self) -> dict[int, int]:
         """Read and store current positions as the motion reference."""
         self._baseline = self._read_positions()
+        self._last_positions = dict(self._baseline)
         return dict(self._baseline)
 
     def poll(self) -> MotionResult:
-        """Read current positions and compute delta from baseline."""
+        """Read current positions and compute fresh motion from the previous poll.
+
+        This detector only answers whether a new movement happened in this
+        sampling window. Higher-level setup flows decide whether that fresh
+        motion should latch the currently selected arm.
+        """
         current = self._read_positions()
-        delta = detect_motion(self._baseline, current)
+        reference = self._last_positions or self._baseline
+        delta = detect_motion(reference, current)
+        self._last_positions = dict(current)
         return MotionResult(delta=delta, moved=delta > MOTION_THRESHOLD, positions=current)
 
     def reset(self) -> None:
         """Clear the stored baseline."""
         self._baseline = {}
+        self._last_positions = {}
 
     def _read_positions(self) -> dict[int, int]:
         """Read servo positions via the appropriate prober."""

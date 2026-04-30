@@ -6,9 +6,8 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from roboclaw.embodied.board.channels import CH_HUB
-from roboclaw.embodied.command.helpers import dataset_path, policy_path
+from roboclaw.embodied.command.helpers import policy_path
 from roboclaw.embodied.service.hub.progress import make_tqdm_class
-from roboclaw.embodied.service.hub.transfer import pull_repo, push_folder
 
 if TYPE_CHECKING:
     from roboclaw.embodied.embodiment.manifest import Manifest
@@ -39,51 +38,41 @@ class HubService:
         self, manifest: Manifest, kwargs: dict[str, Any], tty_handoff: Any,
     ) -> str:
         repo_id = kwargs["repo_id"]
-        name = kwargs["name"]
+        dataset_id = kwargs["dataset_id"]
         defaults = self._hf_defaults()
         token = kwargs.get("token", "") or defaults["token"]
         private = kwargs.get("private", False)
 
-        local = dataset_path(manifest, name)
-        if not local.is_dir():
-            raise ValueError(f"Dataset '{name}' not found")
-
-        url = await asyncio.to_thread(
-            push_folder,
-            local_path=local,
+        return await asyncio.to_thread(
+            self._parent.datasets.push_dataset,
+            dataset_id,
             repo_id=repo_id,
-            repo_type="dataset",
             token=token,
             private=private,
-            ignore_patterns=["images/"],
             endpoint=defaults["endpoint"],
             proxy=defaults["proxy"],
         )
-        return f"Dataset '{name}' pushed to {repo_id}\n{url}"
 
     async def pull_dataset(
         self, manifest: Manifest, kwargs: dict[str, Any], tty_handoff: Any,
     ) -> str:
         repo_id = kwargs["repo_id"]
-        name = kwargs.get("name", "") or repo_id.rsplit("/", 1)[-1]
+        dataset_id = kwargs.get("dataset_id", "")
         defaults = self._hf_defaults()
         token = kwargs.get("token", "") or defaults["token"]
 
-        local = dataset_path(manifest, name)
-        tqdm_cls = make_tqdm_class(self._parent.board, f"pull_dataset:{name}")
-
-        await asyncio.to_thread(
-            pull_repo,
+        tqdm_cls = make_tqdm_class(self._parent.board, f"pull_dataset:{dataset_id or repo_id}")
+        dataset = await asyncio.to_thread(
+            self._parent.datasets.pull_dataset,
             repo_id=repo_id,
-            repo_type="dataset",
-            local_dir=local,
+            dataset_id=dataset_id,
             token=token,
             tqdm_class=tqdm_cls,
             endpoint=defaults["endpoint"],
             proxy=defaults["proxy"],
         )
-        self._emit_done(f"pull_dataset:{name}")
-        return f"Dataset '{name}' downloaded from {repo_id}"
+        self._emit_done(f"pull_dataset:{dataset.id}")
+        return f"Dataset '{dataset.label}' downloaded from {repo_id}"
 
     # ── Policies ─────────────────────────────────────────────────────
 
@@ -99,6 +88,8 @@ class HubService:
         local = policy_path(manifest, name)
         if not local.is_dir():
             raise ValueError(f"Policy '{name}' not found")
+
+        from roboclaw.embodied.service.hub.transfer import push_folder
 
         url = await asyncio.to_thread(
             push_folder,
@@ -122,6 +113,8 @@ class HubService:
 
         local = policy_path(manifest, name)
         tqdm_cls = make_tqdm_class(self._parent.board, f"pull_policy:{name}")
+
+        from roboclaw.embodied.service.hub.transfer import pull_repo
 
         await asyncio.to_thread(
             pull_repo,

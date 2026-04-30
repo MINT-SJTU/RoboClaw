@@ -5,12 +5,31 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import types
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from unittest.mock import patch as std_patch
+
+if "roboclaw.agent" not in sys.modules:
+    agent_pkg = types.ModuleType("roboclaw.agent")
+    agent_pkg.__path__ = []
+    sys.modules["roboclaw.agent"] = agent_pkg
+
+    tools_pkg = types.ModuleType("roboclaw.agent.tools")
+    tools_pkg.__path__ = []
+    sys.modules["roboclaw.agent.tools"] = tools_pkg
+
+    base_mod = types.ModuleType("roboclaw.agent.tools.base")
+
+    class Tool:
+        pass
+
+    base_mod.Tool = Tool
+    sys.modules["roboclaw.agent.tools.base"] = base_mod
 
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.embodiment.manifest.helpers import (
@@ -29,7 +48,13 @@ from roboclaw.embodied.embodiment.manifest.helpers import (
     set_camera,
     set_hand,
 )
-from roboclaw.embodied.command.helpers import dataset_path, group_arms, resolve_action_arms as _resolve_arms
+from roboclaw.embodied.command.helpers import (
+    ActionError,
+    dataset_path,
+    group_arms,
+    resolve_action_arms as _resolve_arms,
+    resolve_bimanual_pair,
+)
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
 from roboclaw.embodied.command.helpers import resolve_cameras as _resolve_cameras
@@ -91,23 +116,34 @@ def _manifest_from_data(tmp_path: Path, data: dict) -> Manifest:
     return Manifest(path=path)
 
 
+def _with_temp_calibration_dirs(tmp_path: Path, data: dict) -> dict:
+    updated = copy.deepcopy(data)
+    for idx, arm in enumerate(updated["arms"], start=1):
+        cal_dir = tmp_path / "calibration" / f"SIM{idx:03d}"
+        cal_dir.mkdir(parents=True, exist_ok=True)
+        arm["calibration_dir"] = str(cal_dir)
+        arm["calibrated"] = False
+    return updated
+
+
 @pytest.fixture(autouse=True)
 def calibration_root(tmp_path: Path) -> Path:
     root = tmp_path / "calibration"
     with (
         std_patch("roboclaw.embodied.embodiment.manifest.helpers.get_calibration_root", return_value=root),
         std_patch("roboclaw.embodied.embodiment.manifest.state.get_calibration_root", return_value=root),
+        std_patch("roboclaw.embodied.embodiment.lock.get_roboclaw_home", return_value=tmp_path),
     ):
         yield root
 
 
-def test_create_embodied_tools_returns_eight_groups() -> None:
+def test_create_embodied_tools_returns_nine_groups() -> None:
     tools = create_embodied_tools()
-    assert len(tools) == 8
+    assert len(tools) == 9
     names = {t.name for t in tools}
     assert names == {
         "setup", "doctor", "calibration", "teleop",
-        "record", "replay", "train", "infer",
+        "record", "replay", "train", "infer", "hub",
     }
 
 
@@ -164,15 +200,43 @@ async def test_calibration_action(tmp_path: Path) -> None:
     tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "calibration")
     mock_runner = AsyncMock()
     mock_runner.run_interactive.return_value = (0, "")
-    manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)
+    manifest = _manifest_from_data(tmp_path, _with_temp_calibration_dirs(tmp_path, _MOCK_SETUP))
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
+
+    async def fake_run(argv):
+        port_arg = next(arg for arg in argv if arg.startswith("--") and ".port=" in arg)
+        port = port_arg.split("=", 1)[1]
+        arm = next(arm for arm in manifest.arms if arm.port == port)
+        cal_path = Path(arm.calibration_dir) / f"{Path(arm.calibration_dir).name}.json"
+        cal_path.write_text("{}", encoding="utf-8")
+        return (0, "")
+
+    mock_runner.run_interactive.side_effect = fake_run
 
     with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
         result = await tool.execute(action="calibrate")
 
     assert "2 succeeded" in result
     assert mock_runner.run_interactive.call_count == 2
+    assert all(arm.calibrated for arm in manifest.arms)
+
+
+@pytest.mark.asyncio
+async def test_calibration_action_fails_without_saved_file(tmp_path: Path) -> None:
+    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "calibration")
+    mock_runner = AsyncMock()
+    mock_runner.run_interactive.return_value = (0, "")
+    manifest = _manifest_from_data(tmp_path, _with_temp_calibration_dirs(tmp_path, _MOCK_SETUP))
+    from roboclaw.embodied.service import EmbodiedService
+    tool.embodied_service = EmbodiedService(manifest=manifest)
+
+    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
+        result = await tool.execute(action="calibrate")
+
+    assert "0 succeeded, 2 failed." in result
+    assert "did not save" in result
+    assert not any(arm.calibrated for arm in manifest.arms)
 
 
 @pytest.mark.asyncio
@@ -216,21 +280,32 @@ async def test_record_action(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_replay_action(tmp_path: Path) -> None:
-    tool = _find_tool(create_embodied_tools(tty_handoff=AsyncMock()), "replay")
-    mock_runner = AsyncMock()
-    mock_runner.run_interactive.return_value = (0, "")
+async def test_replay_action_delegates_to_service_run_replay(tmp_path: Path) -> None:
+    tty_handoff = AsyncMock()
+    tool = _find_tool(create_embodied_tools(tty_handoff=tty_handoff), "replay")
     manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)
-    from roboclaw.embodied.service import EmbodiedService
-    tool.embodied_service = EmbodiedService(manifest=manifest)
+    run_replay = AsyncMock(return_value="Replay finished.")
+    tool.embodied_service = SimpleNamespace(
+        manifest=manifest,
+        run_replay=run_replay,
+    )
 
-    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
-        result = await tool.execute(action="replay", dataset_name="test", episode=2)
+    result = await tool.execute(
+        action="replay",
+        dataset_name="test",
+        episode=2,
+        fps=12,
+        arms=_FOLLOWER_PORT,
+    )
 
     assert result == "Replay finished."
-    argv = mock_runner.run_interactive.call_args.args[0]
-    assert argv[:4] == [sys.executable, "-m", "roboclaw.embodied.lerobot_wrapper", "replay"]
-    assert "--dataset.episode=2" in argv
+    run_replay.assert_awaited_once_with(
+        dataset_name="test",
+        episode=2,
+        fps=12,
+        arms=_FOLLOWER_PORT,
+        tty_handoff=tty_handoff,
+    )
 
 
 @pytest.mark.asyncio
@@ -238,7 +313,16 @@ async def test_train_action(tmp_path: Path) -> None:
     tool = _find_tool(create_embodied_tools(), "train")
     mock_runner = AsyncMock()
     mock_runner.run_detached.return_value = "job-abc-123"
-    manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)
+    data = copy.deepcopy(_MOCK_SETUP)
+    data["datasets"]["root"] = str(tmp_path / "datasets")
+    data["policies"]["root"] = str(tmp_path / "policies")
+    dataset_meta = tmp_path / "datasets" / "local" / "test" / "meta"
+    dataset_meta.mkdir(parents=True)
+    (dataset_meta / "info.json").write_text(
+        json.dumps({"total_episodes": 1, "total_frames": 2, "fps": 30}),
+        encoding="utf-8",
+    )
+    manifest = _manifest_from_data(tmp_path, data)
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
 
@@ -249,19 +333,38 @@ async def test_train_action(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_infer_action(tmp_path: Path) -> None:
+async def test_infer_action_delegates_to_service_run_inference(tmp_path: Path) -> None:
     tool = _find_tool(create_embodied_tools(), "infer")
-    mock_runner = AsyncMock()
-    mock_runner.run = AsyncMock(return_value=(0, "ok", ""))
     manifest = _manifest_from_data(tmp_path, _MOCK_SETUP)
-    from roboclaw.embodied.service import EmbodiedService
-    tool.embodied_service = EmbodiedService(manifest=manifest)
+    run_inference = AsyncMock(return_value="Inference finished.")
+    tool.embodied_service = SimpleNamespace(
+        manifest=manifest,
+        run_inference=run_inference,
+    )
 
-    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
-        await tool.execute(action="run_policy", checkpoint_path="/models/act")
+    result = await tool.execute(
+        action="run_policy",
+        checkpoint_path="/models/act",
+        source_dataset="pick_cube",
+        dataset_name="eval_run",
+        task="eval_pick",
+        num_episodes=3,
+        use_cameras=False,
+        arms=_FOLLOWER_PORT,
+    )
 
-    argv = mock_runner.run.call_args[0][0]
-    assert "--policy.path=/models/act" in argv
+    assert result == "Inference finished."
+    run_inference.assert_awaited_once_with(
+        checkpoint_path="/models/act",
+        source_dataset="pick_cube",
+        dataset_name="eval_run",
+        task="eval_pick",
+        num_episodes=3,
+        episode_time_s=60,
+        arms=_FOLLOWER_PORT,
+        use_cameras=False,
+        tty_handoff=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -342,6 +445,12 @@ def test_set_arm(manifest_file: Path, calibration_root: Path) -> None:
     assert find_arm(load_manifest(manifest_file)["arms"], "my_follower") == arm
 
 
+def test_set_arm_stores_side(manifest_file: Path) -> None:
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+        result = set_arm("left_follower", "so101_follower", "/dev/ttyACM0", side="left", path=manifest_file)
+    assert find_arm(result["arms"], "left_follower")["side"] == "left"
+
+
 def test_set_arm_replaces_existing(manifest_file: Path) -> None:
     with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
         set_arm("my_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
@@ -355,6 +464,15 @@ def test_set_arm_rejects_duplicate_port(manifest_file: Path) -> None:
         set_arm("left_arm", "so101_follower", "/dev/ttyACM0", path=manifest_file)
         with pytest.raises(ValueError, match="already assigned"):
             set_arm("right_arm", "so101_leader", "/dev/ttyACM0", path=manifest_file)
+
+
+def test_set_arm_rejects_ambiguous_bimanual_and_rolls_back(manifest_file: Path) -> None:
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_serial_ports", return_value=_MOCK_SCANNED_PORTS):
+        set_arm("arm_a", "so101_follower", "/dev/ttyACM0", side="left", path=manifest_file)
+        with pytest.raises(ValueError, match="one 'left' arm and one 'right' arm"):
+            set_arm("arm_b", "so101_follower", "/dev/ttyACM1", path=manifest_file)
+    arms = load_manifest(manifest_file)["arms"]
+    assert [arm["alias"] for arm in arms] == ["arm_a"]
 
 
 def test_set_arm_resolves_volatile_port(manifest_file: Path) -> None:
@@ -457,7 +575,7 @@ def test_set_camera(manifest_file: Path) -> None:
     cam = find_camera(result["cameras"], "front")
     assert cam is not None
     assert cam["alias"] == "front"
-    assert cam["port"] == "/dev/v4l/by-path/cam0"
+    assert cam["port"] == "usb-cam0"
     assert cam["width"] == 640
     assert cam["height"] == 480
     assert cam["fps"] == 30
@@ -502,6 +620,16 @@ def test_validation_rejects_bad_arm_type(manifest_file: Path) -> None:
         save_manifest(bad, manifest_file)
 
 
+def test_validation_rejects_bimanual_followers_without_distinct_sides(manifest_file: Path) -> None:
+    bad = load_manifest(manifest_file)
+    bad["arms"] = [
+        {"alias": "arm_a", "type": "so101_follower", "port": "/dev/a", "side": "left"},
+        {"alias": "arm_b", "type": "so101_follower", "port": "/dev/b"},
+    ]
+    with pytest.raises(ValueError, match="one 'left' arm and one 'right' arm"):
+        save_manifest(bad, manifest_file)
+
+
 def test_arm_display_name() -> None:
     assert arm_display_name({"alias": "right"}) == "right"
     assert arm_display_name({}) == "unnamed"
@@ -530,13 +658,13 @@ def test_resolve_arms_auto(tmp_path: Path) -> None:
 
 
 def test_resolve_arms_missing(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="No arm with port 'missing'"):
+    with pytest.raises(ActionError, match="No arm with alias or port 'missing' in manifest."):
         _resolve_arms(_manifest_from_data(tmp_path, _MOCK_SETUP), "missing")
 
 
-def test_resolve_arms_rejects_alias_lookup(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="No arm with port 'right_follower'"):
-        _resolve_arms(_manifest_from_data(tmp_path, _MOCK_SETUP), "right_follower")
+def test_resolve_arms_accepts_alias_lookup(tmp_path: Path) -> None:
+    result = _resolve_arms(_manifest_from_data(tmp_path, _MOCK_SETUP), "right_follower")
+    assert [arm.alias for arm in result] == ["right_follower"]
 
 
 def test_group_arms(tmp_path: Path) -> None:
@@ -545,6 +673,61 @@ def test_group_arms(tmp_path: Path) -> None:
     )
     assert [arm.alias for arm in grouped["followers"]] == ["right_follower"]
     assert [arm.alias for arm in grouped["leaders"]] == ["left_leader"]
+
+
+def test_group_arms_uses_explicit_side_for_bimanual(tmp_path: Path) -> None:
+    manifest = {
+        **_MOCK_SETUP,
+        "arms": [
+            {
+                "alias": "arm_b_follower",
+                "type": "so101_follower",
+                "port": _FOLLOWER_PORT,
+                "calibration_dir": "/cal/right",
+                "calibrated": False,
+                "side": "right",
+            },
+            {
+                "alias": "arm_a_follower",
+                "type": "so101_follower",
+                "port": _LEADER_PORT,
+                "calibration_dir": "/cal/left",
+                "calibrated": False,
+                "side": "left",
+            },
+        ],
+    }
+    grouped = group_arms(_manifest_from_data(tmp_path, manifest).arms)
+    assert [arm.side for arm in grouped["followers"]] == ["left", "right"]
+
+
+def test_resolve_bimanual_pair_rejects_missing_side(tmp_path: Path) -> None:
+    manifest = {
+        **_MOCK_SETUP,
+        "arms": [
+            {
+                "alias": "follower_a",
+                "type": "so101_follower",
+                "port": _FOLLOWER_PORT,
+                "calibration_dir": "/cal/a",
+                "calibrated": False,
+            },
+            {
+                "alias": "follower_b",
+                "type": "so101_follower",
+                "port": _LEADER_PORT,
+                "calibration_dir": "/cal/b",
+                "calibrated": False,
+            },
+        ],
+    }
+    # Bypass save_manifest's bimanual validation to construct an ambiguous
+    # manifest on disk, then verify runtime pairing rejects it.
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    followers = Manifest(path=path).arms
+    with pytest.raises(ActionError, match="one 'left' arm and one 'right' arm"):
+        resolve_bimanual_pair(followers, "followers")
 
 
 # ── Serial number extraction test ────────────────────────────────────
@@ -650,6 +833,29 @@ def test_resolve_cameras_defaults_and_passthrough(tmp_path: Path) -> None:
     assert cameras["side"]["fps"] == 15
     assert cameras["dv20"]["fourcc"] == "MJPG"
     assert cameras["dv20"]["fps"] == 30
+
+
+def test_resolve_cameras_maps_stable_camera_port_to_runtime_index(tmp_path: Path) -> None:
+    setup = {
+        "cameras": [
+            {"alias": "front", "port": "usb-camera", "width": 640, "height": 480, "fps": 30},
+        ],
+    }
+    scanned = [
+        VideoInterface(
+            by_id="usb-camera",
+            by_path="USB相机",
+            dev="2",
+            width=1920,
+            height=1080,
+            fps=30,
+        ),
+    ]
+
+    with std_patch("roboclaw.embodied.embodiment.hardware.scan.scan_cameras", return_value=scanned):
+        cameras = _resolve_cameras(_manifest_from_data(tmp_path, {**_MOCK_SETUP, **setup}).cameras)
+
+    assert cameras["front"]["index_or_path"] == 2
 
 
 def test_dataset_path_appends_local_and_dataset_name(tmp_path: Path) -> None:

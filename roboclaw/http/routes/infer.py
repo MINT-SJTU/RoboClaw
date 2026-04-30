@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from roboclaw.embodied.service import EmbodiedService
@@ -12,23 +12,26 @@ from roboclaw.embodied.service import EmbodiedService
 
 class InferStartRequest(BaseModel):
     checkpoint_path: str = ""
-    source_dataset: str = ""
     dataset_name: str = ""
     task: str = "eval"
     num_episodes: int = 1
+    episode_time_s: int = 60
 
 
 def register_infer_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/infer/start")
     async def infer_start(body: InferStartRequest) -> dict[str, Any]:
-        await service.start_inference(
-            checkpoint_path=body.checkpoint_path,
-            source_dataset=body.source_dataset,
-            dataset_name=body.dataset_name,
-            task=body.task,
-            num_episodes=body.num_episodes,
-        )
+        try:
+            await service.start_inference(
+                checkpoint_path=body.checkpoint_path,
+                dataset_name=body.dataset_name,
+                task=body.task,
+                num_episodes=body.num_episodes,
+                episode_time_s=body.episode_time_s,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"status": "inferring"}
 
     @app.post("/api/infer/stop")

@@ -32,3 +32,15 @@ def register_calibrate_routes(app: FastAPI, service: Any) -> None:
             return {"status": "ok", "command": "stop"}
         service.post_calibration_command(body.command)
         return {"status": "ok", "command": body.command}
+
+    @app.post("/api/calibration/auto/start")
+    async def calibration_auto_start() -> dict:
+        try:
+            return await service.start_auto_calibration()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/calibration/auto/stop")
+    async def calibration_auto_stop() -> dict:
+        await service.stop_auto_calibration()
+        return {"status": "ok", "command": "stop"}

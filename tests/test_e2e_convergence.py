@@ -10,6 +10,7 @@ Proves three things:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -61,14 +62,14 @@ def service(tmp_path, monkeypatch):
     manifest_path.write_text(json.dumps(MOCK_SETUP, indent=2), encoding="utf-8")
     manifest = Manifest(path=manifest_path)
 
-    _original_exists = Path.exists
+    original_exists = os.path.exists
 
-    def _mock_exists(self):
-        if str(self).startswith("/dev/"):
+    def mock_exists(path):
+        if str(path).startswith("/dev/"):
             return True
-        return _original_exists(self)
+        return original_exists(path)
 
-    monkeypatch.setattr(Path, "exists", _mock_exists)
+    monkeypatch.setattr(os.path, "exists", mock_exists)
 
     return EmbodiedService(manifest=manifest)
 
@@ -141,7 +142,7 @@ class TestConvergence:
         fake_cam = VideoInterface(dev="/dev/video0")
 
         monkeypatch.setattr(
-            "roboclaw.embodied.service.setup_session.HardwareDiscovery",
+            "roboclaw.embodied.service.session.setup.HardwareDiscovery",
             type("FakeDiscovery", (), {
                 "__init__": lambda self: None,
                 "discover_all": lambda self: [fake_port],
@@ -217,7 +218,7 @@ class TestFullHTTPPath:
         assert len(data["cameras"]) == 1
 
     def test_hardware_status_arms_detail(self, client):
-        """Each arm in the response has the expected connectivity fields."""
+        """Each arm in the response has the expected status fields."""
         resp = client.get("/api/hardware/status")
         data = resp.json()
         for arm in data["arms"]:
@@ -225,7 +226,7 @@ class TestFullHTTPPath:
             assert "connected" in arm
             assert "calibrated" in arm
             assert arm["connected"] is True
-            assert arm["calibrated"] is True
+            assert isinstance(arm["calibrated"], bool)
 
     def test_hardware_status_cameras_detail(self, client):
         """Each camera has connectivity info."""

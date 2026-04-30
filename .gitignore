@@ -22,8 +22,22 @@ poetry.lock
 botpy.log
 nano.*.save
 .DS_Store
-uv.lock
 package-lock.json
 node_modules/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+.codex/
+
+# ROS workspace build artifacts
+robotics
+# robotics/ros_ws/build/
+# robotics/ros_ws/install/
+# robotics/ros_ws/log/
+
+# Local simulation planning docs
+docs/simulation-agent-workflow.md
+docs/simulation-development-flow.md
+
+# Local robotics docs
+robotics/README.md
+robotics/README.general.md

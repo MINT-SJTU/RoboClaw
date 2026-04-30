@@ -1,13 +1,10 @@
 """Fixtures for PTY-based integration tests.
 
 These tests spawn ``roboclaw agent`` in a pseudo-terminal via pexpect so
-that we can exercise the full interactive flow (spinners, Ctrl-C, CJK
-rendering) without real hardware.  The ``ROBOCLAW_STUB=1`` env var
-tells the embodied layer to return fake data.
+that we can exercise the interactive CLI behaviour (spinners, Ctrl-C,
+CJK rendering) without a real LLM provider.
 
-A **stub LLM provider** is injected via ``ROBOCLAW_STUB_LLM`` env var
-that tells ``_make_provider`` to load ``tests.integration.stub_llm``
-instead of a real provider.
+A stub LLM provider is injected via ``ROBOCLAW_STUB_LLM``.
 """
 
 from __future__ import annotations
@@ -26,35 +23,6 @@ pexpect = pytest.importorskip("pexpect")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-STUB_PORTS = [
-    {
-        "by_path": "/dev/serial/by-path/sim-pci-0:2.1",
-        "by_id": "/dev/serial/by-id/usb-SIM_Serial_SIM001-if00",
-        "dev": "/dev/ttyACM0",
-    },
-    {
-        "by_path": "/dev/serial/by-path/sim-pci-0:2.2",
-        "by_id": "/dev/serial/by-id/usb-SIM_Serial_SIM002-if00",
-        "dev": "/dev/ttyACM1",
-    },
-]
-
-STUB_CAMERAS = [
-    {
-        "by_path": "/dev/v4l/by-path/sim-cam0",
-        "by_id": "usb-sim-cam0",
-        "dev": "/dev/video0",
-        "width": 640,
-        "height": 480,
-    },
-]
-
-STUB_MOTORS = {
-    STUB_PORTS[0]["by_id"]: [1, 2, 3, 4, 5, 6],
-    STUB_PORTS[1]["by_id"]: [1, 2, 3, 4, 5, 6],
-}
-
-
 # ---------------------------------------------------------------------------
 # SimulatedAgent — wraps pexpect with setup helpers
 # ---------------------------------------------------------------------------
@@ -62,7 +30,7 @@ STUB_MOTORS = {
 
 @dataclass
 class SimulatedAgent:
-    """Manages a pexpect-driven ``roboclaw agent`` process with stub hardware."""
+    """Manages a pexpect-driven ``roboclaw agent`` process with a stub LLM."""
 
     env: dict[str, str]
     home: Path
@@ -75,10 +43,10 @@ class SimulatedAgent:
         arms: list[dict[str, Any]] | None = None,
         cameras: list[dict[str, Any]] | None = None,
     ) -> None:
-        setup = self.read_setup()
-        setup["arms"] = arms or []
-        setup["cameras"] = cameras or []
-        self.setup_path.write_text(json.dumps(setup, indent=2), encoding="utf-8")
+        manifest = self.read_setup()
+        manifest["arms"] = arms or []
+        manifest["cameras"] = cameras or []
+        self.setup_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     def read_setup(self) -> dict[str, Any]:
         if not self.setup_path.exists():
@@ -171,14 +139,14 @@ def simulated_agent_child(simulated_home: Path):
 
 @pytest.fixture()
 def simulated_agent(tmp_path: Path):
-    """Full SimulatedAgent with stub LLM provider + stub hardware.
+    """Full SimulatedAgent with a stub LLM provider.
 
     Initialises workspace via ``roboclaw dev reset``, then yields a
     SimulatedAgent instance.  Call ``agent.start()`` to spawn the process.
     """
     home = tmp_path / "home"
     roboclaw_home = home / ".roboclaw"
-    setup_path = roboclaw_home / "workspace" / "embodied" / "setup.json"
+    setup_path = roboclaw_home / "workspace" / "embodied" / "manifest.json"
 
     env = os.environ.copy()
     # Ensure project root is on PYTHONPATH so tests.integration.stub_llm is importable
@@ -192,10 +160,6 @@ def simulated_agent(tmp_path: Path):
         ROBOCLAW_HOME=str(roboclaw_home),
         ROBOCLAW_STUB="1",
         ROBOCLAW_STUB_LLM="tests.integration.stub_llm",
-        ROBOCLAW_STUB_PORTS=json.dumps(STUB_PORTS),
-        ROBOCLAW_STUB_CAMERAS=json.dumps(STUB_CAMERAS),
-        ROBOCLAW_STUB_MOTORS=json.dumps(STUB_MOTORS),
-        ROBOCLAW_STUB_MOVED_PORT=STUB_PORTS[0]["by_id"],
         PYTHONIOENCODING="utf-8",
         PYTHONUTF8="1",
         NO_COLOR="1",

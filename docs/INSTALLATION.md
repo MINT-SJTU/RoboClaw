@@ -1,42 +1,64 @@
 # RoboClaw Installation Guide
 
-This guide is the native host installation path. If you want Docker-based workflows, use:
+This guide is the native host installation path. RoboClaw uses `uv` as the only supported Python environment and dependency workflow. If you want Docker-based workflows, use:
 
 - [Docker Installation](./DOCKERINSTALLATION.md)
 
-## 1. Prerequisites
+## 1. Install uv
 
-Start from a clean clone:
+Install `uv` with the official installer:
 
 ```bash
-git clone https://github.com/MINT-SJTU/RoboClaw.git
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Verify that `uv` is available:
+
+```bash
+uv --version
+```
+
+## 2. Clone RoboClaw
+
+Start from a clean clone and fetch submodules:
+
+```bash
+git clone --recurse-submodules https://github.com/MINT-SJTU/RoboClaw.git
 cd RoboClaw
 ```
 
-## 2. Install RoboClaw
+The embodied engine lives in `roboclaw/embodied/engine` as a git submodule and is required during installation.
 
-Install the package in editable mode:
+If you already cloned the repository without submodules, run:
 
 ```bash
-pip install -e ".[dev]"
+git submodule update --init --recursive
 ```
 
-After installation, the `roboclaw` command should be available:
+## 3. Sync the Project with uv
+
+RoboClaw pins Python with `.python-version` and uses `uv sync` to create `.venv` and install all default development dependencies:
 
 ```bash
-roboclaw --help
+uv sync
+```
+
+After sync, verify that the `roboclaw` command is available:
+
+```bash
+uv run roboclaw --help
 ```
 
 Expected result:
 
 - commands such as `onboard`, `status`, `agent`, and `provider` are listed
 
-## 3. Initialize RoboClaw
+## 4. Initialize RoboClaw
 
 Run:
 
 ```bash
-roboclaw onboard
+uv run roboclaw onboard
 ```
 
 This should create `~/.roboclaw/config.json`, `~/.roboclaw/workspace/`, and the initial workspace scaffold. You can verify it with:
@@ -57,12 +79,12 @@ You should see at least:
 ~/.roboclaw/workspace/memory/MEMORY.md
 ```
 
-## 4. Verify Status Output
+## 5. Verify Status Output
 
 Run:
 
 ```bash
-roboclaw status
+uv run roboclaw status
 ```
 
 Check that:
@@ -72,14 +94,14 @@ Check that:
 - the current `Model` looks correct
 - provider status matches the actual state of your machine
 
-## 5. Configure the Model Provider
+## 6. Configure the Model Provider
 
 Before testing `roboclaw agent`, make sure the model provider is configured.
 
 First run:
 
 ```bash
-roboclaw status
+uv run roboclaw status
 ```
 
 This tells you which providers are already available on the current machine.
@@ -93,8 +115,8 @@ If you are using an OAuth-based provider, log in directly.
 The current codebase supports:
 
 ```bash
-roboclaw provider login openai-codex
-roboclaw provider login github-copilot
+uv run roboclaw provider login openai-codex
+uv run roboclaw provider login github-copilot
 ```
 
 ### 5.2 API key provider
@@ -127,7 +149,7 @@ Common API key providers include:
 Then run:
 
 ```bash
-roboclaw status
+uv run roboclaw status
 ```
 
 Check that:
@@ -135,12 +157,12 @@ Check that:
 - the current `Model` is correct
 - the provider you want to use is no longer `not set`
 
-## 6. Verify the Basic Model Path
+## 7. Verify the Basic Model Path
 
 Run one minimal message to confirm that RoboClaw can respond:
 
 ```bash
-roboclaw agent -m "hello"
+uv run roboclaw agent -m "hello"
 ```
 
 Check that:
@@ -149,17 +171,9 @@ Check that:
 - the agent returns a normal reply
 - failures point clearly to model configuration, provider setup, network, or permissions
 
-## 7. Launch the Web Dashboard
+## 8. Launch the Web Dashboard
 
 The web dashboard provides a browser-based UI for chatting with RoboClaw.
-
-### Prerequisites
-
-Install the web optional dependency (if not already included in `.[dev]`):
-
-```bash
-pip install -e ".[web]"
-```
 
 Install the frontend dependencies:
 
@@ -174,7 +188,7 @@ Build the frontend and start the server:
 
 ```bash
 cd ui && npm run build && cd ..
-roboclaw web start
+uv run roboclaw web start
 ```
 
 Open **http://127.0.0.1:8765** in your browser.
@@ -183,7 +197,7 @@ Open **http://127.0.0.1:8765** in your browser.
 
 ```bash
 # Terminal 1: start backend
-roboclaw web start
+uv run roboclaw web start
 
 # Terminal 2: start frontend dev server
 cd ui
@@ -195,7 +209,7 @@ Open **http://localhost:5173** in your browser. The Vite dev server proxies `/ap
 ### Options
 
 ```bash
-roboclaw web start --host 0.0.0.0 --port 9000
+uv run roboclaw web start --host 0.0.0.0 --port 9000
 ```
 
 | Flag          | Default       | Description                |

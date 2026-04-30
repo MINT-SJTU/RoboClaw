@@ -65,6 +65,11 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Camera device path for bind_camera (e.g., '/dev/video4').",
                 },
+                "side": {
+                    "type": "string",
+                    "enum": ["left", "right", ""],
+                    "description": "Which arm the camera is mounted on (left/right for bimanual; omit for single-arm).",
+                },
             },
             "required": ["action"],
         },
@@ -423,7 +428,13 @@ class EmbodiedToolGroup(Tool):
         svc = _get_service(self.embodied_service)
         return await _run_with_service(
             svc,
-            lambda manifest: svc.replay.replay(manifest, kwargs, self._tty_handoff),
+            lambda _: svc.run_replay(
+                dataset_name=kwargs.get("dataset_name", "default"),
+                episode=kwargs.get("episode", 0),
+                fps=kwargs.get("fps", 30),
+                arms=kwargs.get("arms", ""),
+                tty_handoff=self._tty_handoff,
+            ),
         )
 
     async def _execute_train(self, kwargs: dict[str, Any]) -> str | list:
@@ -438,7 +449,17 @@ class EmbodiedToolGroup(Tool):
         svc = _get_service(self.embodied_service)
         return await _run_with_service(
             svc,
-            lambda manifest: svc.infer.run_policy(manifest, kwargs, self._tty_handoff),
+            lambda _: svc.run_inference(
+                checkpoint_path=kwargs.get("checkpoint_path", ""),
+                source_dataset=kwargs.get("source_dataset", ""),
+                dataset_name=kwargs.get("dataset_name", ""),
+                task=kwargs.get("task", "eval"),
+                num_episodes=kwargs.get("num_episodes", 1),
+                episode_time_s=kwargs.get("episode_time_s", 60),
+                arms=kwargs.get("arms", ""),
+                use_cameras=kwargs.get("use_cameras", True),
+                tty_handoff=self._tty_handoff,
+            ),
         )
 
     async def _execute_hub(self, kwargs: dict[str, Any]) -> str | list:
@@ -459,8 +480,8 @@ def _find_camera(dev: str) -> tuple[Any, str]:
     """Scan and find a camera by device path. Returns (camera_or_None, available_list_str)."""
     from roboclaw.embodied.embodiment.hardware.scan import scan_cameras
     cameras = scan_cameras()
-    matched = next((c for c in cameras if c.dev == dev), None)
-    avail = ", ".join(c.dev for c in cameras) if cameras else "none"
+    matched = next((c for c in cameras if c.matches(dev)), None)
+    avail = ", ".join(c.stable_id or c.dev for c in cameras) if cameras else "none"
     return matched, avail
 
 
@@ -503,12 +524,18 @@ async def _run_modify(svc: Any, kwargs: dict[str, Any]) -> str:
 
     if operation == "bind" and target == "camera":
         dev = kwargs.get("dev", "")
+        side = kwargs.get("side", "")
         if not dev:
             return "bind camera requires dev (e.g., '/dev/video4')."
+        from roboclaw.embodied.embodiment.manifest.binding import validate_camera_side
+        try:
+            validate_camera_side(side)
+        except ValueError as exc:
+            return str(exc)
         matched, avail = _find_camera(dev)
         if matched is None:
             return f"Camera '{dev}' not found. Available: {avail}"
-        result = svc.bind_camera(alias, matched)
+        result = svc.bind_camera(alias, matched, side)
         data = result.to_dict() if hasattr(result, "to_dict") else str(result)
         return f"Camera '{alias}' bound to {dev}.\n{json.dumps(data, indent=2) if isinstance(data, dict) else data}"
 

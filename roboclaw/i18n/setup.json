@@ -87,9 +87,13 @@
     "zh": "\n--- 摄像头命名 ---",
     "en": "\n--- Camera Naming ---"
   },
+  "cameraSidePrompt": {
+    "zh": "  摄像头 {index} 装在哪? (left/right/single):",
+    "en": "  Which arm is camera {index} mounted on? (left/right/single):"
+  },
   "cameraNamePrompt": {
-    "zh": "  摄像头 {index} 的名称 (回车跳过):",
-    "en": "  Name for camera {index} (or Enter to skip):"
+    "zh": "  摄像头 {index} 的名称 (前缀 {prefix}, 回车跳过):",
+    "en": "  Name for camera {index} (prefix {prefix}, or Enter to skip):"
   },
   "commitPrompt": {
     "zh": "提交这些分配? (y/n):",
@@ -130,5 +134,49 @@
   "noConfiguredDevices": {
     "zh": "暂无配置设备",
     "en": "No configured devices"
+  },
+  "serialPermissionDenied": {
+    "zh": "当前用户 {user} 不在 dialout 组，无法访问串口。请执行: sudo usermod -aG dialout {user}，然后重新登录或重启服务。",
+    "en": "User '{user}' is not in the 'dialout' group. Fix: sudo usermod -aG dialout {user} && re-login or restart the service."
+  },
+  "permTitle": {
+    "zh": "设备权限",
+    "en": "Device Permissions"
+  },
+  "permSerial": {
+    "zh": "串口访问",
+    "en": "Serial Port Access"
+  },
+  "permCamera": {
+    "zh": "摄像头访问",
+    "en": "Camera Access"
+  },
+  "permGranted": {
+    "zh": "已授权",
+    "en": "Granted"
+  },
+  "permDenied": {
+    "zh": "未授权",
+    "en": "Denied"
+  },
+  "permNoDevice": {
+    "zh": "未检测到设备",
+    "en": "No devices detected"
+  },
+  "permDeviceCount": {
+    "zh": "{count} 个设备",
+    "en": "{count} device(s)"
+  },
+  "permFix": {
+    "zh": "修复",
+    "en": "Fix"
+  },
+  "permFixing": {
+    "zh": "修复中...",
+    "en": "Fixing..."
+  },
+  "permFixFailed": {
+    "zh": "自动修复失败，请在终端执行以下命令后重启服务:",
+    "en": "Auto-fix failed. Run this command in terminal, then restart the service:"
   }
 }

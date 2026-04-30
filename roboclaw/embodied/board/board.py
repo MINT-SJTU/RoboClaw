@@ -22,7 +22,8 @@ from roboclaw.embodied.board.constants import SessionState
 
 IDLE_STATE: dict[str, Any] = {
     "state": SessionState.IDLE,
-    "episode_phase": "",
+    "record_phase": "idle",
+    "record_pending_command": "",
     "saved_episodes": 0,
     "current_episode": 0,
     "target_episodes": 0,
@@ -31,14 +32,26 @@ IDLE_STATE: dict[str, Any] = {
     "dataset": None,
     "rerun_web_port": 0,
     "error": "",
+    "calibration_mode": "",
+    "calibration_scope": "",
+    "calibration_phase": "",
+    "calibration_current_arm": "",
+    "calibration_index": 0,
+    "calibration_total": 0,
+    "calibration_results": [],
+    "calibration_error": "",
+    "calibration_step": "",
+    "calibration_arm": "",
+    "calibration_positions": None,
     "embodiment_owner": "",
+    "prepare_stage": "",
 }
 
 Subscriber = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 
 class Board:
-    def __init__(self, max_log_lines: int = 200) -> None:
+    def __init__(self, max_log_lines: int | None = 10000) -> None:
         self._lock = threading.Lock()
         self._state: dict[str, Any] = dict(IDLE_STATE)
         self._commands: deque[str] = deque()
@@ -169,3 +182,11 @@ class Board:
     def recent_logs(self, n: int = 20) -> list[str]:
         with self._lock:
             return list(self._log)[-n:]
+
+    def all_logs(self) -> list[str]:
+        with self._lock:
+            return list(self._log)
+
+    def clear_logs(self) -> None:
+        with self._lock:
+            self._log.clear()

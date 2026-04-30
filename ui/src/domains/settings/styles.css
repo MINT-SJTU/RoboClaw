@@ -1,0 +1,10 @@
+.settings-domain {}
+
+/* 账号设置页面 */
+.acc-label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--tx2);
+    margin-bottom: 6px;
+}

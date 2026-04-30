@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from roboclaw.embodied.embodiment.hardware import monitor as monitor_mod
 from roboclaw.embodied.embodiment.hardware.monitor import (
     FaultType,
     HardwareFault,
@@ -13,7 +14,13 @@ from roboclaw.embodied.embodiment.hardware.monitor import (
     _check_cameras,
     _fault_key,
 )
-from roboclaw.embodied.embodiment.manifest.binding import Binding
+from roboclaw.embodied.embodiment.manifest.binding import load_binding
+
+
+@pytest.fixture(autouse=True)
+def _stub_profile_on_disk(monkeypatch):
+    """Report calibration JSON present so ``arm.calibrated=True`` isn't downgraded."""
+    monkeypatch.setattr(monitor_mod, "_has_profile_on_disk", lambda arm: True)
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +58,8 @@ class TestHardwareFault:
 
 class TestCheckArms:
     @staticmethod
-    def _arm_binding(port: str, calibrated: bool) -> Binding:
-        return Binding.from_dict(
+    def _arm_binding(port: str, calibrated: bool):
+        return load_binding(
             {
                 "alias": "follower",
                 "type": "so101_follower",
@@ -114,8 +121,8 @@ class TestCheckArms:
 
 class TestCheckCameras:
     @staticmethod
-    def _camera_binding(port: str) -> Binding:
-        return Binding.from_dict(
+    def _camera_binding(port: str):
+        return load_binding(
             {"alias": "wrist_cam", "port": port, "width": 640, "height": 480},
             "camera",
             {},
@@ -148,7 +155,7 @@ class TestCheckCameras:
         assert faults == []
 
     def test_empty_port_no_fault(self):
-        cams = [Binding.from_dict({"alias": "cam", "port": "", "width": 640, "height": 480}, "camera", {})]
+        cams = [load_binding({"alias": "cam", "port": "", "width": 640, "height": 480}, "camera", {})]
         faults: list[HardwareFault] = []
         _check_cameras(cams, time.time(), faults, recording_active=False)
         assert faults == []

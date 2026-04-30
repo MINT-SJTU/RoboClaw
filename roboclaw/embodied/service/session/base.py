@@ -42,7 +42,7 @@ class Session:
         self._wait_task: asyncio.Task | None = None
         self._runner = SubprocessExecutor()
         self._stopped = False
-        self._exit_callback: Callable[[], Any] | None = None
+        self._exit_callback: Callable[["Session"], Any] | None = None
 
     # -- Subclass hooks ----------------------------------------------------
 
@@ -53,6 +53,10 @@ class Session:
     def _make_input_consumer(self, board: Board, stdin: asyncio.StreamWriter) -> InputConsumer:
         """Override to provide operation-specific key mappings."""
         return InputConsumer(board, stdin)
+
+    def _initial_board_fields(self) -> dict[str, Any]:
+        """Return session-specific state fields applied after board.reset()."""
+        return {}
 
     # -- Lifecycle ---------------------------------------------------------
 
@@ -65,39 +69,46 @@ class Session:
         self._stopped = False
         owner = self.board.get("embodiment_owner", "")
         self.board.reset()
-        await self.board.update(state=initial_state, embodiment_owner=owner)
+        await self.board.update(
+            state=initial_state,
+            embodiment_owner=owner,
+            **self._initial_board_fields(),
+        )
+        try:
+            # Launch interactive subprocess (stdin piped, stderr merged into stdout)
+            self._process = await self._runner.run_streaming_interactive(argv)
 
-        # Launch interactive subprocess (stdin piped, stderr merged into stdout)
-        self._process = await self._runner.run_streaming_interactive(argv)
+            # Auto-confirm calibration prompts for non-calibration sessions
+            if auto_confirm and self._process.stdin:
+                self._process.stdin.write(b"\n\n\n\n")
+                await self._process.stdin.drain()
 
-        # Auto-confirm calibration prompts for non-calibration sessions
-        if auto_confirm and self._process.stdin:
-            self._process.stdin.write(b"\n\n\n\n")
-            await self._process.stdin.drain()
+            # Wire consumers
+            self._output_consumer = self._make_output_consumer(self.board, self._process.stdout)
+            if self._process.stdin:
+                self._input_consumer = self._make_input_consumer(self.board, self._process.stdin)
+                self.board._input_consumer_notify = self._input_consumer._on_command_posted
 
-        # Wire consumers
-        self._output_consumer = self._make_output_consumer(self.board, self._process.stdout)
-        if self._process.stdin:
-            self._input_consumer = self._make_input_consumer(self.board, self._process.stdin)
-            self.board._input_consumer_notify = self._input_consumer._on_command_posted
+            self.board.start_timer()
+            await self._output_consumer.start()
+            if self._input_consumer:
+                await self._input_consumer.start()
 
-        self.board.start_timer()
-        await self._output_consumer.start()
-        if self._input_consumer:
-            await self._input_consumer.start()
-
-        # Monitor process exit
-        self._wait_task = asyncio.create_task(self._wait_process(), name="session-wait")
-        logger.info("Session started pid={}: {}", self._process.pid, " ".join(argv[:5]))
+            # Monitor process exit
+            self._wait_task = asyncio.create_task(self._wait_process(), name="session-wait")
+            logger.info("Session started pid={}: {}", self._process.pid, " ".join(argv[:5]))
+        except Exception as exc:
+            await self._rollback_start(exc)
+            raise
 
     async def stop(self) -> None:
         """Graceful stop: ESC -> wait -> SIGINT -> wait -> kill."""
         if self._process is None or self._process.returncode is not None:
-            await self.board.update(state=SessionState.IDLE)
+            await self.board.update(**self._idle_fields())
             return
         self._stopped = True
+        await self._enter_stopping_state()
 
-        # Step 1: Send ESC via stdin
         if self._process.stdin:
             try:
                 self._process.stdin.write(b"\x1b\n")
@@ -105,7 +116,6 @@ class Session:
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
-        # Wait for exit
         try:
             await asyncio.wait_for(self._process.wait(), timeout=2.0)
             await self._cleanup()
@@ -113,7 +123,6 @@ class Session:
         except asyncio.TimeoutError:
             pass
 
-        # Step 2: SIGINT
         try:
             self._process.send_signal(signal.SIGINT)
         except ProcessLookupError:
@@ -127,23 +136,50 @@ class Session:
         except asyncio.TimeoutError:
             pass
 
-        # Step 3: kill
-        self._process.kill()
-        await self._process.wait()
+        try:
+            self._process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await self._process.wait()
+        except Exception:
+            pass
         await self._cleanup()
 
     async def _teardown(self) -> None:
         """Stop consumers, close stdin, clear process reference."""
         if self._output_consumer:
             await self._output_consumer.stop()
+            self._output_consumer = None
         if self._input_consumer:
             await self._input_consumer.stop()
+            self._input_consumer = None
+        self.board._input_consumer_notify = None
         if self._process and self._process.stdin:
             try:
                 self._process.stdin.close()
             except OSError:
                 pass
         self._process = None
+
+    async def _rollback_start(self, exc: Exception) -> None:
+        """Abort a partially started session and surface a startup error."""
+        process = self._process
+        if process and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+        await self._teardown()
+        if self._wait_task and not self._wait_task.done():
+            self._wait_task.cancel()
+            try:
+                await self._wait_task
+            except asyncio.CancelledError:
+                pass
+        self._wait_task = None
+        await self.board.update(state=SessionState.ERROR, error=str(exc))
 
     async def _wait_process(self) -> None:
         """Wait for subprocess to exit naturally, update Board."""
@@ -154,12 +190,12 @@ class Session:
 
         if not self._stopped:
             if rc in (0, None, -2, 130, -15):
-                await self.board.update(state=SessionState.IDLE)
+                await self.board.update(**self._idle_fields())
             else:
                 await self.board.update(state=SessionState.ERROR, error=self._format_exit_error(rc))
             # Release embodiment lock — subprocess is dead, hardware is free
             if self._exit_callback:
-                self._exit_callback()
+                self._exit_callback(self)
 
     def _format_exit_error(self, rc: int) -> str:
         """Extract error info from Board logs after a non-zero exit."""
@@ -181,7 +217,29 @@ class Session:
                 await self._wait_task
             except asyncio.CancelledError:
                 pass
-        await self.board.update(state=SessionState.IDLE)
+        self._wait_task = None
+        await self.board.update(**self._idle_fields())
+
+    async def _enter_stopping_state(self) -> None:
+        state = self.board.get("state", SessionState.IDLE)
+        if state in (SessionState.IDLE, SessionState.ERROR, SessionState.STOPPING):
+            return
+
+        await self.board.update(state=SessionState.STOPPING)
+
+    def _idle_fields(self) -> dict[str, Any]:
+        return {
+            "state": SessionState.IDLE,
+            "record_phase": "idle",
+            "record_pending_command": "",
+            "prepare_stage": "",
+        }
+
+    async def wait(self) -> None:
+        """Wait for the natural-exit monitor to finish."""
+        task = self._wait_task
+        if task is not None:
+            await asyncio.shield(task)
 
     @property
     def busy(self) -> bool:

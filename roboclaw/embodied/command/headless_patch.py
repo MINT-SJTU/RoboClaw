@@ -70,6 +70,10 @@ class TTYKeyboardListener:
 
     def _consume_pending(self, pending: str) -> str:
         while pending:
+            if pending[0].lower() == "p":
+                self._on_press("p")
+                pending = pending[1:]
+                continue
             if pending.startswith("\x1b[C"):
                 self._on_press("right")
                 pending = pending[3:]
@@ -95,38 +99,43 @@ def apply_headless_patch() -> None:
     import lerobot.utils.control_utils as control_utils
     import lerobot.utils.utils as lerobot_utils
 
-    # Patch log_say to also print to stdout so the parent process can parse it.
-    # The default logging.info() produces no output without a configured handler.
+    # Patch log_say to print to stdout (so the parent process can parse it)
+    # and force blocking=False. LeRobot's finally-block calls
+    # log_say("Stop recording", blocking=True) which runs `spd-say --wait`
+    # and hangs forever if speech-dispatcher is not installed. Using
+    # blocking=False lets spd-say fire-and-forget or fail silently.
     _original_say = lerobot_utils.say
 
     def _log_say(text: str, play_sounds: bool = True, blocking: bool = False) -> None:
         print(f"[lerobot] {text}", flush=True)
         if play_sounds:
-            _original_say(text, blocking)
+            _original_say(text, blocking=False)
 
     lerobot_utils.log_say = _log_say
+    lerobot_utils.say = lambda text, blocking=False: _original_say(text, blocking=False)
 
     def init_keyboard_listener():
         events = {
             "exit_early": False,
             "rerecord_episode": False,
             "stop_recording": False,
+            "skip_reset": False,
         }
 
         def on_press(key: str) -> None:
             if key == "right":
-                print("Right arrow key pressed. Exiting loop...")
                 events["exit_early"] = True
                 return
             if key == "left":
-                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
                 events["rerecord_episode"] = True
                 events["exit_early"] = True
                 return
             if key == "esc":
-                print("Escape key pressed. Stopping data recording...")
                 events["stop_recording"] = True
                 events["exit_early"] = True
+                return
+            if key == "p":
+                events["skip_reset"] = True
 
         listener = TTYKeyboardListener(on_press)
         listener.start()

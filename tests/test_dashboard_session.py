@@ -1,207 +1,168 @@
-"""Tests for OperationEngine state machine and stdout parsing."""
+"""Tests for current session consumers and CLI adapters."""
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import pytest
 
-from roboclaw.embodied.service.session import Session as OperationEngine  # TODO: rewrite tests for new Session API
+from roboclaw.embodied.board import Board, Command, SessionState
+from roboclaw.embodied.embodiment.manifest import Manifest
+from roboclaw.embodied.embodiment.manifest.helpers import save_manifest
+from roboclaw.embodied.service import EmbodiedService
+from roboclaw.embodied.service.session.infer import InferOutputConsumer
+from roboclaw.embodied.service.session.record import (
+    RecordOutputConsumer,
+    RecordPhase,
+    RecordPhaseController,
+)
+from roboclaw.embodied.service.session.replay import ReplayOutputConsumer
 
 
-# ---------------------------------------------------------------------------
-# State machine
-# ---------------------------------------------------------------------------
-
-class TestStateMachine:
-    def test_initial_state_is_idle(self):
-        session = OperationEngine()
-        assert session.state == "idle"
-        assert not session.busy
-
-    def test_busy_when_not_idle(self):
-        session = OperationEngine()
-        session._state = "preparing"
-        assert session.busy
-
-    def test_busy_when_teleoperating(self):
-        session = OperationEngine()
-        session._state = "teleoperating"
-        assert session.busy
-
-    def test_busy_when_recording(self):
-        session = OperationEngine()
-        session._state = "recording"
-        assert session.busy
-
-    def test_require_idle_raises_when_busy(self):
-        session = OperationEngine()
-        session._state = "recording"
-        with pytest.raises(RuntimeError, match="Session busy"):
-            session._require_idle_or_raise()
-
-    def test_require_idle_passes_when_idle(self):
-        session = OperationEngine()
-        session._require_idle_or_raise()  # should not raise
+def _service(tmp_path: Path) -> EmbodiedService:
+    manifest_path = tmp_path / "manifest.json"
+    save_manifest(
+        {
+            "version": 2,
+            "arms": [],
+            "hands": [],
+            "cameras": [],
+            "datasets": {"root": "/data"},
+            "policies": {"root": "/policies"},
+        },
+        manifest_path,
+    )
+    return EmbodiedService(manifest=Manifest(path=manifest_path))
 
 
-# ---------------------------------------------------------------------------
-# get_status
-# ---------------------------------------------------------------------------
+def test_record_output_consumer_tracks_episode_lifecycle() -> None:
+    board = Board()
+    consumer = RecordOutputConsumer(board, stdout=None)
 
-class TestGetStatus:
-    def test_idle_status(self):
-        session = OperationEngine()
-        status = session.get_status()
-        assert status["state"] == "idle"
-        assert status["dataset"] is None
+    async def _run() -> None:
+        await board.update(state=SessionState.PREPARING)
+        await consumer.parse_line("[lerobot] Recording episode 0")
+        await consumer.parse_line("Right arrow key pressed.")
+        await consumer.parse_line("[lerobot] Reset the environment")
+        await consumer.parse_line("[lerobot] Recording episode 1")
+        await consumer.parse_line("Stopping data recording")
 
-    def test_recording_status(self):
-        session = OperationEngine()
-        session._state = "recording"
-        session._dataset_name = "test_ds"
-        session._saved_episodes = 3
-        session._target_episodes = 10
-        session._episode_phase = "recording"
+    asyncio.run(_run())
 
-        status = session.get_status()
-        assert status["state"] == "recording"
-        assert status["dataset"] == "test_ds"
-        assert status["saved_episodes"] == 3
-        assert status["target_episodes"] == 10
-
-    def test_non_recording_hides_dataset(self):
-        session = OperationEngine()
-        session._state = "teleoperating"
-        session._dataset_name = "leftover"
-        assert session.get_status()["dataset"] is None
+    state = board.state
+    assert state["state"] == SessionState.RECORDING
+    assert state["current_episode"] == 1
+    assert state["saved_episodes"] == 1
+    assert state["record_phase"] == RecordPhase.STOPPING
 
 
-# ---------------------------------------------------------------------------
-# _parse_line — episode lifecycle tracking
-# ---------------------------------------------------------------------------
+def test_record_output_consumer_rerecord_restores_recording_phase() -> None:
+    board = Board()
+    consumer = RecordOutputConsumer(board, stdout=None)
 
-class TestParseLine:
-    def _session(self) -> OperationEngine:
-        s = OperationEngine()
-        s._state = "recording"
-        return s
+    async def _run() -> None:
+        await board.update(state=SessionState.RECORDING, record_phase=RecordPhase.DISCARD_REQUESTED)
+        await consumer.parse_line("[lerobot] Re-record episode")
 
-    def test_recording_episode_sets_phase(self):
-        s = self._session()
-        s._parse_line("[lerobot] Recording episode 0")
-        assert s._episode_phase == "recording"
-
-    def test_right_arrow_during_recording_sets_saving(self):
-        s = self._session()
-        s._episode_phase = "recording"
-        s._parse_line("Right arrow key pressed. Saving episode.")
-        assert s._episode_phase == "saving"
-
-    def test_right_arrow_during_resetting_sets_saving(self):
-        s = self._session()
-        s._episode_phase = "resetting"
-        s._parse_line("Right arrow key pressed.")
-        assert s._episode_phase == "saving"
-
-    def test_reset_environment_sets_resetting(self):
-        s = self._session()
-        s._episode_phase = "recording"
-        s._parse_line("[lerobot] Reset the environment")
-        assert s._episode_phase == "resetting"
-
-    def test_re_record_sets_recording(self):
-        s = self._session()
-        s._episode_phase = "saving"
-        s._parse_line("[lerobot] Re-record episode")
-        assert s._episode_phase == "recording"
-
-    def test_stop_recording_increments_if_saving(self):
-        s = self._session()
-        s._episode_phase = "saving"
-        s._saved_episodes = 2
-        s._parse_line("[lerobot] Stop recording")
-        assert s._saved_episodes == 3
-        assert s._episode_phase == ""
-
-    def test_stop_recording_increments_if_resetting(self):
-        s = self._session()
-        s._episode_phase = "resetting"
-        s._saved_episodes = 0
-        s._parse_line("[lerobot] Stop recording")
-        assert s._saved_episodes == 1
-
-    def test_stop_recording_no_increment_if_empty(self):
-        s = self._session()
-        s._episode_phase = ""
-        s._saved_episodes = 5
-        s._parse_line("[lerobot] Stop recording")
-        assert s._saved_episodes == 5
-
-    def test_new_episode_increments_if_previous_saving(self):
-        s = self._session()
-        s._episode_phase = "saving"
-        s._saved_episodes = 1
-        s._parse_line("[lerobot] Recording episode 2")
-        assert s._saved_episodes == 2
-        assert s._episode_phase == "recording"
-
-    def test_new_episode_no_increment_if_first(self):
-        s = self._session()
-        s._episode_phase = ""
-        s._saved_episodes = 0
-        s._parse_line("[lerobot] Recording episode 0")
-        assert s._saved_episodes == 0
-        assert s._episode_phase == "recording"
-
-    def test_frame_count_parsed(self):
-        s = self._session()
-        s._parse_line("frames: 150")
-        assert s._total_frames == 150
-
-    def test_episode_done_parsed(self):
-        s = self._session()
-        s._parse_line("Episode 2 done")
-        # No crash, no state change for this particular line
-
-    def test_unrecognized_line_is_ignored(self):
-        s = self._session()
-        s._episode_phase = "recording"
-        s._parse_line("some random log output")
-        assert s._episode_phase == "recording"
-
-    def test_full_lifecycle(self):
-        """Simulate: record ep0 → save → reset → record ep1 → save → stop."""
-        s = self._session()
-        s._target_episodes = 2
-
-        s._parse_line("[lerobot] Recording episode 0")
-        assert s._episode_phase == "recording"
-        assert s._saved_episodes == 0
-
-        s._parse_line("Right arrow key pressed.")
-        assert s._episode_phase == "saving"
-
-        s._parse_line("[lerobot] Reset the environment")
-        assert s._episode_phase == "resetting"
-
-        s._parse_line("[lerobot] Recording episode 1")
-        assert s._episode_phase == "recording"
-        assert s._saved_episodes == 1
-
-        s._parse_line("Right arrow key pressed.")
-        assert s._episode_phase == "saving"
-
-        s._parse_line("[lerobot] Stop recording")
-        assert s._episode_phase == ""
-        assert s._saved_episodes == 2
+    asyncio.run(_run())
+    assert board.state["record_phase"] == RecordPhase.RECORDING
 
 
-# ---------------------------------------------------------------------------
-# send_key without subprocess
-# ---------------------------------------------------------------------------
+def test_record_session_status_line_and_keys(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    session = service.record
+    service.board.set_field("state", SessionState.RECORDING)
+    service.board.set_field("current_episode", 3)
+    service.board.set_field("target_episodes", 10)
+    service.board.set_field("saved_episodes", 2)
+    service.board.set_field("record_phase", RecordPhase.RESETTING)
 
-class TestSendKey:
-    @pytest.mark.asyncio
-    async def test_send_key_no_process_raises(self):
-        session = OperationEngine()
-        with pytest.raises(RuntimeError, match="No subprocess stdin"):
-            await session.save_episode()
+    assert session.status_line() == "  Episode 3/10 | Saved: 2 | resetting"
+
+    asyncio.run(session.on_key("right"))
+    assert service.board.poll_command() == Command.SKIP_RESET
+    service.board.set_field("record_phase", RecordPhase.RECORDING)
+    service.board.set_field("record_pending_command", "")
+    asyncio.run(session.on_key("right"))
+    assert service.board.poll_command() == Command.SAVE_EPISODE
+    service.board.set_field("record_phase", RecordPhase.RECORDING)
+    service.board.set_field("record_pending_command", "")
+    asyncio.run(session.on_key("left"))
+    assert service.board.poll_command() == Command.DISCARD_EPISODE
+
+
+def test_record_phase_controller_rejects_invalid_commands() -> None:
+    board = Board()
+    controller = RecordPhaseController(board)
+
+    async def _run() -> None:
+        await board.update(record_phase=RecordPhase.RESETTING)
+        with pytest.raises(RuntimeError, match="save_episode"):
+            await controller.request_save()
+        await controller.request_skip_reset()
+        with pytest.raises(RuntimeError, match="waiting for skip_reset"):
+            await controller.request_skip_reset()
+
+    asyncio.run(_run())
+
+
+def test_record_phase_controller_stop_keeps_output_verified_save_count() -> None:
+    board = Board()
+    controller = RecordPhaseController(board)
+
+    async def _run() -> None:
+        await board.update(
+            record_phase=RecordPhase.RESETTING,
+            saved_episodes=2,
+        )
+        await controller.request_stop()
+        assert board.state["record_phase"] == RecordPhase.STOPPING
+        await controller.observe_stop()
+        assert board.state["saved_episodes"] == 3
+
+    asyncio.run(_run())
+
+
+def test_replay_output_consumer_updates_prepare_stage_and_state() -> None:
+    board = Board()
+    consumer = ReplayOutputConsumer(board, stdout=None)
+
+    async def _run() -> None:
+        await board.update(state=SessionState.PREPARING)
+        await consumer.parse_line("loading checkpoint")
+        await consumer.parse_line("[lerobot] replaying episode 2")
+
+    asyncio.run(_run())
+
+    state = board.state
+    assert state["prepare_stage"] == ""
+    assert state["state"] == SessionState.REPLAYING
+
+
+def test_infer_output_consumer_updates_prepare_stage_and_state() -> None:
+    board = Board()
+    consumer = InferOutputConsumer(board, stdout=None)
+
+    async def _run() -> None:
+        await board.update(state=SessionState.PREPARING)
+        await consumer.parse_line("make_policy")
+        await consumer.parse_line("running policy")
+
+    asyncio.run(_run())
+
+    state = board.state
+    assert state["prepare_stage"] == ""
+    assert state["state"] == SessionState.INFERRING
+
+
+def test_record_result_uses_dataset_and_error(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    session = service.record
+
+    service.board.set_field("saved_episodes", 4)
+    service.board.set_field("dataset", "demo_set")
+    assert session.result() == "Recording finished. 4 episodes saved to demo_set."
+
+    service.board.set_field("error", "serial timeout")
+    assert session.result() == "Recording failed: serial timeout"

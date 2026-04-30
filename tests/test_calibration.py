@@ -1,180 +1,191 @@
-"""Tests for CalibrationSession."""
+"""Focused tests for calibration session success semantics."""
 
-import json
+from __future__ import annotations
+
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from roboclaw.embodied.service.session.calibrate import CalibrationEngine as CalibrationSession
-# SO101 constant was deleted; tests need rewrite for new spec dict approach
-from roboclaw.embodied.embodiment.manifest.binding import Binding
+from roboclaw.embodied.board import Board
+from roboclaw.embodied.board.constants import SessionState
+from roboclaw.embodied.embodiment.manifest import Manifest
+from roboclaw.embodied.embodiment.manifest.helpers import save_manifest
+from roboclaw.embodied.service.session.calibrate import CalibrationSession
 
 
-@pytest.fixture
-def arm_config(tmp_path: Path) -> Binding:
-    cal_dir = tmp_path / "calibration" / "TEST_SERIAL"
+class DummyProcess:
+    """Minimal process stub for session wait-path tests."""
+
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        self.stdin = None
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
+class DummyParent:
+    """Small parent stub with just the session dependencies we need."""
+
+    def __init__(self, manifest: Manifest) -> None:
+        self.board = Board()
+        self.manifest = manifest
+        self.embodiment_busy = True
+        self.release_calls = 0
+
+    def acquire_embodiment(self, owner: str) -> None:
+        self.embodiment_busy = True
+
+    def release_embodiment(self, owner: str = "") -> None:
+        self.embodiment_busy = False
+        self.release_calls += 1
+
+
+def _build_manifest(tmp_path: Path) -> tuple[Manifest, Path]:
+    cal_dir = tmp_path / "calibration" / "SIM001"
     cal_dir.mkdir(parents=True)
-    return Binding.from_dict({
-        "alias": "test_follower",
-        "type": "so101_follower",
-        "port": "/dev/ttyACM0",
-        "calibration_dir": str(cal_dir),
-        "calibrated": False,
-    }, "arm", {})
+    path = tmp_path / "manifest.json"
+    save_manifest(
+        {
+            "version": 2,
+            "arms": [
+                {
+                    "alias": "test_arm",
+                    "type": "so101_follower",
+                    "port": "/dev/serial/by-id/usb-SIM_Serial_SIM001-if00",
+                    "calibration_dir": str(cal_dir),
+                    "calibrated": False,
+                }
+            ],
+            "hands": [],
+            "cameras": [],
+            "datasets": {"root": "/data"},
+            "policies": {"root": "/policies"},
+        },
+        path,
+    )
+    return Manifest(path=path), cal_dir
 
 
-@pytest.fixture
-def mock_bus():
-    """Create a mock motor bus with realistic behavior."""
-    bus = MagicMock()
-    bus.motors = {
-        "shoulder_pan": MagicMock(id=1),
-        "shoulder_lift": MagicMock(id=2),
-        "elbow_flex": MagicMock(id=3),
-        "wrist_flex": MagicMock(id=4),
-        "wrist_roll": MagicMock(id=5),
-        "gripper": MagicMock(id=6),
-    }
-    bus.set_half_turn_homings.return_value = {
-        "shoulder_pan": -100,
-        "shoulder_lift": -200,
-        "elbow_flex": 300,
-        "wrist_flex": -400,
-        "wrist_roll": 500,
-        "gripper": 600,
-    }
-    # sync_read returns positions — vary between calls for min/max coverage
-    call_count = [0]
-    def _varying_sync_read(*args, **kwargs):
-        call_count[0] += 1
-        if call_count[0] <= 1:
-            return {"shoulder_pan": 2000, "shoulder_lift": 2100, "elbow_flex": 2200, "wrist_flex": 2300, "gripper": 2400}
-        return {"shoulder_pan": 1800, "shoulder_lift": 2500, "elbow_flex": 1900, "wrist_flex": 2700, "gripper": 2600}
-    bus.sync_read.side_effect = _varying_sync_read
-    return bus
+def _saved_calibration_path(cal_dir: Path) -> Path:
+    return cal_dir / f"{cal_dir.name}.json"
 
 
-def test_session_initial_state(arm_config: Binding) -> None:
-    session = CalibrationSession(arm_config)
-    assert session.state == "idle"
-    assert session.spec == SO101
+@pytest.mark.asyncio
+async def test_wait_process_marks_calibrated_after_saved_file(tmp_path: Path) -> None:
+    manifest, cal_dir = _build_manifest(tmp_path)
+    _saved_calibration_path(cal_dir).write_text("{}", encoding="utf-8")
+
+    parent = DummyParent(manifest)
+    session = CalibrationSession(parent)
+    session._arm = manifest.find_arm("test_arm")
+    session._cal_manifest = manifest
+    session._process = DummyProcess(0)
+
+    await session.board.update(
+        state=SessionState.CALIBRATING,
+        calibration_arm="test_arm",
+        calibration_step="done",
+    )
+    await session._wait_process()
+
+    assert manifest.find_arm("test_arm").calibrated is True
+    assert session.board.state["state"] == SessionState.IDLE
+    assert parent.release_calls == 1
 
 
-def test_session_state_transitions(arm_config: Binding, mock_bus: MagicMock) -> None:
-    session = CalibrationSession(arm_config)
+@pytest.mark.asyncio
+async def test_wait_process_missing_saved_file_sets_error(tmp_path: Path) -> None:
+    manifest, _ = _build_manifest(tmp_path)
 
-    with patch.object(session, "_import_bus_class", return_value=lambda **kw: mock_bus), \
-         patch.object(session, "_import_motor_types") as mock_mt, \
-         patch.object(session, "_import_operating_mode") as mock_om, \
-         patch.object(session, "_import_motor_calibration") as mock_mc:
+    parent = DummyParent(manifest)
+    session = CalibrationSession(parent)
+    session._arm = manifest.find_arm("test_arm")
+    session._cal_manifest = manifest
+    session._process = DummyProcess(0)
 
-        # Mock Motor and MotorNormMode
-        MockMotor = MagicMock()
-        MockNormMode = MagicMock()
-        MockNormMode.RANGE_M100_100 = "range_m100_100"
-        mock_mt.return_value = (MockMotor, MockNormMode)
+    await session.board.update(
+        state=SessionState.CALIBRATING,
+        calibration_arm="test_arm",
+        calibration_step="done",
+    )
+    await session._wait_process()
 
-        MockOperatingMode = MagicMock()
-        MockOperatingMode.POSITION.value = 3
-        mock_om.return_value = MockOperatingMode
-
-        from types import SimpleNamespace
-        mock_mc.return_value = lambda **kw: SimpleNamespace(**kw)
-
-        # Connect
-        session.connect()
-        assert session.state == "connected"
-        mock_bus.connect.assert_called_once()
-        mock_bus.disable_torque.assert_called_once()
-
-        # Set homing
-        offsets = session.set_homing()
-        assert session.state == "recording"
-        assert offsets["shoulder_pan"] == -100
-        mock_bus.set_half_turn_homings.assert_called_once()
-
-        # Read range positions
-        snapshot = session.read_range_positions()
-        assert "shoulder_pan" in snapshot.positions
-        assert "shoulder_pan" in snapshot.mins
-
-        # Finish
-        session.finish()
-        assert session.state == "done"
-        mock_bus.write_calibration.assert_called_once()
+    state = session.board.state
+    assert state["state"] == SessionState.ERROR
+    assert "did not save SIM001.json" in state["error"]
+    assert manifest.find_arm("test_arm").calibrated is False
+    assert parent.release_calls == 1
 
 
-def test_session_saves_calibration_json(arm_config: Binding, mock_bus: MagicMock) -> None:
-    session = CalibrationSession(arm_config)
+@pytest.mark.asyncio
+async def test_wait_process_manifest_failure_sets_error(tmp_path: Path) -> None:
+    manifest, cal_dir = _build_manifest(tmp_path)
+    _saved_calibration_path(cal_dir).write_text("{}", encoding="utf-8")
 
-    with patch.object(session, "_import_bus_class", return_value=lambda **kw: mock_bus), \
-         patch.object(session, "_import_motor_types") as mock_mt, \
-         patch.object(session, "_import_operating_mode") as mock_om, \
-         patch.object(session, "_import_motor_calibration") as mock_mc:
+    parent = DummyParent(manifest)
+    session = CalibrationSession(parent)
+    session._arm = manifest.find_arm("test_arm")
+    session._cal_manifest = manifest
+    session._process = DummyProcess(0)
 
-        MockMotor = MagicMock()
-        MockNormMode = MagicMock()
-        MockNormMode.RANGE_M100_100 = "range_m100_100"
-        mock_mt.return_value = (MockMotor, MockNormMode)
-        mock_om.return_value = MagicMock(POSITION=MagicMock(value=3))
+    with patch.object(manifest, "mark_arm_calibrated", side_effect=RuntimeError("persist failed")):
+        await session.board.update(
+            state=SessionState.CALIBRATING,
+            calibration_arm="test_arm",
+            calibration_step="done",
+        )
+        await session._wait_process()
 
-        # Make MotorCalibration a simple namespace
-        from types import SimpleNamespace
-        mock_mc.return_value = lambda **kw: SimpleNamespace(**kw)
-
-        # Make sync_read return different values on successive calls to test min/max
-        positions_call_count = [0]
-        def varying_positions(*args, **kwargs):
-            positions_call_count[0] += 1
-            if positions_call_count[0] == 1:
-                # Initial read
-                return {"shoulder_pan": 2000, "shoulder_lift": 2100, "elbow_flex": 2200, "wrist_flex": 2300, "gripper": 2400}
-            # Moved positions
-            return {"shoulder_pan": 1800, "shoulder_lift": 2500, "elbow_flex": 1900, "wrist_flex": 2700, "gripper": 2600}
-
-        mock_bus.sync_read.side_effect = varying_positions
-
-        session.connect()
-        session.set_homing()
-        session.read_range_positions()  # records min/max
-        cal = session.finish()
-
-        # Check calibration file was written
-        cal_dir = Path(arm_config.calibration_dir)
-        cal_file = cal_dir / f"{cal_dir.name}.json"
-        assert cal_file.exists()
-        saved = json.loads(cal_file.read_text())
-        assert "shoulder_pan" in saved
-        assert saved["shoulder_pan"]["homing_offset"] == -100
+    state = session.board.state
+    assert state["state"] == SessionState.ERROR
+    assert state["error"] == "persist failed"
+    assert manifest.find_arm("test_arm").calibrated is False
+    assert parent.release_calls == 1
 
 
-def test_cancel_resets_state(arm_config: Binding, mock_bus: MagicMock) -> None:
-    session = CalibrationSession(arm_config)
+@pytest.mark.asyncio
+async def test_calibrate_one_tty_requires_saved_file(tmp_path: Path) -> None:
+    manifest, _ = _build_manifest(tmp_path)
+    parent = DummyParent(manifest)
+    session = CalibrationSession(parent)
+    arm = manifest.find_arm("test_arm")
+    runner = AsyncMock()
+    runner.run_interactive.return_value = (0, "")
+    tty_handoff = AsyncMock()
 
-    with patch.object(session, "_import_bus_class", return_value=lambda **kw: mock_bus), \
-         patch.object(session, "_import_motor_types") as mock_mt, \
-         patch.object(session, "_import_operating_mode") as mock_om:
+    result = await session._calibrate_one_tty(arm, manifest, runner, tty_handoff)
 
-        MockMotor = MagicMock()
-        MockNormMode = MagicMock()
-        MockNormMode.RANGE_M100_100 = "range_m100_100"
-        mock_mt.return_value = (MockMotor, MockNormMode)
-        mock_om.return_value = MagicMock(POSITION=MagicMock(value=3))
-
-        session.connect()
-        assert session.state == "connected"
-
-        session.cancel()
-        assert session.state == "idle"
-        mock_bus.disconnect.assert_called()
+    assert result == "test_arm: FAILED (Calibration for test_arm did not save SIM001.json.)"
+    assert manifest.find_arm("test_arm").calibrated is False
 
 
-def test_wrong_state_raises(arm_config: Binding) -> None:
-    session = CalibrationSession(arm_config)
-    with pytest.raises(RuntimeError, match="Cannot set homing"):
-        session.set_homing()
-    with pytest.raises(RuntimeError, match="Cannot read range"):
-        session.read_range_positions()
-    with pytest.raises(RuntimeError, match="Cannot finish"):
-        session.finish()
+@pytest.mark.asyncio
+async def test_calibrate_one_tty_marks_calibrated_after_saved_file(tmp_path: Path) -> None:
+    manifest, cal_dir = _build_manifest(tmp_path)
+    _saved_calibration_path(cal_dir).write_text("{}", encoding="utf-8")
+
+    parent = DummyParent(manifest)
+    session = CalibrationSession(parent)
+    arm = manifest.find_arm("test_arm")
+    runner = AsyncMock()
+    runner.run_interactive.return_value = (0, "")
+    tty_handoff = AsyncMock()
+
+    result = await session._calibrate_one_tty(arm, manifest, runner, tty_handoff)
+
+    assert result == "test_arm: OK"
+    assert manifest.find_arm("test_arm").calibrated is True
+
+
+def test_result_prefers_error_over_done(tmp_path: Path) -> None:
+    manifest, _ = _build_manifest(tmp_path)
+    parent = DummyParent(manifest)
+    session = CalibrationSession(parent)
+    session.board.set_field("state", SessionState.ERROR)
+    session.board.set_field("calibration_arm", "test_arm")
+    session.board.set_field("calibration_step", "done")
+    session.board.set_field("error", "persist failed")
+
+    assert session.result() == "Calibration of test_arm failed: persist failed"
