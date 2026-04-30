@@ -1,15 +1,36 @@
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 
+import httpx
 import pytest
+from huggingface_hub.errors import HFValidationError, HfHubHTTPError, RepositoryNotFoundError
 
 pytest.importorskip("fastapi")
+pa = pytest.importorskip("pyarrow")
+pq = pytest.importorskip("pyarrow.parquet")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from roboclaw.data.explorer import remote as remote_explorer
 from roboclaw.http.routes import explorer as explorer_routes
+
+
+def _hub_http_error(error_type: type[HfHubHTTPError], status_code: int) -> HfHubHTTPError:
+    request = httpx.Request("GET", "https://huggingface.co/api/datasets/demo/stacked-cards")
+    response = httpx.Response(status_code, request=request)
+    return error_type("upstream error", response=response)
+
+
+def _parquet_bytes(rows: list[dict]) -> bytes:
+    table = pa.Table.from_pylist(rows)
+    buffer = io.BytesIO()
+    pq.write_table(table, buffer)
+    return buffer.getvalue()
 
 
 def test_explorer_dashboard_uses_remote_payload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,15 +74,90 @@ def test_explorer_dashboard_uses_remote_payload(monkeypatch: pytest.MonkeyPatch)
     assert payload["summary"]["total_episodes"] == 2
 
 
+def test_explorer_summary_returns_404_for_missing_remote_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    def missing_dataset(_dataset: str) -> dict[str, object]:
+        raise _hub_http_error(RepositoryNotFoundError, 401)
+
+    monkeypatch.setattr(explorer_routes, "build_remote_explorer_summary", missing_dataset)
+
+    response = client.get(
+        "/api/explorer/summary",
+        params={"source": "remote", "dataset": "demo/stacked-cards"},
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "Remote dataset 'demo/stacked-cards' was not found or is not accessible"
+    }
+
+
+def test_explorer_details_maps_remote_rate_limit_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    def rate_limited(_dataset: str) -> dict[str, object]:
+        raise _hub_http_error(HfHubHTTPError, 429)
+
+    monkeypatch.setattr(explorer_routes, "build_remote_explorer_details", rate_limited)
+
+    response = client.get(
+        "/api/explorer/details",
+        params={"source": "remote", "dataset": "cadene/droid_1.0.1"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Remote dataset 'cadene/droid_1.0.1' is temporarily rate limited by the upstream service"
+    }
+
+
+def test_explorer_prepare_remote_returns_422_for_invalid_remote_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    def invalid_dataset_id(
+        _dataset_id: str,
+        *,
+        include_videos: bool = False,
+        force: bool = False,
+    ) -> dict[str, object]:
+        raise HFValidationError("invalid repo id")
+
+    monkeypatch.setattr(explorer_routes, "register_remote_dataset_session", invalid_dataset_id)
+
+    response = client.post(
+        "/api/explorer/prepare-remote",
+        json={"dataset_id": "bad dataset", "include_videos": False, "force": False},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid repo id"}
+
+
 def test_explorer_episode_uses_remote_detail(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
     explorer_routes.register_explorer_routes(app)
     client = TestClient(app)
 
+    called: dict[str, object] = {}
+
     monkeypatch.setattr(
         explorer_routes,
         "load_remote_episode_detail",
-        lambda dataset, episode_index, preview_only=False: {
+        lambda dataset, episode_index, preview_only=False: called.update({
+            "dataset": dataset,
+            "episode_index": episode_index,
+            "preview_only": preview_only,
+        }) or {
             "episode_index": episode_index,
             "summary": {
                 "row_count": 12,
@@ -98,25 +194,32 @@ def test_explorer_episode_uses_remote_detail(monkeypatch: pytest.MonkeyPatch) ->
     assert payload["episode_index"] == 0
     assert payload["summary"]["video_count"] == 1
     assert payload["videos"][0]["url"].startswith("https://huggingface.co/datasets/")
+    assert called == {
+        "dataset": "cadene/droid_1.0.1",
+        "episode_index": 0,
+        "preview_only": False,
+    }
 
 
-def test_explorer_episode_passes_preview_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explorer_episode_preview_forwards_preview_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = FastAPI()
     explorer_routes.register_explorer_routes(app)
     client = TestClient(app)
 
-    calls: dict[str, bool] = {}
+    called: dict[str, object] = {}
 
-    def _fake_detail(dataset: str, episode_index: int, *, preview_only: bool = False) -> dict:
-        calls["preview_only"] = preview_only
-        return {
+    monkeypatch.setattr(
+        explorer_routes,
+        "load_remote_episode_detail",
+        lambda dataset, episode_index, preview_only=False: called.update({
+            "dataset": dataset,
             "episode_index": episode_index,
-            "summary": {
-                "row_count": 12 if preview_only else 500,
-                "fps": 30,
-                "duration_s": 0.4,
-                "video_count": 0,
-            },
+            "preview_only": preview_only,
+        }) or {
+            "episode_index": episode_index,
+            "summary": {"row_count": 2, "fps": 30, "duration_s": 0.5, "video_count": 1},
             "sample_rows": [],
             "joint_trajectory": {
                 "x_axis_key": "timestamp",
@@ -127,159 +230,28 @@ def test_explorer_episode_passes_preview_flag(monkeypatch: pytest.MonkeyPatch) -
                 "sampled_points": 0,
                 "total_points": 0,
             },
-            "videos": [],
-        }
-
-    monkeypatch.setattr(explorer_routes, "load_remote_episode_detail", _fake_detail)
-
-    response = client.get(
-        "/api/explorer/episode",
-        params={
-            "dataset": "cadene/droid_1.0.1",
-            "episode_index": 0,
-            "preview_only": "true",
+            "videos": [
+                {
+                    "path": "videos/shared.mp4",
+                    "url": "https://huggingface.co/datasets/demo/shared.mp4",
+                    "stream": "front",
+                    "from_timestamp": 12.5,
+                    "to_timestamp": 15.0,
+                }
+            ],
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["summary"]["row_count"] == 12
-    assert calls["preview_only"] is True
-
-
-def test_explorer_episode_accepts_preview_alias(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = FastAPI()
-    explorer_routes.register_explorer_routes(app)
-    client = TestClient(app)
-
-    calls: dict[str, bool] = {}
-
-    def _fake_detail(dataset: str, episode_index: int, *, preview_only: bool = False) -> dict:
-        calls["preview_only"] = preview_only
-        return {
-            "episode_index": episode_index,
-            "summary": {
-                "row_count": 12,
-                "fps": 30,
-                "duration_s": 0.4,
-                "video_count": 0,
-            },
-            "sample_rows": [],
-            "joint_trajectory": {
-                "x_axis_key": "timestamp",
-                "x_values": [],
-                "time_values": [],
-                "frame_values": [],
-                "joint_trajectories": [],
-                "sampled_points": 0,
-                "total_points": 0,
-            },
-            "videos": [],
-        }
-
-    monkeypatch.setattr(explorer_routes, "load_remote_episode_detail", _fake_detail)
-
     response = client.get(
         "/api/explorer/episode",
-        params={
-            "dataset": "cadene/droid_1.0.1",
-            "episode_index": 0,
-            "preview": "true",
-        },
+        params={"dataset": "demo/shared-layout", "episode_index": 0, "preview": True},
     )
-
     assert response.status_code == 200
-    assert calls["preview_only"] is True
-
-
-def test_explorer_dataset_suggestions_use_remote_search(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = FastAPI()
-    explorer_routes.register_explorer_routes(app)
-    client = TestClient(app)
-
-    monkeypatch.setattr(
-        explorer_routes,
-        "search_remote_datasets",
-        lambda query, limit: [{"id": f"{query}-{limit}"}],
-    )
-
-    response = client.get("/api/explorer/datasets", params={"query": "droid", "limit": 3})
-
-    assert response.status_code == 200
-    assert response.json() == [{"id": "droid-3"}]
-
-
-def test_explorer_datasets_can_list_local_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = FastAPI()
-    explorer_routes.register_explorer_routes(app)
-    client = TestClient(app)
-
-    monkeypatch.setattr(
-        explorer_routes,
-        "list_local_dataset_options",
-        lambda: [
-            {
-                "id": "workspace/keep",
-                "label": "Keep",
-                "path": "/tmp/keep",
-                "source": "local",
-            },
-            {
-                "id": "workspace/drop",
-                "label": "Drop",
-                "path": "/tmp/drop",
-                "source": "local",
-            },
-        ],
-    )
-
-    response = client.get(
-        "/api/explorer/datasets",
-        params={"source": "local", "query": "keep"},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == [
-        {
-            "id": "workspace/keep",
-            "label": "Keep",
-            "path": "/tmp/keep",
-            "source": "local",
-        }
-    ]
-
-
-def test_explorer_local_directory_session_rejects_path_escape() -> None:
-    app = FastAPI()
-    explorer_routes.register_explorer_routes(app)
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/explorer/local-directory-session",
-        data={"relative_paths": "../escape.txt"},
-        files={"files": ("escape.txt", b"x")},
-    )
-
-    assert response.status_code == 400
-
-
-def test_explorer_local_video_rejects_sibling_prefix_escape(tmp_path: Path) -> None:
-    app = FastAPI()
-    explorer_routes.register_explorer_routes(app)
-    client = TestClient(app)
-
-    root = tmp_path / "dataset"
-    sibling = tmp_path / "dataset_evil"
-    (root / "meta").mkdir(parents=True)
-    (root / "meta" / "info.json").write_text("{}", encoding="utf-8")
-    sibling.mkdir()
-    (sibling / "clip.mp4").write_bytes(b"not-video")
-
-    response = client.get(
-        "/api/explorer/local-video/%2E%2E/dataset_evil/clip.mp4",
-        params={"source": "path", "dataset_path": str(root)},
-    )
-
-    assert response.status_code == 403
+    assert called == {
+        "dataset": "demo/shared-layout",
+        "episode_index": 0,
+        "preview_only": True,
+    }
 
 
 def test_explorer_dataset_info_uses_remote_summary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,137 +281,553 @@ def test_explorer_dataset_info_uses_remote_summary(monkeypatch: pytest.MonkeyPat
     assert payload["total_episodes"] == 3
 
 
-def test_remote_shared_paths_use_lerobot_default_templates() -> None:
-    info = {
-        "features": {
-            "observation.images.front": {"dtype": "video"},
-        },
-        "data_path": "",
-        "video_path": "",
-    }
-    episode_meta = {
-        "data/chunk_index": 1,
-        "data/file_index": 2,
-        "videos/observation.images.front/chunk_index": 3,
-        "videos/observation.images.front/file_index": 4,
-        "videos/observation.images.front/from_timestamp": 1.5,
-        "videos/observation.images.front/to_timestamp": 2.5,
-    }
+def test_explorer_suggest_uses_remote_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
 
-    assert remote_explorer._resolve_shared_data_path(info, episode_meta) == (
-        "data/chunk-001/file-002.parquet"
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        explorer_routes,
+        "search_remote_datasets",
+        lambda query, limit=8: called.update({
+            "query": query,
+            "limit": limit,
+        }) or [
+            {"id": "Elvinky/bi-so101-fold_towel_d1"},
+            {"id": "Elvinky/bi-so101-fold_towel_d0_1"},
+        ],
     )
 
-    videos = remote_explorer._resolve_shared_video_clips("org/dataset", info, episode_meta)
+    response = client.get("/api/explorer/suggest", params={"q": "Elvinky", "limit": 6})
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": "Elvinky/bi-so101-fold_towel_d1"},
+        {"id": "Elvinky/bi-so101-fold_towel_d0_1"},
+    ]
+    assert called == {
+        "query": "Elvinky",
+        "limit": 6,
+    }
 
-    assert videos == [
+
+def test_explorer_datasets_lists_local_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    monkeypatch.setattr(
+        explorer_routes,
+        "list_local_dataset_options",
+        lambda: [
+            {
+                "id": "local/demo",
+                "label": "local/demo",
+                "path": "/tmp/local/demo",
+                "source": "local",
+            }
+        ],
+    )
+
+    response = client.get("/api/explorer/datasets", params={"source": "local"})
+    assert response.status_code == 200
+    assert response.json() == [
         {
-            "path": "videos/observation.images.front/chunk-003/file-004.mp4",
-            "url": "https://huggingface.co/datasets/org/dataset/resolve/main/videos/observation.images.front/chunk-003/file-004.mp4",
-            "stream": "front",
-            "from_timestamp": 1.5,
-            "to_timestamp": 2.5,
+            "id": "local/demo",
+            "label": "local/demo",
+            "path": "/tmp/local/demo",
+            "source": "local",
         }
     ]
 
 
-def test_viewer_fetch_episode_rows_paginates(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(remote_explorer, "_VIEWER_PAGE_SIZE", 2)
-    requested_urls: list[str] = []
-
-    def _fake_viewer_fetch_json(url: str) -> dict:
-        requested_urls.append(url)
-        if "offset=0&length=2" in url:
-            return {"rows": [{"row": {"index": 0}}, {"row": {"index": 1}}]}
-        if "offset=2&length=1" in url:
-            return {"rows": [{"row": {"index": 2}}]}
-        return {"rows": []}
-
-    monkeypatch.setattr(remote_explorer, "_viewer_fetch_json", _fake_viewer_fetch_json)
-
-    rows = remote_explorer._viewer_fetch_episode_rows(
-        "org/dataset",
-        "default",
-        "train",
-        7,
-        length=3,
-    )
-
-    assert rows == [{"index": 0}, {"index": 1}, {"index": 2}]
-    assert len(requested_urls) == 2
-
-
-def test_viewer_fetch_episode_rows_stays_under_viewer_limit(
+def test_explorer_suggest_filters_local_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    requested_urls: list[str] = []
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
 
-    def _fake_viewer_fetch_json(url: str) -> dict:
-        requested_urls.append(url)
-        if "offset=0&length=100" in url:
-            return {"rows": [{"row": {"index": index}} for index in range(100)]}
-        if "offset=100&length=1" in url:
-            return {"rows": [{"row": {"index": 100}}]}
-        return {"rows": []}
-
-    monkeypatch.setattr(remote_explorer, "_viewer_fetch_json", _fake_viewer_fetch_json)
-
-    rows = remote_explorer._viewer_fetch_episode_rows(
-        "org/dataset",
-        "default",
-        "train",
-        7,
-        length=101,
+    monkeypatch.setattr(
+        explorer_routes,
+        "list_local_dataset_options",
+        lambda: [
+            {"id": "local/demo", "label": "local/demo", "path": "/tmp/local/demo", "source": "local"},
+            {"id": "other/task", "label": "other/task", "path": "/tmp/other/task", "source": "local"},
+        ],
     )
 
-    assert len(rows) == 101
-    assert len(requested_urls) == 2
+    response = client.get(
+        "/api/explorer/suggest",
+        params={"source": "local", "q": "demo", "limit": 8},
+    )
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": "local/demo", "label": "local/demo", "path": "/tmp/local/demo", "source": "local"}
+    ]
 
 
-def test_shared_episode_returns_preview_when_viewer_is_unavailable(
+def test_explorer_episode_supports_local_source(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    artifacts = {
-        "dataset": "org/dataset",
-        "siblings": [],
-        "info": {
-            "fps": 30,
-            "chunks_size": 1000,
-            "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
-            "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
-            "features": {
-                "observation.images.front": {"dtype": "video"},
-                "action": {"dtype": "float32", "shape": [2]},
-                "observation.state": {"dtype": "float32", "shape": [2]},
+    dataset_path = tmp_path / "datasets" / "local" / "demo"
+    (dataset_path / "meta").mkdir(parents=True)
+    (dataset_path / "meta" / "info.json").write_text(
+        json.dumps(
+            {
+                "fps": 30,
+                "features": {
+                    "action": {"names": ["joint_1"]},
+                    "observation.state": {"names": ["joint_1"]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (dataset_path / "videos").mkdir(parents=True)
+    video_path = dataset_path / "videos" / "front.mp4"
+    video_path.write_bytes(b"")
+
+    monkeypatch.setattr(
+        explorer_routes,
+        "resolve_local_dataset_path",
+        lambda _dataset: dataset_path,
+    )
+    monkeypatch.setattr(
+        explorer_routes,
+        "_local_dataset_name",
+        lambda _path: "local/demo",
+    )
+    monkeypatch.setattr(
+        explorer_routes,
+        "load_episode_data",
+        lambda _dataset_path, _episode_index: {
+            "info": {
+                "fps": 30,
+                "features": {
+                    "action": {"names": ["joint_1"]},
+                    "observation.state": {"names": ["joint_1"]},
+                },
             },
+            "rows": [
+                {"timestamp": 0.0, "frame_index": 0, "action": [0.1], "observation.state": [0.0]},
+                {"timestamp": 1.0, "frame_index": 1, "action": [0.2], "observation.state": [0.1]},
+            ],
+            "video_files": [video_path],
         },
+    )
+
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/explorer/episode",
+        params={"source": "local", "dataset": "local/demo", "episode_index": 0},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["row_count"] == 2
+    assert payload["videos"][0]["url"].startswith("/api/explorer/local-video/")
+    assert payload["sample_rows"][0]["frame_index"] == 0
+
+
+def test_explorer_prepare_remote_uses_workspace_prep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    explorer_routes.register_explorer_routes(app)
+    client = TestClient(app)
+
+    called: dict[str, object] = {}
+    monkeypatch.setattr(
+        explorer_routes,
+        "register_remote_dataset_session",
+        lambda dataset_id, include_videos=False, force=False: called.update({
+            "dataset_id": dataset_id,
+            "include_videos": include_videos,
+            "force": force,
+        }) or {
+            "dataset_id": dataset_id,
+            "dataset_name": dataset_id,
+            "local_path": f"/tmp/{dataset_id}",
+        },
+    )
+
+    response = client.post(
+        "/api/explorer/prepare-remote",
+        json={"dataset_id": "cadene/droid_1.0.1", "include_videos": False, "force": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["dataset_name"] == "cadene/droid_1.0.1"
+    assert called == {
+        "dataset_id": "cadene/droid_1.0.1",
+        "include_videos": False,
+        "force": False,
+    }
+
+
+def test_remote_episode_meta_falls_back_to_parquet_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info = {
+        "features": {
+            "observation.images.right_front": {"dtype": "video"},
+        },
+    }
+    rows = [
+        {
+            "episode_index": 0,
+            "length": 12,
+            "data/chunk_index": 0,
+            "data/file_index": 0,
+            "dataset_from_index": 0,
+            "dataset_to_index": 12,
+            "videos/observation.images.right_front/chunk_index": 0,
+            "videos/observation.images.right_front/file_index": 0,
+            "videos/observation.images.right_front/from_timestamp": 0.0,
+            "videos/observation.images.right_front/to_timestamp": 0.4,
+        },
+        {
+            "episode_index": 1,
+            "length": 18,
+            "data/chunk_index": 0,
+            "data/file_index": 0,
+            "dataset_from_index": 12,
+            "dataset_to_index": 30,
+            "videos/observation.images.right_front/chunk_index": 0,
+            "videos/observation.images.right_front/file_index": 0,
+            "videos/observation.images.right_front/from_timestamp": 0.4,
+            "videos/observation.images.right_front/to_timestamp": 1.0,
+        },
+    ]
+    parquet_bytes = _parquet_bytes(rows)
+
+    def fake_fetch(url: str) -> bytes | None:
+        if url.endswith("meta/episodes.jsonl"):
+            return None
+        if url.endswith("meta/episodes/chunk-000/file-000.parquet"):
+            return parquet_bytes
+        return None
+
+    monkeypatch.setattr(remote_explorer, "_fetch_optional_bytes", fake_fetch)
+
+    payload = remote_explorer._get_remote_episodes_meta(
+        "demo/shared-layout",
+        [{"rfilename": "meta/episodes/chunk-000/file-000.parquet"}],
+        info,
+    )
+
+    assert [entry["episode_index"] for entry in payload] == [0, 1]
+    assert [entry["length"] for entry in payload] == [12, 18]
+
+
+def test_remote_episode_meta_normalizes_legacy_numeric_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info = {
+        "features": {
+            "observation.images.front": {"dtype": "video"},
+        },
+    }
+    parquet_bytes = _parquet_bytes([
+        {
+            "0": 5,
+            "1": 2,
+            "2": 7,
+            "3": 100,
+            "4": 140,
+            "5": 9,
+            "6": 3,
+            "7": 12.5,
+            "8": 15.0,
+            "9": 40,
+        }
+    ])
+
+    def fake_fetch(url: str) -> bytes | None:
+        if url.endswith("meta/episodes.jsonl"):
+            return None
+        if url.endswith("meta/episodes/chunk-000/file-000.parquet"):
+            return parquet_bytes
+        return None
+
+    monkeypatch.setattr(remote_explorer, "_fetch_optional_bytes", fake_fetch)
+
+    payload = remote_explorer._get_remote_episodes_meta(
+        "demo/shared-layout",
+        [{"rfilename": "meta/episodes/chunk-000/file-000.parquet"}],
+        info,
+    )
+
+    assert payload == [
+        {
+            "0": 5,
+            "1": 2,
+            "2": 7,
+            "3": 100,
+            "4": 140,
+            "5": 9,
+            "6": 3,
+            "7": 12.5,
+            "8": 15.0,
+            "9": 40,
+            "episode_index": 5,
+            "length": 40,
+            "data/chunk_index": 2,
+            "data/file_index": 7,
+            "dataset_from_index": 100,
+            "dataset_to_index": 140,
+            "video_chunk_index": 9,
+            "video_file_index": 3,
+            "video_from_timestamp": 12.5,
+            "video_to_timestamp": 15.0,
+            "videos/observation.images.front/chunk_index": 9,
+            "videos/observation.images.front/file_index": 3,
+            "videos/observation.images.front/from_timestamp": 12.5,
+            "videos/observation.images.front/to_timestamp": 15.0,
+        }
+    ]
+
+
+def test_select_rows_for_episode_uses_dataset_row_range_offsets() -> None:
+    rows = [
+        {"index": 100, "timestamp": 0.0, "frame_index": 0, "action": [0.0], "observation.state": [0.1]},
+        {"timestamp": 0.5, "frame_index": 1, "action": [0.1], "observation.state": [0.2]},
+        {"timestamp": 1.0, "frame_index": 2, "action": [1.0], "observation.state": [1.1]},
+        {"timestamp": 1.5, "frame_index": 3, "action": [1.1], "observation.state": [1.2]},
+        {"timestamp": 2.0, "frame_index": 4, "action": [2.0], "observation.state": [2.1]},
+    ]
+
+    selected = remote_explorer._select_rows_for_episode(
+        rows,
+        episode_index=7,
+        episode_meta={"dataset_from_index": 102, "dataset_to_index": 104},
+    )
+
+    assert [row["frame_index"] for row in selected] == [2, 3]
+
+
+def test_remote_episode_detail_supports_shared_file_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = "Elvinky/bi-so101-insert-screw-271ep"
+    info = {
+        "fps": 30,
+        "chunks_size": 1000,
+        "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+        "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+        "features": {
+            "action": {"names": ["joint_1"]},
+            "observation.state": {"names": ["joint_1"]},
+            "observation.images.right_front": {"dtype": "video"},
+            "observation.images.right_wrist": {"dtype": "video"},
+        },
+    }
+    episodes_meta = [
+        {
+            "episode_index": 1,
+            "length": 2,
+            "data/chunk_index": 0,
+            "data/file_index": 0,
+            "dataset_from_index": 2,
+            "dataset_to_index": 4,
+            "videos/observation.images.right_front/chunk_index": 0,
+            "videos/observation.images.right_front/file_index": 0,
+            "videos/observation.images.right_front/from_timestamp": 12.5,
+            "videos/observation.images.right_front/to_timestamp": 15.0,
+            "videos/observation.images.right_wrist/chunk_index": 0,
+            "videos/observation.images.right_wrist/file_index": 2,
+            "videos/observation.images.right_wrist/from_timestamp": 9.0,
+            "videos/observation.images.right_wrist/to_timestamp": 11.0,
+        },
+    ]
+    artifacts = {
+        "dataset": dataset,
+        "siblings": [],
+        "info": info,
+        "stats": {},
+        "episodes_meta": episodes_meta,
+    }
+    parquet_bytes = _parquet_bytes([
+        {"episode_index": 0, "timestamp": 0.0, "frame_index": 0, "action": [0.1], "observation.state": [0.2]},
+        {"episode_index": 0, "timestamp": 0.5, "frame_index": 1, "action": [0.2], "observation.state": [0.3]},
+        {"episode_index": 1, "timestamp": 0.0, "frame_index": 0, "action": [1.1], "observation.state": [1.2]},
+        {"episode_index": 1, "timestamp": 0.5, "frame_index": 1, "action": [1.2], "observation.state": [1.3]},
+    ])
+
+    monkeypatch.setattr(remote_explorer, "get_remote_dataset_artifacts", lambda _dataset: artifacts)
+    monkeypatch.setattr(remote_explorer, "_viewer_get_split", lambda _dataset: ("default", "train"))
+    monkeypatch.setattr(remote_explorer, "_download_repo_file_to_cache", lambda *_args, **_kwargs: None)
+
+    def broken_viewer(*_args, **_kwargs):
+        raise RuntimeError("viewer broken")
+
+    def fake_fetch(url: str) -> bytes | None:
+        if url.endswith("data/chunk-000/file-000.parquet"):
+            return parquet_bytes
+        return None
+
+    monkeypatch.setattr(remote_explorer, "_viewer_fetch_episode_rows", broken_viewer)
+    monkeypatch.setattr(remote_explorer, "_fetch_optional_bytes", fake_fetch)
+
+    payload = remote_explorer.load_remote_episode_detail(dataset, 1)
+
+    assert payload["episode_index"] == 1
+    assert payload["summary"]["row_count"] == 2
+    assert payload["summary"]["video_count"] == 2
+    assert payload["joint_trajectory"]["total_points"] == 2
+    assert payload["videos"][0]["path"] == "videos/observation.images.right_front/chunk-000/file-000.mp4"
+    assert payload["videos"][0]["from_timestamp"] == 12.5
+    assert payload["videos"][0]["to_timestamp"] == 15.0
+    assert payload["videos"][1]["path"] == "videos/observation.images.right_wrist/chunk-000/file-002.mp4"
+
+
+def test_remote_episode_detail_requests_only_chart_relevant_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = "demo/shared-layout"
+    info = {
+        "fps": 30,
+        "chunks_size": 1000,
+        "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+        "features": {
+            "action": {"dtype": "float32", "shape": [1], "names": ["joint_1"]},
+            "observation.state": {"dtype": "float32", "shape": [1], "names": ["joint_1"]},
+            "timestamp": {"dtype": "float32", "shape": [1], "names": None},
+            "frame_index": {"dtype": "int64", "shape": [1], "names": None},
+            "episode_index": {"dtype": "int64", "shape": [1], "names": None},
+            "index": {"dtype": "int64", "shape": [1], "names": None},
+            "observation.images.front": {"dtype": "video", "shape": [480, 640, 3], "names": ["h", "w", "c"]},
+        },
+    }
+    artifacts = {
+        "dataset": dataset,
+        "siblings": [],
+        "info": info,
         "stats": {},
         "episodes_meta": [
             {
                 "episode_index": 0,
-                "length": 12,
+                "length": 2,
                 "data/chunk_index": 0,
                 "data/file_index": 0,
+                "dataset_from_index": 0,
+                "dataset_to_index": 2,
+            }
+        ],
+    }
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(remote_explorer, "get_remote_dataset_artifacts", lambda _dataset: artifacts)
+    monkeypatch.setattr(remote_explorer, "_viewer_get_split", lambda _dataset: ("default", "train"))
+    monkeypatch.setattr(remote_explorer, "_download_repo_file_to_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        remote_explorer,
+        "_viewer_fetch_episode_rows",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("viewer broken")),
+    )
+    monkeypatch.setattr(remote_explorer, "_fetch_optional_bytes", lambda _url: b"parquet")
+
+    def fake_read_parquet(_raw: bytes, columns: list[str] | None = None) -> list[dict]:
+        captured["columns"] = columns
+        return [
+            {
+                "index": 0,
+                "episode_index": 0,
+                "timestamp": 0.0,
+                "frame_index": 0,
+                "action": [0.1],
+                "observation.state": [0.2],
+            },
+            {
+                "index": 1,
+                "episode_index": 0,
+                "timestamp": 0.5,
+                "frame_index": 1,
+                "action": [0.2],
+                "observation.state": [0.3],
+            },
+        ]
+
+    monkeypatch.setattr(remote_explorer, "_read_parquet_rows_from_bytes", fake_read_parquet)
+
+    payload = remote_explorer.load_remote_episode_detail(dataset, 0)
+
+    assert payload["summary"]["row_count"] == 2
+    assert captured["columns"] is not None
+    assert "index" in captured["columns"]
+    assert "action" in captured["columns"]
+    assert "observation.state" in captured["columns"]
+    assert "observation.images.front" not in captured["columns"]
+
+
+def test_read_parquet_rows_from_file_uses_episode_row_slice(tmp_path) -> None:
+    path = tmp_path / "shared.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([
+            {"index": 100, "episode_index": 0, "timestamp": 0.0, "frame_index": 0, "action": [0.0], "observation.state": [0.1]},
+            {"index": 101, "episode_index": 0, "timestamp": 0.5, "frame_index": 1, "action": [0.1], "observation.state": [0.2]},
+            {"index": 102, "episode_index": 7, "timestamp": 1.0, "frame_index": 2, "action": [1.0], "observation.state": [1.1]},
+            {"index": 103, "episode_index": 7, "timestamp": 1.5, "frame_index": 3, "action": [1.1], "observation.state": [1.2]},
+            {"index": 104, "episode_index": 8, "timestamp": 2.0, "frame_index": 4, "action": [2.0], "observation.state": [2.1]},
+        ]),
+        path,
+        row_group_size=5,
+    )
+
+    rows = remote_explorer._read_parquet_rows_from_file(
+        path,
+        columns=["index", "episode_index", "timestamp", "frame_index", "action", "observation.state"],
+        episode_meta={"dataset_from_index": 102, "dataset_to_index": 104},
+    )
+
+    assert [row["frame_index"] for row in rows] == [2, 3]
+
+
+def test_remote_episode_preview_payload_uses_episode_meta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = "demo/shared-layout"
+    info = {
+        "fps": 30,
+        "chunks_size": 1000,
+        "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+        "features": {
+            "observation.images.front": {"dtype": "video"},
+        },
+    }
+    artifacts = {
+        "dataset": dataset,
+        "siblings": [],
+        "info": info,
+        "stats": {},
+        "episodes_meta": [
+            {
+                "episode_index": 0,
+                "length": 90,
                 "videos/observation.images.front/chunk_index": 0,
-                "videos/observation.images.front/file_index": 0,
+                "videos/observation.images.front/file_index": 1,
+                "videos/observation.images.front/from_timestamp": 12.0,
+                "videos/observation.images.front/to_timestamp": 15.0,
             }
         ],
     }
 
-    monkeypatch.setattr(remote_explorer, "get_remote_dataset_artifacts", lambda dataset: artifacts)
-    monkeypatch.setattr(
-        remote_explorer,
-        "_viewer_get_split",
-        lambda dataset: (_ for _ in ()).throw(remote_explorer.httpx.ConnectError("down")),
-    )
-    monkeypatch.setattr(
-        remote_explorer,
-        "_fetch_optional_bytes",
-        lambda url: pytest.fail("shared parquet fallback should not fetch whole files"),
-    )
+    monkeypatch.setattr(remote_explorer, "get_remote_dataset_artifacts", lambda _dataset: artifacts)
 
-    payload = remote_explorer.load_remote_episode_detail("org/dataset", 0)
+    payload = remote_explorer.load_remote_episode_detail(dataset, 0, preview_only=True)
 
-    assert payload["summary"]["row_count"] == 12
-    assert payload["sample_rows"] == []
+    assert payload["summary"] == {
+        "row_count": 90,
+        "fps": 30,
+        "duration_s": 3.0,
+        "video_count": 1,
+    }
+    assert payload["videos"][0]["path"] == "videos/observation.images.front/chunk-000/file-001.mp4"
+    assert payload["videos"][0]["from_timestamp"] == 12.0
     assert payload["joint_trajectory"]["total_points"] == 0

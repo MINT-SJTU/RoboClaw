@@ -11,10 +11,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from fastapi import HTTPException
 from loguru import logger
 
 from roboclaw.data.curation.features import extract_action_names, extract_state_names
 from roboclaw.data.curation.paths import datasets_root
+from roboclaw.data.dataset_sessions import (
+    get_dataset_summary,
+    is_session_handle,
+    resolve_dataset_handle_or_workspace,
+)
 
 DatasetKind = Literal["local", "remote"]
 ImportStatus = Literal["queued", "running", "completed", "error"]
@@ -29,10 +35,42 @@ __all__ = [
     "DatasetRuntimeRef",
     "DatasetStats",
     "datasets_root_from_manifest",
+    "delete_dataset",
     "extract_action_names",
     "extract_state_names",
+    "get_dataset_info",
+    "list_datasets",
+    "resolve_dataset_path",
     "validate_dataset_slug",
 ]
+
+
+def resolve_dataset_path(name: str) -> Path:
+    """Resolve a dataset name to its full path on disk."""
+    if is_session_handle(name):
+        return resolve_dataset_handle_or_workspace(name)
+
+    root = datasets_root()
+    if not root.exists():
+        raise HTTPException(status_code=404, detail=f"Datasets root '{root}' does not exist")
+    resolved_root = root.resolve()
+
+    def _is_safe(path: Path) -> bool:
+        rp = path.resolve()
+        return rp.is_dir() and str(rp).startswith(str(resolved_root) + "/")
+
+    direct = root / name
+    if _is_safe(direct):
+        return direct.resolve()
+
+    for parent in root.iterdir():
+        if not parent.is_dir():
+            continue
+        candidate = parent / name
+        if _is_safe(candidate):
+            return candidate.resolve()
+
+    raise HTTPException(status_code=404, detail=f"Dataset '{name}' not found")
 
 
 def validate_dataset_slug(slug: str) -> None:
@@ -491,3 +529,61 @@ class DatasetCatalog:
             can_push=True,
             can_curate=True,
         )
+
+
+def list_datasets(root: Path) -> list[dict[str, Any]]:
+    """Return list-style dataset summaries for legacy HTTP routes/tests."""
+    catalog = DatasetCatalog(root_resolver=lambda: root)
+    return [ref.to_dict() for ref in catalog.list_local_datasets()]
+
+
+def get_dataset_info(root: Path, name: str) -> dict[str, Any] | None:
+    """Return a single dataset summary compatible with legacy HTTP routes/tests."""
+    if is_session_handle(name):
+        try:
+            summary = get_dataset_summary(name)
+        except FileNotFoundError:
+            return None
+        return {
+            "id": summary["name"],
+            "label": summary.get("display_name") or summary["name"],
+            "name": summary["name"],
+            "display_name": summary.get("display_name"),
+            "source_kind": summary.get("source_kind"),
+            "kind": "local",
+            "slug": summary["name"].split("/")[-1],
+            "source_dataset": summary.get("source_dataset") or summary["name"],
+            "stats": {
+                "total_episodes": summary.get("total_episodes", 0),
+                "total_frames": summary.get("total_frames", 0),
+                "fps": summary.get("fps", 0),
+                "robot_type": summary.get("robot_type", ""),
+                "features": summary.get("features", []),
+                "episode_lengths": summary.get("episode_lengths", []),
+            },
+            "capabilities": {
+                "can_replay": False,
+                "can_train": False,
+                "can_delete": False,
+                "can_push": False,
+                "can_pull": False,
+                "can_curate": True,
+            },
+            "runtime": None,
+        }
+
+    catalog = DatasetCatalog(root_resolver=lambda: root)
+    try:
+        ref = catalog.require_local_dataset(name)
+    except ValueError:
+        return None
+    payload = ref.to_dict()
+    payload["name"] = ref.id
+    payload["display_name"] = ref.label
+    payload["source_kind"] = "workspace"
+    return payload
+
+
+def delete_dataset(root: Path, name: str) -> None:
+    """Delete a dataset directory. Raises ValueError if it does not exist."""
+    DatasetCatalog(root_resolver=lambda: root).delete_dataset(name)

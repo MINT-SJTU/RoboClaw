@@ -8,7 +8,6 @@ from math import ceil
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Feature shape / component extraction
 # ---------------------------------------------------------------------------
