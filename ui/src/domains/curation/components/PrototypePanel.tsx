@@ -84,6 +84,15 @@ export default function PrototypePanel({ compact = false }: { compact?: boolean 
     typeof runningSummary?.distance_pair_count === 'number'
       ? runningSummary.distance_pair_count
       : prototypeResults?.distance_pair_count
+  const distanceMetric = primaryGroup?.distance_metric
+    || (typeof prototypeResults?.distance_backend_detail?.distance_metric === 'string'
+      ? prototypeResults.distance_backend_detail.distance_metric
+      : undefined)
+  const distanceMetricLabel = distanceMetric === 'grouped_huber_window_dtw'
+    ? t('semanticGroupedDtw')
+    : distanceMetric === 'mixed_dtw'
+      ? t('mixedDtw')
+    : t('plainDtw')
 
   return (
     <div className={compact ? 'prototype-panel prototype-panel--compact' : 'prototype-panel'}>
@@ -141,6 +150,14 @@ export default function PrototypePanel({ compact = false }: { compact?: boolean 
                 <span className="prototype-panel__summary-value">
                   {distanceBackend.toUpperCase()}
                   {typeof distancePairCount === 'number' ? ` · ${distancePairCount}` : ''}
+                </span>
+              </div>
+            )}
+            {distanceMetric && (
+              <div className="prototype-panel__summary-item">
+                <span className="prototype-panel__stat-label">{t('dtwMetric')}</span>
+                <span className="prototype-panel__summary-value">
+                  {distanceMetricLabel}
                 </span>
               </div>
             )}

@@ -178,6 +178,10 @@ def _group_summary(
         "selection_mode": str(clustering.get("selection_mode") or ""),
         "distance_pair_count": int(clustering.get("distance_pair_count", 0) or 0),
         "distance_backend": str(clustering.get("distance_backend") or "cpu"),
+        "distance_metric": str(
+            (clustering.get("distance_backend_detail") or {}).get("distance_metric")
+            or "euclidean_dtw"
+        ),
         "selection_diagnostics": clustering.get("selection_diagnostics"),
     }
 

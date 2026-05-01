@@ -7,8 +7,13 @@ import pytest
 
 from roboclaw.data.curation.dtw import (
     CARTESIAN_20D_GROUP_WEIGHTS,
+    JOINT_CANONICAL_GROUP_WEIGHTS,
+    _cuda_resolve_window_sizes,
+    _resolve_dtw_window,
+    build_distance_matrix_with_progress_and_stats,
     dtw_alignment,
     dtw_distance,
+    resolve_dtw_configuration,
 )
 from roboclaw.data.curation.propagation import propagate_annotation_spans
 from roboclaw.data.curation.validators import safe_float, validate_action
@@ -41,9 +46,115 @@ def test_cuda_dtw_alignment_matches_cpu_when_available() -> None:
     assert gpu_path[-1] == cpu_path[-1]
 
 
+def test_cuda_grouped_window_dtw_matches_cpu_when_available() -> None:
+    left = [[0.0, 0.0, 0.0], [0.5, 0.1, 0.0], [1.0, 0.2, 0.5]]
+    right = [[0.0, 0.0, 0.0], [0.4, 0.1, 0.0], [0.6, 0.1, 0.2], [1.0, 0.2, 0.5]]
+    config = {
+        "groups": {"left_arm": [0, 1], "left_gripper": [2]},
+        "group_weights": JOINT_CANONICAL_GROUP_WEIGHTS,
+        "window_ratio": 0.5,
+        "huber_delta": 1.0,
+    }
+
+    os.environ["ROBOCLAW_DTW_BACKEND"] = "cpu"
+    cpu_distance, cpu_path = dtw_alignment(left, right, **config)
+    os.environ.pop("ROBOCLAW_DTW_BACKEND", None)
+    gpu_distance, gpu_path = dtw_alignment(left, right, **config)
+
+    assert gpu_distance == pytest.approx(cpu_distance, abs=1e-5)
+    assert gpu_path[0] == cpu_path[0]
+    assert gpu_path[-1] == cpu_path[-1]
+
+
+def test_cuda_dtw_window_size_matches_cpu_when_available() -> None:
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    left_lengths = torch.tensor([100], device="cuda")
+    right_lengths = torch.tensor([100], device="cuda")
+
+    window_sizes = _cuda_resolve_window_sizes(
+        left_lengths,
+        right_lengths,
+        window_ratio=0.15,
+    )
+
+    assert int(window_sizes.cpu()[0]) == _resolve_dtw_window(100, 100, 0.15)
+
+
 def test_cartesian_20d_group_weights_match_documented_defaults() -> None:
     assert CARTESIAN_20D_GROUP_WEIGHTS["eef_rot6d"] == 0.7
     assert CARTESIAN_20D_GROUP_WEIGHTS["gripper"] == 1.2
+
+
+def test_joint_canonical_resolves_semantic_dtw_configuration() -> None:
+    groups = {"left_arm": [0, 1, 2, 3, 4], "left_gripper": [5]}
+
+    config = resolve_dtw_configuration(
+        left_mode="joint_canonical",
+        right_mode="joint_canonical",
+        left_groups=groups,
+        right_groups=groups,
+    )
+
+    assert config["groups"] == groups
+    assert config["group_weights"]["left_gripper"] == 1.2
+    assert config["window_ratio"] == 0.15
+
+
+def test_joint_canonical_distance_matrix_records_semantic_metric() -> None:
+    groups = {"left_arm": [0, 1], "left_gripper": [2]}
+    entries = [
+        {
+            "record_key": "a",
+            "canonical_mode": "joint_canonical",
+            "canonical_groups": groups,
+            "sequence": [[0.0, 0.0, 0.0], [1.0, 0.1, 0.4]],
+        },
+        {
+            "record_key": "b",
+            "canonical_mode": "joint_canonical",
+            "canonical_groups": groups,
+            "sequence": [[0.0, 0.0, 0.0], [1.1, 0.1, 0.5]],
+        },
+    ]
+
+    _distances, total_pairs, stats = build_distance_matrix_with_progress_and_stats(entries)
+
+    assert total_pairs == 1
+    assert stats["semantic_pair_count"] == 1
+    assert stats["distance_metric"] == "grouped_huber_window_dtw"
+
+
+def test_distance_matrix_records_mixed_metric_for_partial_semantic_pairs() -> None:
+    groups = {"left_arm": [0]}
+    entries = [
+        {
+            "record_key": "a",
+            "canonical_mode": "joint_canonical",
+            "canonical_groups": groups,
+            "sequence": [[0.0], [1.0]],
+        },
+        {
+            "record_key": "b",
+            "canonical_mode": "joint_canonical",
+            "canonical_groups": groups,
+            "sequence": [[0.0], [1.1]],
+        },
+        {
+            "record_key": "c",
+            "canonical_mode": "unknown",
+            "canonical_groups": {},
+            "sequence": [[0.0], [2.0]],
+        },
+    ]
+
+    _distances, total_pairs, stats = build_distance_matrix_with_progress_and_stats(entries)
+
+    assert total_pairs == 3
+    assert stats["semantic_pair_count"] == 1
+    assert stats["distance_metric"] == "mixed_dtw"
 
 
 def test_propagation_falls_back_to_duration_scaling_for_empty_dtw() -> None:

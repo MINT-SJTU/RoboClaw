@@ -255,6 +255,7 @@ def _serialize_prototype_groups(groups: list[dict[str, Any]]) -> list[dict[str, 
             "selection_mode": str(group.get("selection_mode") or ""),
             "distance_pair_count": int(group.get("distance_pair_count", 0) or 0),
             "distance_backend": str(group.get("distance_backend") or "cpu"),
+            "distance_metric": str(group.get("distance_metric") or "euclidean_dtw"),
             "selection_diagnostics": _serialize_selection_diagnostics(
                 group.get("selection_diagnostics"),
             ),

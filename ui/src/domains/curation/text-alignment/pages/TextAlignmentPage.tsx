@@ -45,7 +45,12 @@ export default function TextAlignmentView() {
     propagationResults,
     applyTextAnnotationsToTrainingTasks,
     publishTextAnnotationsParquet,
+    loadDatasets,
+    datasets,
+    datasetsLoading,
     selectDataset,
+    loadPrototypeResults,
+    loadPropagationResults,
     stopPolling,
     alignmentSourceMode,
     setAlignmentSourceMode,
@@ -63,10 +68,28 @@ export default function TextAlignmentView() {
   }, [stopPolling])
 
   useEffect(() => {
+    if (!selectedDataset && !datasetsLoading && datasets.length === 0) {
+      void loadDatasets()
+    }
+  }, [selectedDataset, datasetsLoading, datasets.length, loadDatasets])
+
+  useEffect(() => {
+    if (!selectedDataset && !datasetsLoading && datasets.length === 1) {
+      void selectDataset(datasets[0].id)
+    }
+  }, [selectedDataset, datasetsLoading, datasets, selectDataset])
+
+  useEffect(() => {
     if (selectedDataset && !datasetInfo) {
       void selectDataset(selectedDataset)
     }
   }, [selectedDataset, datasetInfo, selectDataset])
+
+  useEffect(() => {
+    if (!selectedDataset) return
+    void loadPrototypeResults()
+    void loadPropagationResults()
+  }, [selectedDataset, loadPrototypeResults, loadPropagationResults])
 
   async function handlePublish(): Promise<void> {
     setPublishing(true)

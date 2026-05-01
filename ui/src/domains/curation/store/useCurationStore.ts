@@ -131,6 +131,7 @@ export interface PrototypeGroupSummary {
   selection_mode: string
   distance_pair_count: number
   distance_backend: string
+  distance_metric?: string
   selection_diagnostics?: PrototypeSelectionDiagnostics | null
 }
 
