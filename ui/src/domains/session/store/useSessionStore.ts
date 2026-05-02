@@ -19,7 +19,16 @@ export type SessionState =
   | 'stopping'
   | 'error'
 
-export type EpisodePhase = '' | 'recording' | 'saving' | 'resetting' | 'stopping' | 'discarding'
+export type RecordPhase =
+  | 'idle'
+  | 'preparing'
+  | 'recording'
+  | 'save_requested'
+  | 'discard_requested'
+  | 'resetting'
+  | 'skip_reset_requested'
+  | 'stopping'
+  | 'error'
 export type SessionLoading =
   | 'teleop'
   | 'teleop-stop'
@@ -42,7 +51,8 @@ export interface CalibrationBatchItem {
 
 export interface SessionStatus {
   state: SessionState
-  episode_phase: EpisodePhase
+  record_phase: RecordPhase
+  record_pending_command: string
   saved_episodes: number
   current_episode: number
   target_episodes: number
@@ -104,7 +114,8 @@ interface SessionStore {
 
 const defaultSession: SessionStatus = {
   state: 'idle',
-  episode_phase: '',
+  record_phase: 'idle',
+  record_pending_command: '',
   saved_episodes: 0,
   current_episode: 0,
   target_episodes: 0,
@@ -205,7 +216,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       set({
         session: {
           state: event.state || 'idle',
-          episode_phase: event.episode_phase || '',
+          record_phase: event.record_phase || 'idle',
+          record_pending_command: event.record_pending_command || '',
           saved_episodes: event.saved_episodes ?? 0,
           current_episode: event.current_episode ?? 0,
           target_episodes: event.target_episodes ?? 0,

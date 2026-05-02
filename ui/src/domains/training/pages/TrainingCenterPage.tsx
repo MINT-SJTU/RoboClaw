@@ -5,6 +5,7 @@ import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
 import type { TrainingCapabilities, TrainingPresetCapability, TrainingStatusData } from '@/domains/training/store/useTrainingStore'
 import { useHubTransferStore } from '@/domains/hub/store/useHubTransferStore'
 import { LossCurvePanel } from '@/domains/training/components/LossCurvePanel'
+import { TrainingProgressPanel } from '@/domains/training/components/TrainingProgressPanel'
 import { useI18n } from '@/i18n'
 
 const TRAINING_LOCATIONS = ['current_machine', 'remote_backend'] as const
@@ -762,6 +763,8 @@ export default function TrainingCenterPage() {
             </div>
           )}
         </section>
+
+        <TrainingProgressPanel />
       </div>
     </div>
   )

@@ -36,13 +36,12 @@ if "roboclaw.embodied.embodiment.doctor" not in sys.modules:
     doctor_mod.DoctorService = DoctorService
     sys.modules["roboclaw.embodied.embodiment.doctor"] = doctor_mod
 
-from roboclaw.embodied.embodiment.lock import EmbodimentFileLock
 from roboclaw.embodied.embodiment.hardware.monitor import ArmStatus, CameraStatus
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
+from roboclaw.embodied.embodiment.lock import EmbodimentFileLock
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.service import EmbodiedService
-
 
 _MANIFEST_DATA = {
     "version": 2,
@@ -128,6 +127,30 @@ def _write_runtime_dataset(root: Path, name: str) -> None:
     )
 
 
+def _write_policy_checkpoint(root: Path, name: str) -> Path:
+    checkpoint = root / name
+    checkpoint.mkdir(parents=True, exist_ok=True)
+    (checkpoint / "config.json").write_text("{}", encoding="utf-8")
+    (checkpoint / "model.safetensors").write_bytes(b"")
+    return checkpoint
+
+
+def _infer_argv(tmp_path: Path, checkpoint: Path, *, num_episodes: int = 1) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "roboclaw.embodied.command.wrapper",
+        "record",
+        "--robot.type=so101_follower",
+        '--robot.cameras={"wrist": {"type": "opencv"}}',
+        f"--policy.path={checkpoint}",
+        "--dataset.repo_id=local/eval",
+        f"--dataset.root={tmp_path / 'datasets' / 'local' / 'eval'}",
+        f"--dataset.num_episodes={num_episodes}",
+        "--dataset.episode_time_s=60",
+    ]
+
+
 def _single_follower_status() -> list[ArmStatus]:
     return [ArmStatus("follower", "so101_follower", "follower", True, True)]
 
@@ -188,11 +211,13 @@ async def test_run_inference_waits_for_process_completion_without_tty(tmp_path: 
     _bind_infer_setup(service)
     service.infer = ControlledSession(service.board, "Inference finished.")
     run_inference = getattr(service, "run_inference")
+    checkpoint = _write_policy_checkpoint(tmp_path / "policies", "act")
+    infer_argv = _infer_argv(tmp_path, checkpoint, num_episodes=3)
 
     with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
         "roboclaw.embodied.service.check_camera_status",
         return_value=CameraStatus("wrist", True, 640, 480),
-    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
+    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=infer_argv):
         task = asyncio.create_task(run_inference(checkpoint_path="/models/act", num_episodes=3))
         await asyncio.wait_for(service.infer.started.wait(), timeout=1)
 
@@ -204,7 +229,7 @@ async def test_run_inference_waits_for_process_completion_without_tty(tmp_path: 
         result = await asyncio.wait_for(task, timeout=1)
 
     assert result == "Inference finished."
-    assert service.infer.argv == ["infer-cmd"]
+    assert service.infer.argv == infer_argv
     assert not service.busy
     assert not service.embodiment_busy
     assert service._active_session is None
@@ -271,11 +296,13 @@ async def test_start_inference_releases_lock_on_session_start_failure(tmp_path: 
     service = _make_service(tmp_path)
     _bind_infer_setup(service)
     service.infer = FailingSession()
+    checkpoint = _write_policy_checkpoint(tmp_path / "policies", "act")
+    infer_argv = _infer_argv(tmp_path, checkpoint)
 
     with patch("roboclaw.embodied.service.check_arm_status", side_effect=_single_follower_status()), patch(
         "roboclaw.embodied.service.check_camera_status",
         return_value=CameraStatus("wrist", True, 640, 480),
-    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=["infer-cmd"]):
+    ), patch("roboclaw.embodied.service.CommandBuilder.infer", return_value=infer_argv):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_inference(checkpoint_path="/models/act")
 

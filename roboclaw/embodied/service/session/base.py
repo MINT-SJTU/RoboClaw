@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from roboclaw.embodied.board import Board, EpisodePhase, InputConsumer, OutputConsumer, SessionState
+from roboclaw.embodied.board import Board, InputConsumer, OutputConsumer, SessionState
 from roboclaw.embodied.executor import SubprocessExecutor
 
 if TYPE_CHECKING:
@@ -54,6 +54,10 @@ class Session:
         """Override to provide operation-specific key mappings."""
         return InputConsumer(board, stdin)
 
+    def _initial_board_fields(self) -> dict[str, Any]:
+        """Return session-specific state fields applied after board.reset()."""
+        return {}
+
     # -- Lifecycle ---------------------------------------------------------
 
     async def start(
@@ -65,7 +69,11 @@ class Session:
         self._stopped = False
         owner = self.board.get("embodiment_owner", "")
         self.board.reset()
-        await self.board.update(state=initial_state, embodiment_owner=owner)
+        await self.board.update(
+            state=initial_state,
+            embodiment_owner=owner,
+            **self._initial_board_fields(),
+        )
         try:
             # Launch interactive subprocess (stdin piped, stderr merged into stdout)
             self._process = await self._runner.run_streaming_interactive(argv)
@@ -217,16 +225,13 @@ class Session:
         if state in (SessionState.IDLE, SessionState.ERROR, SessionState.STOPPING):
             return
 
-        fields: dict[str, Any] = {"state": SessionState.STOPPING}
-        phase = self.board.get("episode_phase", "")
-        if state == SessionState.RECORDING and phase not in (EpisodePhase.SAVING, EpisodePhase.RESETTING):
-            fields["episode_phase"] = EpisodePhase.STOPPING
-        await self.board.update(**fields)
+        await self.board.update(state=SessionState.STOPPING)
 
     def _idle_fields(self) -> dict[str, Any]:
         return {
             "state": SessionState.IDLE,
-            "episode_phase": "",
+            "record_phase": "idle",
+            "record_pending_command": "",
             "prepare_stage": "",
         }
 

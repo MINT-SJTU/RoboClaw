@@ -1346,7 +1346,7 @@ wheels = [
 [[package]]
 name = "lerobot"
 version = "0.5.1"
-source = { directory = "roboclaw/embodied/engine" }
+source = { editable = "roboclaw/embodied/engine" }
 dependencies = [
     { name = "accelerate" },
     { name = "av" },
@@ -3469,7 +3469,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.57.0,<1.0.0" },
     { name = "langsmith", marker = "extra == 'langsmith'", specifier = ">=0.1.0" },
     { name = "lark-oapi", specifier = ">=1.5.0,<2.0.0" },
-    { name = "lerobot", extras = ["feetech", "dynamixel", "pi"], directory = "roboclaw/embodied/engine" },
+    { name = "lerobot", extras = ["feetech", "dynamixel", "pi"], editable = "roboclaw/embodied/engine" },
     { name = "litellm", specifier = ">=1.82.1,<2.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
     { name = "matrix-nio", extras = ["e2e"], marker = "extra == 'matrix'", specifier = ">=0.25.2" },

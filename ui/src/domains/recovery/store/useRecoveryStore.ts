@@ -1,6 +1,5 @@
 import { create } from 'zustand'
-import { api, postJson } from '@/shared/api/client'
-import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
+import { postJson } from '@/shared/api/client'
 
 const RECOVERY = '/api/recovery'
 const RUNTIME_INFO = '/api/system/runtime-info'
@@ -12,21 +11,13 @@ export interface RecoveryFault {
   timestamp: number
 }
 
-export interface RecoveryGuide {
-  can_recheck: boolean
-  step_count: number
-}
-
 interface RecoveryStore {
   faults: RecoveryFault[]
-  guides: Record<string, RecoveryGuide> | null
-  rechecking: boolean
+  hasCheckedHardware: boolean
+  checkingHardware: boolean
   restarting: boolean
-  fetchFaults: () => Promise<void>
-  fetchGuides: () => Promise<void>
-  recheckHardware: () => Promise<RecoveryFault[]>
+  checkHardware: () => Promise<void>
   restartDashboard: () => Promise<void>
-  handleDashboardEvent: (event: any) => void
 }
 
 async function waitForDashboardRecovery(timeoutMs: number = 30000): Promise<void> {
@@ -48,29 +39,20 @@ async function waitForDashboardRecovery(timeoutMs: number = 30000): Promise<void
 
 export const useRecoveryStore = create<RecoveryStore>((set) => ({
   faults: [],
-  guides: null,
-  rechecking: false,
+  hasCheckedHardware: false,
+  checkingHardware: false,
   restarting: false,
 
-  fetchFaults: async () => {
-    const data = await api(`${RECOVERY}/faults`)
-    set({ faults: Array.isArray(data.faults) ? data.faults : [] })
-  },
-
-  fetchGuides: async () => {
-    set({ guides: await api(`${RECOVERY}/guides`) })
-  },
-
-  recheckHardware: async () => {
-    set({ rechecking: true })
+  checkHardware: async () => {
+    set({ checkingHardware: true })
     try {
-      const data = await postJson(`${RECOVERY}/recheck`)
-      const faults = Array.isArray(data.faults) ? data.faults : []
-      set({ faults })
-      await useHardwareStore.getState().fetchHardwareStatus()
-      return faults
+      const data = await postJson(`${RECOVERY}/check-hardware`)
+      set({
+        faults: Array.isArray(data.faults) ? data.faults : [],
+        hasCheckedHardware: true,
+      })
     } finally {
-      set({ rechecking: false })
+      set({ checkingHardware: false })
     }
   },
 
@@ -81,34 +63,6 @@ export const useRecoveryStore = create<RecoveryStore>((set) => ({
       await waitForDashboardRecovery()
     } finally {
       set({ restarting: false })
-    }
-  },
-
-  handleDashboardEvent: (event) => {
-    if (event.type === 'dashboard.fault.detected') {
-      const fault: RecoveryFault = {
-        fault_type: event.fault_type,
-        device_alias: event.device_alias,
-        message: event.message,
-        timestamp: event.timestamp,
-      }
-      set((state) => ({
-        faults: [
-          ...state.faults.filter(
-            (item) => !(item.fault_type === fault.fault_type && item.device_alias === fault.device_alias),
-          ),
-          fault,
-        ],
-      }))
-      return
-    }
-
-    if (event.type === 'dashboard.fault.resolved') {
-      set((state) => ({
-        faults: state.faults.filter(
-          (item) => !(item.fault_type === event.fault_type && item.device_alias === event.device_alias),
-        ),
-      }))
     }
   },
 }))

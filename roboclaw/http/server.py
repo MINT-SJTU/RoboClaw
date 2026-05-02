@@ -176,6 +176,39 @@ def _register_system_routes(app: FastAPI, runtime: WebRuntime) -> None:
             "proxy": hf.proxy,
         }
 
+    @app.get("/api/system/control-record-config")
+    async def control_record_config() -> dict[str, Any]:
+        config = load_config(get_config_path())
+        return config.control_center.record.model_dump()
+
+    @app.post("/api/system/control-record-config")
+    async def save_control_record_config(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        config = load_config(get_config_path())
+        record = config.control_center.record
+        task = payload.get("task")
+        if isinstance(task, str):
+            record.task = task
+        num_episodes = payload.get("num_episodes")
+        if isinstance(num_episodes, int):
+            record.num_episodes = num_episodes
+        episode_time_s = payload.get("episode_time_s")
+        if isinstance(episode_time_s, int):
+            record.episode_time_s = episode_time_s
+        reset_time_s = payload.get("reset_time_s")
+        if isinstance(reset_time_s, int):
+            record.reset_time_s = reset_time_s
+        dataset_name = payload.get("dataset_name")
+        if isinstance(dataset_name, str):
+            record.dataset_name = dataset_name
+        fps = payload.get("fps")
+        if isinstance(fps, int):
+            record.fps = fps
+        use_cameras = payload.get("use_cameras")
+        if isinstance(use_cameras, bool):
+            record.use_cameras = use_cameras
+        save_config(config, get_config_path())
+        return {"status": "ok", **record.model_dump()}
+
 
 async def _handle_save_provider(payload: dict[str, Any], runtime: WebRuntime) -> dict[str, Any]:
     """Apply provider config changes, swap provider atomically, refresh agent."""

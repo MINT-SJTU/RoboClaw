@@ -46,6 +46,13 @@ const NAV_ICONS: Record<string, JSX.Element> = {
       <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
     </svg>
   ),
+  '/curation/text-alignment': (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 6h16" />
+      <path d="M4 12h10" />
+      <path d="M4 18h14" />
+    </svg>
+  ),
   '/settings': (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -60,15 +67,21 @@ const NAV_ICONS: Record<string, JSX.Element> = {
   ),
 }
 
+interface NavItem {
+  path: string
+  label: string
+  badge?: number
+}
+
 export default function AppShell() {
   const location = useLocation()
   const { connect, disconnect, connected, messages } = useChatSocket()
   const fetchHardwareStatus = useHardwareStore((state) => state.fetchHardwareStatus)
-  const fetchRecoveryFaults = useRecoveryStore((state) => state.fetchFaults)
   const recoveryFaults = useRecoveryStore((state) => state.faults)
   const { t } = useI18n()
   const [chatOpen, setChatOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [pipelineExpanded, setPipelineExpanded] = useState(location.pathname.startsWith('/curation'))
 
   useEffect(() => {
     connect()
@@ -77,18 +90,57 @@ export default function AppShell() {
 
   useEffect(() => {
     void fetchHardwareStatus()
-    void fetchRecoveryFaults()
-  }, [fetchHardwareStatus, fetchRecoveryFaults])
+  }, [fetchHardwareStatus])
 
-  const navItems = [
+  useEffect(() => {
+    if (location.pathname.startsWith('/curation')) {
+      setPipelineExpanded(true)
+    }
+  }, [location.pathname])
+
+  const navItemsBeforePipeline: NavItem[] = [
     { path: '/control', label: t('controlCenter') },
     { path: '/recovery', label: t('recoveryNav'), badge: recoveryFaults.length || undefined },
-    { path: '/datasets', label: t('datasetsNav') },
+  ]
+  const navItemsAfterPipeline: NavItem[] = [
     { path: '/training', label: t('trainingCenter') },
-    { path: '/curation', label: t('curationNav') },
     { path: '/settings', label: t('settings') },
     { path: '/logs', label: t('logs') },
   ]
+  const pipelineChildren = [
+    { path: '/curation/datasets', label: t('datasetReader') },
+    { path: '/curation/quality', label: t('qualityWorkbench') },
+    { path: '/curation/text-alignment', label: t('textAlignment') },
+  ]
+  const pipelineActive = location.pathname.startsWith('/curation')
+
+  const renderNavItem = (item: NavItem) => {
+    const active =
+      location.pathname === item.path
+      || location.pathname.startsWith(`${item.path}/`)
+    return (
+      <Link
+        key={item.path}
+        to={item.path}
+        className={cn('app-sidebar__link', active && 'app-sidebar__link--active')}
+        title={sidebarCollapsed ? item.label : undefined}
+      >
+        <span className="app-sidebar__link-icon">
+          {NAV_ICONS[item.path]}
+        </span>
+        {!sidebarCollapsed && <span className="app-sidebar__link-label">{item.label}</span>}
+        {!sidebarCollapsed && item.badge && (
+          <span className={cn(
+            'ml-auto inline-flex min-w-[20px] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold',
+            active ? 'bg-white/20 text-white' : 'bg-rd/10 text-rd',
+          )}
+          >
+            {item.badge}
+          </span>
+        )}
+      </Link>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -112,33 +164,82 @@ export default function AppShell() {
         </div>
 
         <nav className="app-sidebar__nav">
-          {navItems.map((item) => {
-            const active =
-              location.pathname === item.path
-              || location.pathname.startsWith(`${item.path}/`)
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn('app-sidebar__link', active && 'app-sidebar__link--active')}
-                title={sidebarCollapsed ? item.label : undefined}
+          {navItemsBeforePipeline.map(renderNavItem)}
+
+          {sidebarCollapsed ? (
+            <Link
+              to="/curation"
+              className={cn('app-sidebar__link', pipelineActive && 'app-sidebar__link--active')}
+              title={t('pipelineNav')}
+            >
+              <span className="app-sidebar__link-icon">
+                {NAV_ICONS['/curation']}
+              </span>
+            </Link>
+          ) : (
+            <div className="app-sidebar__group">
+              <button
+                type="button"
+                className={cn(
+                  'app-sidebar__link',
+                  'app-sidebar__group-trigger',
+                  pipelineActive && 'app-sidebar__link--active',
+                )}
+                onClick={() => setPipelineExpanded((value) => !value)}
+                aria-expanded={pipelineExpanded}
               >
                 <span className="app-sidebar__link-icon">
-                  {NAV_ICONS[item.path]}
+                  {NAV_ICONS['/curation']}
                 </span>
-                {!sidebarCollapsed && <span className="app-sidebar__link-label">{item.label}</span>}
-                {!sidebarCollapsed && item.badge && (
-                  <span className={cn(
-                    'ml-auto inline-flex min-w-[20px] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold',
-                    active ? 'bg-white/20 text-white' : 'bg-rd/10 text-rd',
+                <span className="app-sidebar__link-label">{t('pipelineNav')}</span>
+                <span
+                  className={cn(
+                    'app-sidebar__caret',
+                    pipelineExpanded && 'app-sidebar__caret--expanded',
                   )}
+                  aria-hidden="true"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   >
-                    {item.badge}
-                  </span>
-                )}
-              </Link>
-            )
-          })}
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </span>
+              </button>
+
+              {pipelineExpanded && (
+                <div className="app-sidebar__children">
+                  {pipelineChildren.map((child) => {
+                    const active =
+                      location.pathname === child.path
+                      || location.pathname.startsWith(`${child.path}/`)
+                    return (
+                      <Link
+                        key={child.path}
+                        to={child.path}
+                        className={cn(
+                          'app-sidebar__child-link',
+                          active && 'app-sidebar__child-link--active',
+                        )}
+                      >
+                        <span className="app-sidebar__child-dot" aria-hidden="true" />
+                        <span className="app-sidebar__child-label">{child.label}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {navItemsAfterPipeline.map(renderNavItem)}
         </nav>
       </aside>
 
