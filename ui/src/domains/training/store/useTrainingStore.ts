@@ -170,7 +170,8 @@ export const useTrainingStore = create<TrainingStore>((set) => ({
           set({ currentTrainJobId: storedJobId, trainJobMessage: message, trainJobStatus: status as TrainingStatusData })
           return
         }
-      } catch {
+      } catch (error) {
+        console.warn('Failed to restore stored training job; clearing:', error)
         storeTrainJobId('')
       }
     }
