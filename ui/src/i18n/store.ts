@@ -133,6 +133,8 @@ const translations = {
 
         // Training
         training: '训练',
+        localTraining: '本地训练',
+        remoteTraining: '远程训练',
         startTraining: '开始训练',
         stopTraining: '停止训练',
         steps: '训练步数',
@@ -721,6 +723,8 @@ const translations = {
 
         // Training
         training: 'Training',
+        localTraining: 'Local Training',
+        remoteTraining: 'Remote Training',
         startTraining: 'Start Training',
         stopTraining: 'Stop Training',
         steps: 'Steps',

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from roboclaw.embodied.service import EmbodiedService
+
+
+REMOTE_TRAINING_HOST = "8.136.130.234"
+REMOTE_TRAINING_PORT = 9000
 
 
 class TrainStartRequest(BaseModel):
@@ -20,6 +25,12 @@ class TrainStartRequest(BaseModel):
 
 class TrainStopRequest(BaseModel):
     job_id: str
+
+
+class RemoteTrainStartRequest(BaseModel):
+    username: str
+    taskName: str
+    action: str
 
 
 def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
@@ -47,6 +58,20 @@ def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
             tty_handoff=None,
         )
         return {"message": result}
+
+    @app.post("/api/train/remote/start")
+    async def remote_train_start(body: RemoteTrainStartRequest) -> dict[str, Any]:
+        reader, writer = await asyncio.open_connection(
+            REMOTE_TRAINING_HOST,
+            REMOTE_TRAINING_PORT,
+        )
+        payload = json.dumps(body.model_dump(), ensure_ascii=False).encode("utf-8")
+        writer.write(payload)
+        await writer.drain()
+        response = await reader.read(64 * 1024)
+        writer.close()
+        await writer.wait_closed()
+        return json.loads(response.decode("utf-8"))
 
     @app.get("/api/train/current")
     async def train_current() -> dict[str, Any]:
