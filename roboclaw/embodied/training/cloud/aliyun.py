@@ -188,6 +188,7 @@ class AliyunCloudTrainer:
             image=image,
             pod_count=resources.node_count,
             ecs_spec=ecs_spec,
+            resource_config=None,
         )
         request = dlc_models.CreateJobRequest(
             display_name=job_name,
