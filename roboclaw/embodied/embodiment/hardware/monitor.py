@@ -10,6 +10,7 @@ import asyncio
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -145,6 +146,13 @@ def get_missing_arm_motors(arm: ArmBinding) -> list[str]:
 
     if get_model(arm.arm_type) != "so101" or not arm.port:
         return []
+    # Only probe real serial devices. Tests and local placeholders often use
+    # temporary files to stand in for a present port; probing those paths would
+    # incorrectly report every motor as disconnected.
+    if not arm.port.startswith("/dev/"):
+        return []
+    if not Path(arm.port).exists():
+        return []
 
     runtime_spec = get_runtime_spec(arm.arm_type)
     motor_config = _motor_config_from_arm(arm, runtime_spec)
@@ -239,6 +247,20 @@ class HardwareMonitor:
                     "device_alias": resolved_fault.device_alias,
                     "timestamp": time.time(),
                 })
+
+    async def run(self) -> None:
+        """Main loop: check hardware every N seconds until stopped."""
+        logger.info("Hardware monitor started")
+        while not self._stop_event.is_set():
+            await self.run_check_once()
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=_CHECK_INTERVAL_SECONDS
+                )
+                break  # stop_event was set
+            except asyncio.TimeoutError:
+                pass  # normal interval elapsed
+        logger.info("Hardware monitor stopped")
 
     def check_hardware(self) -> list[HardwareFault]:
         """Check all configured devices and return current faults."""

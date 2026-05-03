@@ -37,9 +37,12 @@ class VerificationRequest:
 
     argv: Sequence[str]
     manifest: Any
+    mode: str = "infer"
     checkpoint_path: str | Path | None = None
     dataset: Any | None = None
     num_episodes: int = 1
     episode_time_s: int = 60
+    episode: int = 0
+    fps: int = 30
     use_cameras: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)

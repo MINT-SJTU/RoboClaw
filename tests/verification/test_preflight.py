@@ -46,6 +46,20 @@ def _argv(policy_path: str, *, cameras: bool = True) -> list[str]:
     return argv
 
 
+def _replay_argv(*, episode: int = 0, fps: int = 30) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "roboclaw.embodied.command.wrapper",
+        "replay",
+        "--robot.type=so101_follower",
+        "--dataset.repo_id=local/demo",
+        "--dataset.root=/tmp/demo",
+        f"--dataset.episode={episode}",
+        f"--dataset.fps={fps}",
+    ]
+
+
 def _codes(result) -> set[str]:
     return {violation.code for violation in result.violations}
 
@@ -144,3 +158,42 @@ def test_preflight_allows_remote_policy_ids_without_local_file_check() -> None:
 
     assert result.ok
     assert {warning.code for warning in result.warnings} == {"remote_policy_unchecked"}
+
+
+def test_preflight_accepts_valid_replay_request() -> None:
+    result = PreflightVerifier().verify(VerificationRequest(
+        argv=_replay_argv(episode=2, fps=15),
+        manifest=_manifest(cameras=False),
+        mode="replay",
+        episode=2,
+        fps=15,
+        use_cameras=False,
+    ))
+
+    assert result.ok
+
+
+def test_preflight_rejects_bad_replay_argv() -> None:
+    result = PreflightVerifier().verify(VerificationRequest(
+        argv=[sys.executable, "-m", "roboclaw.embodied.command.wrapper", "record", "--dataset.root=/tmp/demo"],
+        manifest=_manifest(cameras=False),
+        mode="replay",
+        episode=0,
+        fps=30,
+        use_cameras=False,
+    ))
+
+    assert {"unexpected_action", "missing_dataset_arg"} <= _codes(result)
+
+
+def test_preflight_rejects_invalid_replay_limits() -> None:
+    result = PreflightVerifier().verify(VerificationRequest(
+        argv=_replay_argv(episode=-1, fps=0),
+        manifest=_manifest(cameras=False),
+        mode="replay",
+        episode=-1,
+        fps=0,
+        use_cameras=False,
+    ))
+
+    assert {"invalid_replay_episode", "invalid_replay_fps"} <= _codes(result)
