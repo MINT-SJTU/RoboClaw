@@ -13,7 +13,15 @@ _CALIBRATION_ACTIONS = ["calibrate"]
 _TELEOP_ACTIONS = ["teleoperate"]
 _RECORD_ACTIONS = ["record"]
 _REPLAY_ACTIONS = ["replay"]
-_TRAIN_ACTIONS = ["train", "job_status", "list_datasets", "list_policies"]
+_TRAIN_ACTIONS = [
+    "train",
+    "job_status",
+    "stop_job",
+    "current_job",
+    "collect_artifacts",
+    "list_datasets",
+    "list_policies",
+]
 _INFER_ACTIONS = ["run_policy"]
 _HUB_ACTIONS = ["push_dataset", "pull_dataset", "push_policy", "pull_policy"]
 _LANGUAGE_PROP = {"type": "string", "description": "User's language code (en, zh)."}
@@ -236,6 +244,10 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Dataset slug for training.",
                 },
+                "policy_type": {
+                    "type": "string",
+                    "description": "Training policy type (e.g. act, diffusion, pi0).",
+                },
                 "steps": {
                     "type": "integer",
                     "description": "Number of training steps.",
@@ -244,9 +256,83 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Device for training.",
                 },
+                "provider": {
+                    "type": "string",
+                    "enum": ["local", "aliyun", "autodl"],
+                    "description": "Where to run the training job.",
+                },
+                "preset": {
+                    "type": "string",
+                    "description": "Optional deployment-defined training preset for remote backends.",
+                },
+                "job_name": {
+                    "type": "string",
+                    "description": "Optional human-readable name for the training job.",
+                },
+                "code_dir": {
+                    "type": "string",
+                    "description": "Local code directory to stage for remote backends.",
+                },
+                "entrypoint": {
+                    "type": "string",
+                    "description": "Override shell entrypoint for remote backends.",
+                },
+                "gpu_count": {
+                    "type": "integer",
+                    "description": "Requested GPU count for remote backends.",
+                },
+                "gpu_type": {
+                    "type": "string",
+                    "description": "Requested GPU type for remote backends.",
+                },
+                "cpu_cores": {
+                    "type": "integer",
+                    "description": "Requested CPU cores for remote backends.",
+                },
+                "memory_gb": {
+                    "type": "integer",
+                    "description": "Requested memory in GiB for remote backends.",
+                },
+                "node_count": {
+                    "type": "integer",
+                    "description": "Requested worker node count for remote backends.",
+                },
+                "image": {
+                    "type": "string",
+                    "description": "Container image override for cloud backends.",
+                },
                 "job_id": {
                     "type": "string",
-                    "description": "ID of a background training job.",
+                    "description": "ID of a submitted training job.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Optional artifact download destination for collect_artifacts.",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Wait for job completion before returning.",
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "description": "Timeout in seconds when wait=true.",
+                },
+                "poll_interval_s": {
+                    "type": "number",
+                    "description": "Polling interval in seconds while waiting on remote jobs.",
+                },
+                "auto_collect": {
+                    "type": "boolean",
+                    "description": "Automatically download artifacts after a successful waited remote job.",
+                },
+                "remote_workdir": {
+                    "type": "string",
+                    "description": "Provider-specific remote workdir override.",
+                },
+                "env": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "Extra environment variables injected into remote training jobs.",
                 },
             },
             "required": ["action"],
@@ -604,6 +690,12 @@ async def _run_train_action(
         return await train.train(manifest, kwargs, tty_handoff)
     if action == "job_status":
         return await train.job_status(manifest, kwargs, tty_handoff)
+    if action == "stop_job":
+        return await train.stop_job(manifest, kwargs, tty_handoff)
+    if action == "current_job":
+        return json.dumps(await train.current_job(manifest, kwargs, tty_handoff), indent=2)
+    if action == "collect_artifacts":
+        return await train.collect_job(manifest, kwargs, tty_handoff)
     if action == "list_datasets":
         return train.list_datasets(manifest)
     return train.list_policies(manifest)

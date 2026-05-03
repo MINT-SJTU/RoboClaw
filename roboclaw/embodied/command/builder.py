@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,19 @@ TRAIN_POLICY_TYPES = {
 def _wrapper_args(action: str) -> list[str]:
     """Base argv for invoking lerobot via the wrapper."""
     return [sys.executable, "-m", "roboclaw.embodied.command.wrapper", action]
+
+
+def _train_command() -> str:
+    """Return the lerobot-train executable from the current Python environment.
+
+    We prefer the sibling script next to ``sys.executable`` so detached training
+    uses the same environment that launched RoboClaw, instead of whichever
+    ``lerobot-train`` happens to appear first on the parent shell PATH.
+    """
+    sibling = Path(sys.executable).resolve().with_name("lerobot-train")
+    if sibling.exists():
+        return str(sibling)
+    return shutil.which("lerobot-train") or "lerobot-train"
 
 
 def _arm_args(prefix: str, binding: ArmBinding) -> list[str]:
@@ -297,7 +311,7 @@ class CommandBuilder:
         output_dir = Path(policies_root).expanduser() / output_dir_name
 
         argv = [
-            "lerobot-train",
+            _train_command(),
             f"--dataset.repo_id={dataset.repo_id}",
             f"--dataset.root={dataset.local_path}",
             "--dataset.video_backend=pyav",
