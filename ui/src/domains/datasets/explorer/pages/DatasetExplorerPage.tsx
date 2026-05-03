@@ -1,14 +1,32 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { useI18n } from '@/i18n'
 import {
+  buildExplorerQuery,
+  buildExplorerRefKey,
+  listExplorerDatasets,
+  searchDatasetSuggestions,
   useExplorer,
+  type DatasetSuggestion,
   type EpisodeDetail,
+  type ExplorerDatasetRef,
+  type ExplorerPageState,
+  type ExplorerSource,
   type FeatureStat,
   type ModalityItem,
 } from '@/domains/datasets/explorer/store/useExplorerStore'
 import { useWorkflow } from '@/domains/curation/store/useCurationStore'
-import { ActionButton, GlassPanel, MetricCard } from '@/shared/ui'
+import { ActionButton, GlassPanel } from '@/shared/ui'
+import {
+  clampAbsolutePlaybackTime,
+  formatClipWindowLabel,
+  getClipStart,
+  getRelativePlaybackTime,
+  shouldLoopVideo,
+  type EpisodeVideo,
+} from './datasetExplorerPlayback'
+import { DatasetInsightStack } from '@/domains/datasets/explorer/components/DatasetInsightStack'
 
 function cn(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
@@ -135,19 +153,39 @@ function getTrajectoryTimeBounds(detail: EpisodeDetail): [number, number] {
   return [0, duration]
 }
 
-function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: number): number {
+interface PreparedJointChart {
+  jointName: string
+  stateValues: number[]
+  actionValues: number[]
+  statePoints: string
+  actionPoints: string
+  yMaxLabel: string
+  yMidLabel: string
+  yMinLabel: string
+}
+
+function getNearestTrajectoryIndexForTime(
+  detail: EpisodeDetail,
+  relativeTime: number,
+): number {
   const timeValues = detail.joint_trajectory.time_values
   if (timeValues.length > 0) {
-    let nearestIndex = 0
-    let nearestDistance = Number.POSITIVE_INFINITY
-    timeValues.forEach((value, index) => {
-      const distance = Math.abs(value - videoCurrentTime)
-      if (distance < nearestDistance) {
-        nearestDistance = distance
-        nearestIndex = index
+    let low = 0
+    let high = timeValues.length - 1
+
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2)
+      if (timeValues[mid] < relativeTime) {
+        low = mid + 1
+      } else {
+        high = mid
       }
-    })
-    return nearestIndex
+    }
+
+    const previous = Math.max(low - 1, 0)
+    return Math.abs(timeValues[previous] - relativeTime) <= Math.abs(timeValues[low] - relativeTime)
+      ? previous
+      : low
   }
 
   const firstJoint = detail.joint_trajectory.joint_trajectories[0]
@@ -157,46 +195,184 @@ function getNearestTrajectoryIndex(detail: EpisodeDetail, videoCurrentTime: numb
   )
   if (totalPoints <= 1) return 0
   const duration = detail.summary.duration_s || 1
-  const progress = Math.min(Math.max(videoCurrentTime / duration, 0), 1)
+  const progress = Math.min(Math.max(relativeTime / duration, 0), 1)
   return Math.round(progress * (totalPoints - 1))
 }
 
-function EpisodeHoverPreview({
+function buildPreparedJointCharts(
+  jointTrajectories: EpisodeDetail['joint_trajectory']['joint_trajectories'],
+): PreparedJointChart[] {
+  return jointTrajectories.map((joint) => {
+    const actionValues = joint.action_values.map((value) => value ?? 0)
+    const stateValues = joint.state_values.map((value) => value ?? 0)
+    const allValues = [...actionValues, ...stateValues]
+    const minValue = allValues.length > 0 ? Math.min(...allValues) : 0
+    const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1
+    const padding = (maxValue - minValue || 1) * 0.1
+    const yMin = minValue - padding
+    const yMax = maxValue + padding
+    const yRange = yMax - yMin || 1
+
+    const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
+    const buildPolyline = (values: number[]) =>
+      values
+        .map((value, index) => {
+          const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
+          return `${x},${toY(value)}`
+        })
+        .join(' ')
+
+    return {
+      jointName: joint.joint_name,
+      stateValues,
+      actionValues,
+      statePoints: buildPolyline(stateValues),
+      actionPoints: buildPolyline(actionValues),
+      yMaxLabel: yMax.toFixed(2),
+      yMidLabel: ((yMax + yMin) / 2).toFixed(2),
+      yMinLabel: yMin.toFixed(2),
+    }
+  })
+}
+
+function syncVideoIntoClipWindow(
+  element: HTMLVideoElement,
+  video: EpisodeVideo | null | undefined,
+  options: { loopToStart?: boolean; forceSeek?: boolean } = {},
+): number {
+  const nextTime = clampAbsolutePlaybackTime(
+    video,
+    element.currentTime,
+    element.duration,
+    { loopToStart: options.loopToStart },
+  )
+  if (options.forceSeek || Math.abs(element.currentTime - nextTime) > 0.08) {
+    try {
+      element.currentTime = nextTime
+    } catch (_error) {
+      // Ignore currentTime assignment failures until metadata is ready.
+    }
+  }
+  return nextTime
+}
+
+function EpisodePlaybackSurface({
   detail,
-  loading,
-  error,
   playVideo,
-  videoCurrentTime,
-  onVideoTimeUpdate,
-  onClose,
-  onMouseEnter,
-  onMouseLeave,
+  emptyLabel,
 }: {
-  detail: EpisodeDetail | null
-  loading: boolean
-  error: string
+  detail: EpisodeDetail
   playVideo: boolean
-  videoCurrentTime: number
-  onVideoTimeUpdate: (seconds: number) => void
-  onClose: () => void
-  onMouseEnter: () => void
-  onMouseLeave: () => void
+  emptyLabel: string
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const syncLockRef = useRef(false)
-  const jointTrajectories = detail?.joint_trajectory.joint_trajectories ?? []
-  const [timeMin, timeMax] = detail ? getTrajectoryTimeBounds(detail) : [0, 0]
+  const lastTimelineTimeRef = useRef<number>(-1)
+  const timelineFrameRef = useRef<number | null>(null)
+  const jointTrajectories = detail.joint_trajectory.joint_trajectories
+  const preparedJointCharts = useMemo(
+    () => buildPreparedJointCharts(jointTrajectories),
+    [jointTrajectories],
+  )
+  const [timeMin, timeMax] = getTrajectoryTimeBounds(detail)
   const timeRange = timeMax - timeMin || 1
-  const currentIndex = detail ? getNearestTrajectoryIndex(detail, videoCurrentTime) : 0
-  const currentTimePercent = detail
-    ? Math.min(Math.max(((videoCurrentTime - timeMin) / timeRange) * 100, 0), 100)
-    : 0
 
   useEffect(() => {
-    videoRefs.current = []
-  }, [detail?.episode_index])
+    lastTimelineTimeRef.current = -1
+    if (timelineFrameRef.current != null) {
+      window.cancelAnimationFrame(timelineFrameRef.current)
+      timelineFrameRef.current = null
+    }
+  }, [detail.episode_index])
 
   useEffect(() => {
+    return () => {
+      if (timelineFrameRef.current != null) {
+        window.cancelAnimationFrame(timelineFrameRef.current)
+      }
+    }
+  }, [])
+
+  const paintTimeline = (relativeTime: number, options: { force?: boolean } = {}) => {
+    if (
+      !options.force &&
+      lastTimelineTimeRef.current >= 0 &&
+      Math.abs(relativeTime - lastTimelineTimeRef.current) < 0.008
+    ) {
+      return
+    }
+    lastTimelineTimeRef.current = relativeTime
+
+    const root = rootRef.current
+    if (!root) return
+
+    const currentTimePercent = Math.min(
+      Math.max(((relativeTime - timeMin) / timeRange) * 100, 0),
+      100,
+    )
+    root
+      .querySelectorAll<SVGLineElement>('[data-trajectory-cursor]')
+      .forEach((line) => {
+        line.setAttribute('x1', String(currentTimePercent))
+        line.setAttribute('x2', String(currentTimePercent))
+      })
+
+    const currentIndex = getNearestTrajectoryIndexForTime(detail, relativeTime)
+    preparedJointCharts.forEach((joint, index) => {
+      const currentNode = root.querySelector<HTMLElement>(
+        `[data-trajectory-current="${index}"]`,
+      )
+      if (!currentNode) return
+      const currentState = joint.stateValues[Math.min(currentIndex, joint.stateValues.length - 1)]
+      const currentAction = joint.actionValues[Math.min(currentIndex, joint.actionValues.length - 1)]
+      currentNode.textContent = `S ${formatAngle(currentState)} / A ${formatAngle(currentAction)}`
+    })
+  }
+
+  useEffect(() => {
+    paintTimeline(0, { force: true })
+  }, [detail, preparedJointCharts])
+
+  useEffect(() => {
+    const timelineLeaderIndex = 0
+    const updateTimelineFrom = (
+      index: number,
+      absoluteTime: number,
+      options: { force?: boolean } = {},
+    ) => {
+      if (!options.force && index !== timelineLeaderIndex) {
+        return
+      }
+      const relativeTime = getRelativePlaybackTime(getVideoMeta(index), absoluteTime)
+      paintTimeline(relativeTime, options)
+    }
+
+    const getVideoMeta = (index: number): EpisodeVideo | null => detail.videos[index] ?? null
+    const stopTimelineLoop = () => {
+      if (timelineFrameRef.current != null) {
+        window.cancelAnimationFrame(timelineFrameRef.current)
+        timelineFrameRef.current = null
+      }
+    }
+    const startTimelineLoop = () => {
+      if (timelineFrameRef.current != null) {
+        return
+      }
+      const tick = () => {
+        const leader = videoRefs.current[timelineLeaderIndex]
+        if (!leader || leader.paused) {
+          timelineFrameRef.current = null
+          return
+        }
+        const absoluteTime = syncVideoIntoClipWindow(leader, getVideoMeta(timelineLeaderIndex), {
+          loopToStart: true,
+        })
+        updateTimelineFrom(timelineLeaderIndex, absoluteTime)
+        timelineFrameRef.current = window.requestAnimationFrame(tick)
+      }
+      timelineFrameRef.current = window.requestAnimationFrame(tick)
+    }
     const syncFromSource = (
       sourceIndex: number,
       options: { forceSeek?: boolean } = {},
@@ -205,22 +381,34 @@ function EpisodeHoverPreview({
       if (!source || syncLockRef.current) return
 
       syncLockRef.current = true
-      const sourceTime = source.currentTime
+      const sourceMeta = getVideoMeta(sourceIndex)
+      const sourceAbsoluteTime = syncVideoIntoClipWindow(source, sourceMeta, {
+        loopToStart: !source.paused && playVideo,
+        forceSeek: options.forceSeek,
+      })
+      const sourceTime = getRelativePlaybackTime(sourceMeta, sourceAbsoluteTime)
       const sourcePaused = source.paused
       const sourceRate = source.playbackRate
 
       videoRefs.current.forEach((target, targetIndex) => {
         if (!target || targetIndex === sourceIndex) return
+        const targetMeta = getVideoMeta(targetIndex)
 
         if (target.playbackRate !== sourceRate) {
           target.playbackRate = sourceRate
         }
 
+        const targetAbsoluteTime = clampAbsolutePlaybackTime(
+          targetMeta,
+          getClipStart(targetMeta) + sourceTime,
+          target.duration,
+          { loopToStart: !sourcePaused && playVideo },
+        )
         const shouldSeek =
-          options.forceSeek || Math.abs(target.currentTime - sourceTime) > 0.08
+          options.forceSeek || Math.abs(target.currentTime - targetAbsoluteTime) > 0.08
         if (shouldSeek) {
           try {
-            target.currentTime = sourceTime
+            target.currentTime = targetAbsoluteTime
           } catch (_error) {
             // Ignore currentTime assignment failures until metadata is ready.
           }
@@ -249,22 +437,36 @@ function EpisodeHoverPreview({
 
       const handlePlay = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { loopToStart: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
+        if (index === timelineLeaderIndex) {
+          startTimelineLoop()
+        }
       }
       const handlePause = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta)
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index)
+        if (index === timelineLeaderIndex) {
+          stopTimelineLoop()
+        }
       }
       const handleSeeking = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { forceSeek: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
       }
       const handleSeeked = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { forceSeek: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
       }
       const handleRateChange = () => {
@@ -273,11 +475,23 @@ function EpisodeHoverPreview({
       }
       const handleTimeUpdate = () => {
         if (syncLockRef.current) return
-        onVideoTimeUpdate(video.currentTime)
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, {
+          loopToStart: !video.paused,
+          forceSeek: false,
+        })
+        updateTimelineFrom(index, absoluteTime)
+        if (index !== timelineLeaderIndex) {
+          return
+        }
         syncFromSource(index)
+        startTimelineLoop()
       }
       const handleLoadedMetadata = () => {
         if (syncLockRef.current) return
+        const meta = getVideoMeta(index)
+        const absoluteTime = syncVideoIntoClipWindow(video, meta, { forceSeek: true })
+        updateTimelineFrom(index, absoluteTime, { force: true })
         syncFromSource(index, { forceSeek: true })
       }
 
@@ -300,10 +514,23 @@ function EpisodeHoverPreview({
       })
     })
 
+    const leader = videoRefs.current[timelineLeaderIndex]
+    if (leader) {
+      const leaderMeta = getVideoMeta(timelineLeaderIndex)
+      const absoluteTime = syncVideoIntoClipWindow(leader, leaderMeta, {
+        loopToStart: !leader.paused,
+      })
+      updateTimelineFrom(timelineLeaderIndex, absoluteTime, { force: true })
+      if (!leader.paused) {
+        startTimelineLoop()
+      }
+    }
+
     return () => {
       listeners.forEach((cleanup) => cleanup())
+      stopTimelineLoop()
     }
-  }, [detail?.episode_index, onVideoTimeUpdate, playVideo])
+  }, [detail, paintTimeline, playVideo])
 
   useEffect(() => {
     const videos = videoRefs.current.filter((video): video is HTMLVideoElement => Boolean(video))
@@ -316,14 +543,15 @@ function EpisodeHoverPreview({
 
     let attempts = 0
     const tryPlay = () => {
-      const currentVideos = videoRefs.current.filter(
-        (video): video is HTMLVideoElement => Boolean(video),
-      )
+      const currentVideos = videoRefs.current
+        .map((video, index) => ({ video, index }))
+        .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
       if (!currentVideos.length) {
         return
       }
 
-      currentVideos.forEach((video) => {
+      currentVideos.forEach(({ video, index }) => {
+        syncVideoIntoClipWindow(video, detail.videos[index] ?? null, { forceSeek: true })
         if (!video.paused) {
           return
         }
@@ -338,10 +566,10 @@ function EpisodeHoverPreview({
     const retryTimer = window.setInterval(() => {
       attempts += 1
       tryPlay()
-      const currentVideos = videoRefs.current.filter(
-        (video): video is HTMLVideoElement => Boolean(video),
-      )
-      const allPlaying = currentVideos.length > 0 && currentVideos.every((video) => !video.paused)
+      const currentVideos = videoRefs.current
+        .map((video, index) => ({ video, index }))
+        .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
+      const allPlaying = currentVideos.length > 0 && currentVideos.every(({ video }) => !video.paused)
       if (allPlaying || attempts >= 12) {
         window.clearInterval(retryTimer)
       }
@@ -350,29 +578,46 @@ function EpisodeHoverPreview({
     return () => {
       window.clearInterval(retryTimer)
     }
-  }, [playVideo, detail?.videos])
+  }, [playVideo, detail])
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      const [leader, ...followers] = videoRefs.current.filter(
-        (video): video is HTMLVideoElement => Boolean(video),
-      )
-      if (!leader || followers.length === 0 || syncLockRef.current) {
+    if (!playVideo) {
+      return
+    }
+
+    let interval: number | null = null
+    const syncFollowers = () => {
+      const entries = videoRefs.current
+        .map((video, index) => ({ video, index }))
+        .filter((entry): entry is { video: HTMLVideoElement; index: number } => Boolean(entry.video))
+      const [leaderEntry, ...followers] = entries
+      if (!leaderEntry || followers.length === 0 || syncLockRef.current) {
         return
       }
 
-      const leaderTime = leader.currentTime
-      const leaderPaused = leader.paused || !playVideo
-      const leaderRate = leader.playbackRate
+      const leaderMeta = detail.videos[leaderEntry.index] ?? null
+      const leaderAbsoluteTime = syncVideoIntoClipWindow(leaderEntry.video, leaderMeta, {
+        loopToStart: playVideo,
+      })
+      const leaderTime = getRelativePlaybackTime(leaderMeta, leaderAbsoluteTime)
+      const leaderPaused = leaderEntry.video.paused || !playVideo
+      const leaderRate = leaderEntry.video.playbackRate
 
-      followers.forEach((video) => {
+      followers.forEach(({ video, index }) => {
+        const videoMeta = detail.videos[index] ?? null
         if (video.playbackRate !== leaderRate) {
           video.playbackRate = leaderRate
         }
 
-        if (Math.abs(video.currentTime - leaderTime) > 0.08) {
+        const targetAbsoluteTime = clampAbsolutePlaybackTime(
+          videoMeta,
+          getClipStart(videoMeta) + leaderTime,
+          video.duration,
+          { loopToStart: !leaderPaused },
+        )
+        if (Math.abs(video.currentTime - targetAbsoluteTime) > 0.08) {
           try {
-            video.currentTime = leaderTime
+            video.currentTime = targetAbsoluteTime
           } catch (_error) {
             // Ignore currentTime sync failures until metadata is available.
           }
@@ -389,13 +634,158 @@ function EpisodeHoverPreview({
           }
         }
       })
-    }, 120)
+    }
+
+    const stopInterval = () => {
+      if (interval != null) {
+        window.clearInterval(interval)
+        interval = null
+      }
+    }
+    const startInterval = () => {
+      if (interval != null) {
+        return
+      }
+      interval = window.setInterval(syncFollowers, 120)
+    }
+
+    const leader = videoRefs.current[0]
+    if (leader && !leader.paused) {
+      startInterval()
+    }
+    leader?.addEventListener('play', startInterval)
+    leader?.addEventListener('pause', stopInterval)
+    leader?.addEventListener('ended', stopInterval)
 
     return () => {
-      window.clearInterval(interval)
+      stopInterval()
+      leader?.removeEventListener('play', startInterval)
+      leader?.removeEventListener('pause', stopInterval)
+      leader?.removeEventListener('ended', stopInterval)
     }
-  }, [detail?.episode_index, playVideo])
+  }, [detail, playVideo])
 
+  return (
+    <div ref={rootRef} className="explorer-hover-preview__body explorer-episode-playback">
+      <div className="explorer-hover-preview__video-grid">
+        {detail.videos.length > 0 ? (
+          detail.videos.map((video, index) => {
+            const clipLabel = formatClipWindowLabel(video)
+            return (
+              <div key={video.path} className="explorer-hover-preview__video-card">
+                <div className="explorer-hover-preview__status">
+                  <strong>{video.stream}</strong>
+                  {clipLabel ? <span> · {clipLabel}</span> : null}
+                </div>
+                <video
+                  ref={(node) => {
+                    videoRefs.current[index] = node
+                  }}
+                  src={video.url}
+                  autoPlay={playVideo}
+                  controls
+                  muted
+                  loop={shouldLoopVideo(video)}
+                  playsInline
+                  preload="metadata"
+                />
+              </div>
+            )
+          })
+        ) : (
+          <div className="explorer-hover-preview__empty">{emptyLabel}</div>
+        )}
+      </div>
+
+      {jointTrajectories.length > 0 && (
+        <div className="explorer-hover-preview__charts">
+          <h4>Joint Angle Info</h4>
+          <div className="explorer-hover-preview__legend">
+            <span className="explorer-hover-preview__legend-state">State</span>
+            <span className="explorer-hover-preview__legend-action">Action</span>
+          </div>
+
+          <div className="explorer-hover-preview__charts-grid">
+            {preparedJointCharts.map((joint, index) => (
+              <div key={joint.jointName} className="explorer-hover-preview__chart">
+                <div className="explorer-hover-preview__chart-title-row">
+                  <div className="explorer-hover-preview__chart-title">{joint.jointName}</div>
+                  <div
+                    className="explorer-hover-preview__chart-current"
+                    data-trajectory-current={index}
+                  >
+                    S {formatAngle(joint.stateValues[0])} / A {formatAngle(joint.actionValues[0])}
+                  </div>
+                </div>
+
+                <div className="explorer-hover-preview__chart-container">
+                  <div className="explorer-hover-preview__chart-yaxis">
+                    <span>{joint.yMaxLabel}</span>
+                    <span>{joint.yMidLabel}</span>
+                    <span>{joint.yMinLabel}</span>
+                  </div>
+
+                  <div className="explorer-hover-preview__chart-svg-wrap">
+                    <svg viewBox="0 0 100 60" preserveAspectRatio="none">
+                      <polyline
+                        points={joint.statePoints}
+                        fill="none"
+                        stroke="#2f6fe4"
+                        strokeWidth="0.55"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <polyline
+                        points={joint.actionPoints}
+                        fill="none"
+                        stroke="#f59e0b"
+                        strokeWidth="0.55"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <line
+                        data-trajectory-cursor
+                        x1="0"
+                        y1="10"
+                        x2="0"
+                        y2="50"
+                        stroke="#ef4444"
+                        strokeWidth="0.35"
+                        strokeDasharray="2,2"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
+                    <div className="explorer-hover-preview__chart-xaxis">
+                      <span>{timeMin.toFixed(1)}s</span>
+                      <span>{((timeMin + timeMax) / 2).toFixed(1)}s</span>
+                      <span>{timeMax.toFixed(1)}s</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EpisodeHoverPreview({
+  detail,
+  loading,
+  error,
+  playVideo,
+  onClose,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  detail: EpisodeDetail | null
+  loading: boolean
+  error: string
+  playVideo: boolean
+  onClose: () => void
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}) {
   return createPortal(
     <div className="explorer-hover-preview" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
       <div className="explorer-hover-preview__dialog">
@@ -430,129 +820,11 @@ function EpisodeHoverPreview({
               </div>
             </div>
 
-            <div className="explorer-hover-preview__body">
-              <div className="explorer-hover-preview__video-grid">
-                {detail.videos.length > 0 ? (
-                  detail.videos.map((video, index) => (
-                    <div key={video.path} className="explorer-hover-preview__video-card">
-                      <div className="explorer-hover-preview__status">
-                        Stream: {video.stream}
-                      </div>
-                      <video
-                        ref={(node) => {
-                          videoRefs.current[index] = node
-                        }}
-                        src={video.url}
-                        autoPlay={playVideo}
-                        controls
-                        muted
-                        loop
-                        playsInline
-                        preload="metadata"
-                        onTimeUpdate={(event) => {
-                          if (index === 0) {
-                            onVideoTimeUpdate(event.currentTarget.currentTime)
-                          }
-                        }}
-                      />
-                    </div>
-                  ))
-                ) : (
-                  <div className="explorer-hover-preview__empty">
-                    No video stream available for this episode.
-                  </div>
-                )}
-              </div>
-
-              {jointTrajectories.length > 0 && (
-                <div className="explorer-hover-preview__charts">
-                  <h4>Joint Angle Info</h4>
-                  <div className="explorer-hover-preview__legend">
-                    <span className="explorer-hover-preview__legend-state">State</span>
-                    <span className="explorer-hover-preview__legend-action">Action</span>
-                  </div>
-
-                  <div className="explorer-hover-preview__charts-grid">
-                    {jointTrajectories.map((joint) => {
-                      const actionValues = joint.action_values.map((value) => value ?? 0)
-                      const stateValues = joint.state_values.map((value) => value ?? 0)
-                      const allValues = [...actionValues, ...stateValues]
-                      const minValue = Math.min(...allValues)
-                      const maxValue = Math.max(...allValues)
-                      const padding = (maxValue - minValue || 1) * 0.1
-                      const yMin = minValue - padding
-                      const yMax = maxValue + padding
-                      const yRange = yMax - yMin || 1
-
-                      const toY = (value: number) => 10 + ((yMax - value) / yRange) * 40
-                      const buildPolyline = (values: number[]) =>
-                        values
-                          .map((value, index) => {
-                            const x = values.length > 1 ? (index / (values.length - 1)) * 100 : 50
-                            return `${x},${toY(value)}`
-                          })
-                          .join(' ')
-
-                      const currentState = stateValues[Math.min(currentIndex, stateValues.length - 1)]
-                      const currentAction = actionValues[Math.min(currentIndex, actionValues.length - 1)]
-
-                      return (
-                        <div key={joint.joint_name} className="explorer-hover-preview__chart">
-                          <div className="explorer-hover-preview__chart-title-row">
-                            <div className="explorer-hover-preview__chart-title">{joint.joint_name}</div>
-                            <div className="explorer-hover-preview__chart-current">
-                              S {formatAngle(currentState)} / A {formatAngle(currentAction)}
-                            </div>
-                          </div>
-
-                          <div className="explorer-hover-preview__chart-container">
-                            <div className="explorer-hover-preview__chart-yaxis">
-                              <span>{yMax.toFixed(2)}</span>
-                              <span>{((yMax + yMin) / 2).toFixed(2)}</span>
-                              <span>{yMin.toFixed(2)}</span>
-                            </div>
-
-                            <div className="explorer-hover-preview__chart-svg-wrap">
-                              <svg viewBox="0 0 100 60" preserveAspectRatio="none">
-                                <polyline
-                                  points={buildPolyline(stateValues)}
-                                  fill="none"
-                                  stroke="#2f6fe4"
-                                  strokeWidth="0.55"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                                <polyline
-                                  points={buildPolyline(actionValues)}
-                                  fill="none"
-                                  stroke="#f59e0b"
-                                  strokeWidth="0.55"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                                <line
-                                  x1={currentTimePercent}
-                                  y1="10"
-                                  x2={currentTimePercent}
-                                  y2="50"
-                                  stroke="#ef4444"
-                                  strokeWidth="0.35"
-                                  strokeDasharray="2,2"
-                                  vectorEffect="non-scaling-stroke"
-                                />
-                              </svg>
-                              <div className="explorer-hover-preview__chart-xaxis">
-                                <span>{timeMin.toFixed(1)}s</span>
-                                <span>{((timeMin + timeMax) / 2).toFixed(1)}s</span>
-                                <span>{timeMax.toFixed(1)}s</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
+            <EpisodePlaybackSurface
+              detail={detail}
+              playVideo={playVideo}
+              emptyLabel="No video stream available for this episode."
+            />
           </>
         )}
       </div>
@@ -561,7 +833,7 @@ function EpisodeHoverPreview({
   )
 }
 
-function EpisodeBrowser() {
+function EpisodeBrowser({ datasetRef }: { datasetRef: ExplorerDatasetRef }) {
   const { t } = useI18n()
   const {
     episodePage,
@@ -586,7 +858,6 @@ function EpisodeBrowser() {
   const [hoveredPreviewLoading, setHoveredPreviewLoading] = useState(false)
   const [hoveredPreviewError, setHoveredPreviewError] = useState('')
   const [previewPlayReady, setPreviewPlayReady] = useState(false)
-  const [videoCurrentTime, setVideoCurrentTime] = useState(0)
 
   useEffect(() => {
     previewCacheRef.current.clear()
@@ -595,8 +866,7 @@ function EpisodeBrowser() {
     setHoveredPreviewLoading(false)
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
-    setVideoCurrentTime(0)
-  }, [selectedDataset])
+  }, [selectedDataset, datasetRef.path, datasetRef.source])
 
   useEffect(() => {
     return () => {
@@ -645,7 +915,6 @@ function EpisodeBrowser() {
       setHoveredPreviewLoading(false)
       setHoveredPreviewError('')
       setPreviewPlayReady(false)
-      setVideoCurrentTime(0)
     }, 180)
   }
 
@@ -657,7 +926,6 @@ function EpisodeBrowser() {
     }
     setHoveredPreviewError('')
     setPreviewPlayReady(false)
-    setVideoCurrentTime(0)
 
     hoverTimerRef.current = window.setTimeout(async () => {
       setHoveredEpisodeIndex(episodeIndex)
@@ -676,13 +944,19 @@ function EpisodeBrowser() {
       const requestToken = ++requestTokenRef.current
       try {
         const response = await fetch(
-          `/api/explorer/episode?dataset=${encodeURIComponent(selectedDataset)}&episode_index=${episodeIndex}`,
+          `/api/explorer/episode?${buildExplorerQuery(datasetRef)}&episode_index=${episodeIndex}&preview=true`,
         )
         if (!response.ok) {
           throw new Error(`Failed to load episode preview (${response.status})`)
         }
         const detail: EpisodeDetail = await response.json()
         previewCacheRef.current.set(episodeIndex, detail)
+        if (previewCacheRef.current.size > 20) {
+          const oldestEpisodeIndex = previewCacheRef.current.keys().next().value
+          if (oldestEpisodeIndex !== undefined) {
+            previewCacheRef.current.delete(oldestEpisodeIndex)
+          }
+        }
         if (requestToken === requestTokenRef.current) {
           setHoveredPreview(detail)
         }
@@ -711,7 +985,7 @@ function EpisodeBrowser() {
             type="button"
             className="explorer-episodes__pager"
             disabled={episodePage!.page <= 1 || episodePageLoading}
-            onClick={() => void loadEpisodePage(selectedDataset, episodePage!.page - 1, episodePage!.page_size)}
+            onClick={() => void loadEpisodePage(datasetRef, episodePage!.page - 1, episodePage!.page_size)}
           >
             Prev
           </button>
@@ -719,7 +993,7 @@ function EpisodeBrowser() {
             type="button"
             className="explorer-episodes__pager"
             disabled={episodePage!.page >= episodePage!.total_pages || episodePageLoading}
-            onClick={() => void loadEpisodePage(selectedDataset, episodePage!.page + 1, episodePage!.page_size)}
+            onClick={() => void loadEpisodePage(datasetRef, episodePage!.page + 1, episodePage!.page_size)}
           >
             Next
           </button>
@@ -739,11 +1013,10 @@ function EpisodeBrowser() {
               if (selectedEpisodeIndex === ep.episode_index) {
                 clearEpisode()
               } else {
-                void selectEpisode(selectedDataset || '', ep.episode_index)
+                void selectEpisode(datasetRef, ep.episode_index)
               }
             }}
             onMouseEnter={() => scheduleHoverPreview(ep.episode_index)}
-            onMouseMove={() => scheduleHoverPreview(ep.episode_index)}
             onMouseLeave={scheduleClosePreview}
           >
             <span className="explorer-episode-item__idx">#{ep.episode_index}</span>
@@ -757,15 +1030,12 @@ function EpisodeBrowser() {
           detail={hoveredPreview}
           loading={hoveredPreviewLoading}
           error={hoveredPreviewError}
-          videoCurrentTime={videoCurrentTime}
-          onVideoTimeUpdate={setVideoCurrentTime}
           onClose={() => {
             setHoveredEpisodeIndex(null)
             setHoveredPreview(null)
             setHoveredPreviewLoading(false)
             setHoveredPreviewError('')
             setPreviewPlayReady(false)
-            setVideoCurrentTime(0)
           }}
           playVideo={previewPlayReady}
           onMouseEnter={cancelClosePreview}
@@ -796,10 +1066,24 @@ function EpisodeBrowser() {
 
           {episodeDetail.videos.length > 0 && (
             <div className="explorer-episode-detail__section">
-              <h4>Videos</h4>
+              <h4>Playback</h4>
+              <EpisodePlaybackSurface
+                detail={episodeDetail}
+                playVideo
+                emptyLabel="No video stream available for this episode."
+              />
+            </div>
+          )}
+
+          {episodeDetail.videos.length > 0 && (
+            <div className="explorer-episode-detail__section">
+              <h4>Video Sources</h4>
               <ul className="explorer-video-list">
                 {episodeDetail.videos.map((v) => (
-                  <li key={v.path}>{v.stream} — {v.path}</li>
+                  <li key={v.path}>
+                    <strong>{v.stream}</strong> — {v.path}
+                    {formatClipWindowLabel(v) ? ` (${formatClipWindowLabel(v)})` : ''}
+                  </li>
                 ))}
               </ul>
             </div>
@@ -850,58 +1134,389 @@ function EpisodeBrowser() {
 
 export default function DatasetExplorerView() {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const {
-    selectedDataset,
+    prepareRemoteDatasetForWorkflow,
+    createLocalDirectorySession,
     selectDataset,
   } = useWorkflow()
   const {
     summary,
+    summaryRefKey,
     summaryLoading,
     summaryError,
     dashboard,
+    dashboardRefKey,
     dashboardLoading,
     dashboardError,
     episodePage,
+    episodePageRefKey,
+    source,
+    datasetIdInput,
+    remoteDatasetSelected,
+    localDatasetInput,
+    localDatasetPathInput,
+    localDatasetPathSelected,
+    localPathDatasetLabel,
+    prepareStatus,
+    prepareError,
+    preparingForQuality,
+    activeDatasetRef,
+    setPageState,
+    setActiveDatasetRef,
     loadSummary,
     loadDashboard,
     loadEpisodePage,
   } = useExplorer()
-  const [datasetIdInput, setDatasetIdInput] = useState('')
-  const currentDataset = selectedDataset || summary?.dataset || dashboard?.dataset || episodePage?.dataset || ''
+  const [localDatasets, setLocalDatasets] = useState<DatasetSuggestion[]>([])
+  const [datasetSuggestions, setDatasetSuggestions] = useState<DatasetSuggestion[]>([])
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(-1)
+  const datasetInputRef = useRef<HTMLInputElement | null>(null)
+  const localDirectoryInputRef = useRef<HTMLInputElement | null>(null)
+  const blurTimerRef = useRef<number | null>(null)
+  const suggestionRequestRef = useRef(0)
+  const requestedDatasetKeyRef = useRef('')
+  const preparingForQualityRef = useRef(false)
+  const activeRefForSource = activeDatasetRef?.source === source ? activeDatasetRef : null
+  const activeRefKey = buildExplorerRefKey(activeRefForSource)
+  const summaryMatchesActiveRef = Boolean(activeRefKey && summaryRefKey === activeRefKey)
+  const dashboardMatchesActiveRef = Boolean(activeRefKey && dashboardRefKey === activeRefKey)
+  const summaryForSource = summaryMatchesActiveRef ? summary : null
+  const summaryLoadingForSource = summaryMatchesActiveRef && summaryLoading
+  const summaryErrorForSource = summaryMatchesActiveRef ? summaryError : ''
+  const dashboardForSource = dashboardMatchesActiveRef ? dashboard : null
+  const dashboardLoadingForSource = dashboardMatchesActiveRef && dashboardLoading
+  const dashboardErrorForSource = dashboardMatchesActiveRef ? dashboardError : ''
+  const episodePageForSource = activeRefKey && episodePageRefKey.startsWith(`${activeRefKey}|`)
+    ? episodePage
+    : null
+  const currentDataset =
+    summaryForSource?.dataset || dashboardForSource?.dataset || episodePageForSource?.dataset || ''
+
+  const datasetRef: ExplorerDatasetRef =
+    source === 'remote'
+      ? { source, dataset: remoteDatasetSelected.trim() || undefined }
+      : source === 'local'
+        ? { source, dataset: localDatasetInput.trim() || undefined }
+        : {
+            source,
+            dataset: localPathDatasetLabel.trim() || undefined,
+            path: localDatasetPathSelected.trim() || undefined,
+          }
+
+  async function loadDataset(ref: ExplorerDatasetRef): Promise<void> {
+    const requestKey = buildExplorerRefKey(ref)
+    requestedDatasetKeyRef.current = requestKey
+    setActiveDatasetRef(ref)
+    await Promise.allSettled([
+      loadSummary(ref),
+      loadDashboard(ref),
+      loadEpisodePage(ref, 1, 50),
+    ])
+  }
 
   useEffect(() => {
-    if (!currentDataset) {
+    if (source !== 'local') {
       return
     }
-    if (summary?.dataset !== currentDataset) {
-      void loadSummary(currentDataset).catch(() => {})
-    }
-    if (dashboard?.dataset !== currentDataset) {
-      void loadDashboard(currentDataset).catch(() => {})
-    }
-    if (episodePage?.dataset !== currentDataset) {
-      void loadEpisodePage(currentDataset, 1, 50)
-    }
-  }, [currentDataset, summary?.dataset, dashboard?.dataset, episodePage?.dataset, loadSummary, loadDashboard, loadEpisodePage])
+    void listExplorerDatasets('local')
+      .then((items) => setLocalDatasets(items))
+      .catch(() => setLocalDatasets([]))
+  }, [source])
 
-  async function handleLoad(): Promise<void> {
-    const datasetId = datasetIdInput.trim()
-    if (!datasetId) {
+  useEffect(() => {
+    const activeDataset = datasetRef.dataset?.trim() ?? ''
+    const activePath = datasetRef.path?.trim() ?? ''
+    const requestKey = buildExplorerRefKey(datasetRef)
+    if (!activeDataset && !activePath) {
       return
     }
-    await Promise.allSettled([
-      loadSummary(datasetId),
-      loadDashboard(datasetId),
-      loadEpisodePage(datasetId, 1, 50),
-    ])
-    try {
-      await selectDataset(datasetId)
-    } catch {
-      // Explorer dashboard is already loaded; workflow sync can retry on destination pages.
+    const loadedKey = buildExplorerRefKey(activeDatasetRef)
+    const hasLoadedActiveDataset =
+      loadedKey === requestKey
+      && Boolean(summaryForSource || dashboardForSource || episodePageForSource)
+    if (requestedDatasetKeyRef.current === requestKey || hasLoadedActiveDataset) {
+      return
+    }
+    void loadDataset(datasetRef)
+  }, [
+    source,
+    remoteDatasetSelected,
+    localDatasetInput,
+    localDatasetPathSelected,
+    localPathDatasetLabel,
+    activeDatasetRef,
+    summaryForSource,
+    dashboardForSource,
+    episodePageForSource,
+    loadSummary,
+    loadDashboard,
+    loadEpisodePage,
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (blurTimerRef.current != null) {
+        window.clearTimeout(blurTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (source !== 'remote') {
+      setDatasetSuggestions([])
+      setSuggestionsLoading(false)
+      setSuggestionsOpen(false)
+      setHighlightedSuggestionIndex(-1)
+      return
+    }
+    const needle = datasetIdInput.trim()
+    if (needle.length < 2 || needle === currentDataset.trim()) {
+      suggestionRequestRef.current += 1
+      setDatasetSuggestions([])
+      setSuggestionsLoading(false)
+      setSuggestionsOpen(false)
+      setHighlightedSuggestionIndex(-1)
+      return
+    }
+
+    const requestId = suggestionRequestRef.current + 1
+    suggestionRequestRef.current = requestId
+    setSuggestionsLoading(true)
+    const timer = window.setTimeout(() => {
+      void searchDatasetSuggestions(needle, source, 8)
+        .then((items) => {
+          if (suggestionRequestRef.current !== requestId) return
+          setDatasetSuggestions(items)
+          setHighlightedSuggestionIndex(items.length > 0 ? 0 : -1)
+          if (document.activeElement === datasetInputRef.current) {
+            setSuggestionsOpen(true)
+          }
+        })
+        .catch(() => {
+          if (suggestionRequestRef.current !== requestId) return
+          setDatasetSuggestions([])
+          setHighlightedSuggestionIndex(-1)
+        })
+        .finally(() => {
+          if (suggestionRequestRef.current === requestId) {
+            setSuggestionsLoading(false)
+          }
+        })
+    }, 180)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [datasetIdInput, currentDataset, source])
+
+  function openSuggestions(): void {
+    if (blurTimerRef.current != null) {
+      window.clearTimeout(blurTimerRef.current)
+      blurTimerRef.current = null
+    }
+    if (datasetIdInput.trim().length >= 2) {
+      setSuggestionsOpen(true)
     }
   }
 
-  const datasetSummary = summary?.summary
+  function closeSuggestionsSoon(): void {
+    if (blurTimerRef.current != null) {
+      window.clearTimeout(blurTimerRef.current)
+    }
+    blurTimerRef.current = window.setTimeout(() => {
+      setSuggestionsOpen(false)
+    }, 120)
+  }
+
+  function markExplorerDraft(nextSource: ExplorerSource): void {
+    requestedDatasetKeyRef.current = ''
+    if (activeDatasetRef?.source === nextSource) {
+      setActiveDatasetRef(null)
+    }
+  }
+
+  async function handleLoad(
+    override?: Partial<ExplorerDatasetRef> & { datasetOverride?: string },
+  ): Promise<void> {
+    const nextSource = override?.source ?? source
+    const nextDataset =
+      override?.datasetOverride
+      ?? override?.dataset
+      ?? (nextSource === 'remote'
+        ? datasetIdInput
+        : nextSource === 'local'
+          ? localDatasetInput
+          : currentDataset)
+    const nextPath = override?.path ?? (nextSource === 'path' ? localDatasetPathInput : undefined)
+    const nextRef: ExplorerDatasetRef = {
+      source: nextSource,
+      dataset: nextDataset?.trim() || undefined,
+      path: nextPath?.trim() || undefined,
+    }
+    if (!nextRef.dataset && !nextRef.path) {
+      return
+    }
+    setPageState({ prepareStatus: '', prepareError: '' })
+    if (nextSource === 'remote' && nextRef.dataset) {
+      setPageState({
+        datasetIdInput: nextRef.dataset,
+        remoteDatasetSelected: nextRef.dataset,
+      })
+    }
+    if (nextSource === 'local' && nextRef.dataset) {
+      setPageState({ localDatasetInput: nextRef.dataset })
+    }
+    if (nextSource === 'path' && nextRef.path) {
+      setPageState({
+        localDatasetPathInput: nextRef.path,
+        localDatasetPathSelected: nextRef.path,
+        localPathDatasetLabel: nextRef.dataset ?? '',
+      })
+    }
+    setSuggestionsOpen(false)
+    setDatasetSuggestions([])
+    setHighlightedSuggestionIndex(-1)
+    await loadDataset(nextRef)
+    if (nextRef.source !== 'remote' && nextRef.dataset) {
+      try {
+        await selectDataset(nextRef.dataset)
+      } catch (error) {
+        setPageState({
+          prepareError: error instanceof Error ? error.message : t('qualityRunFailed'),
+        })
+      }
+    }
+  }
+
+  async function handleSuggestionSelect(datasetId: string): Promise<void> {
+    await handleLoad({ source: 'remote', datasetOverride: datasetId })
+  }
+
+  async function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>): Promise<void> {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (!suggestionsOpen) openSuggestions()
+      if (datasetSuggestions.length > 0) {
+        setHighlightedSuggestionIndex((current) => (current + 1) % datasetSuggestions.length)
+      }
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!suggestionsOpen) openSuggestions()
+      if (datasetSuggestions.length > 0) {
+        setHighlightedSuggestionIndex((current) =>
+          current <= 0 ? datasetSuggestions.length - 1 : current - 1,
+        )
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      setSuggestionsOpen(false)
+      setHighlightedSuggestionIndex(-1)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      const highlighted = datasetSuggestions[highlightedSuggestionIndex]
+      if (suggestionsOpen && highlighted) {
+        await handleSuggestionSelect(highlighted.id)
+        return
+      }
+      await handleLoad()
+    }
+  }
+
+  async function handlePrepareRemote(): Promise<void> {
+    if (preparingForQualityRef.current) return
+    const datasetId = datasetIdInput.trim()
+    if (!datasetId) return
+    preparingForQualityRef.current = true
+    setPageState({
+      preparingForQuality: true,
+      prepareStatus: t('preparingForQuality'),
+      prepareError: '',
+      remoteDatasetSelected: datasetId,
+    })
+    try {
+      const payload = await prepareRemoteDatasetForWorkflow(datasetId, false)
+      setPageState({ prepareStatus: `${t('preparedForQuality')}: ${payload.dataset_name}` })
+      navigate('/curation/quality')
+    } catch (error) {
+      setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
+    } finally {
+      preparingForQualityRef.current = false
+      setPageState({ preparingForQuality: false })
+    }
+  }
+
+  async function handleChooseLocalDirectory(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const files = Array.from(event.target.files || [])
+    if (files.length === 0) {
+      return
+    }
+    const relativePaths = files.map((file) => {
+      const maybeRelative = (file as File & { webkitRelativePath?: string }).webkitRelativePath
+      return maybeRelative && maybeRelative.trim() ? maybeRelative : file.name
+    })
+    const displayName = relativePaths[0]?.split('/')[0] || files[0].name
+    setPageState({
+      prepareStatus: t('localDirectoryUploading'),
+      prepareError: '',
+    })
+    try {
+      const payload = await createLocalDirectorySession(files, relativePaths, displayName)
+      setPageState({
+        localDatasetPathInput: payload.local_path,
+        localDatasetPathSelected: payload.local_path,
+        localPathDatasetLabel: payload.dataset_name,
+        prepareStatus: payload.display_name,
+      })
+      await handleLoad({
+        source: 'path',
+        path: payload.local_path,
+        datasetOverride: payload.dataset_name,
+      })
+      setPageState({ prepareStatus: payload.display_name })
+    } catch (error) {
+      setPageState({ prepareError: error instanceof Error ? error.message : t('qualityRunFailed') })
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const datasetSummary = summaryForSource?.summary
+  const modalitiesNode = dashboardLoadingForSource && !dashboardForSource ? (
+    <div className="explorer-empty">{t('running')}...</div>
+  ) : dashboardForSource ? (
+    <ModalityChips items={dashboardForSource.modality_summary} />
+  ) : (
+    <div className="explorer-empty">{dashboardErrorForSource || t('noStats')}</div>
+  )
+  const featureStatsNode = dashboardForSource ? (
+    <>
+      <p className="explorer-section__sub">
+        {dashboardForSource.feature_names.length} features
+        {dashboardForSource.dataset_stats.features_with_stats > 0 &&
+          ` / ${dashboardForSource.dataset_stats.features_with_stats} with stats`}
+      </p>
+      <FeatureStatsTable stats={dashboardForSource.feature_stats} />
+    </>
+  ) : (
+    <div className="explorer-empty">
+      {dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}
+    </div>
+  )
+  const typeDistributionNode = dashboardForSource ? (
+    <TypeDistribution items={dashboardForSource.feature_type_distribution} />
+  ) : (
+    <div className="explorer-empty">
+      {dashboardLoadingForSource ? t('running') : (dashboardErrorForSource || t('noStats'))}
+    </div>
+  )
 
   return (
     <div className="page-enter quality-view">
@@ -914,134 +1529,266 @@ export default function DatasetExplorerView() {
 
       <div className="dataset-workbench">
         <div className="dataset-workbench__controls">
+          <label className="dataset-workbench__control">
+            <span>{t('dataSource')}</span>
+            <select
+              className="dataset-workbench__select"
+              value={source}
+              onChange={(event) => {
+                const nextSource = event.target.value as ExplorerSource
+                setPageState({ source: nextSource })
+                setDatasetSuggestions([])
+                setSuggestionsOpen(false)
+                setHighlightedSuggestionIndex(-1)
+                requestedDatasetKeyRef.current = ''
+              }}
+            >
+              <option value="remote">{t('remoteDataset')}</option>
+              <option value="local">{t('localDataset')}</option>
+              <option value="path">{t('localDirectory')}</option>
+            </select>
+          </label>
+
+          {source === 'remote' && (
           <label className="dataset-workbench__control dataset-workbench__control--wide">
             <span>{t('hfDatasetId')}</span>
-            <input
-              className="dataset-workbench__input"
-              type="text"
-              value={datasetIdInput}
-              onChange={(event) => setDatasetIdInput(event.target.value)}
-              placeholder={t('hfDatasetPlaceholder')}
-            />
+            <div className="dataset-workbench__combobox">
+              <input
+                ref={datasetInputRef}
+                className="dataset-workbench__input"
+                type="text"
+                value={datasetIdInput}
+                onChange={(event) => {
+                  const nextValue = event.target.value
+                  const patch: Partial<ExplorerPageState> = {
+                    datasetIdInput: nextValue,
+                    remoteDatasetSelected:
+                      nextValue.trim() !== remoteDatasetSelected.trim()
+                        ? ''
+                        : remoteDatasetSelected,
+                  }
+                  setPageState(patch)
+                  if (nextValue.trim() !== remoteDatasetSelected.trim()) {
+                    markExplorerDraft('remote')
+                  }
+                }}
+                onFocus={openSuggestions}
+                onBlur={closeSuggestionsSoon}
+                onKeyDown={(event) => {
+                  void handleInputKeyDown(event)
+                }}
+                placeholder={t('hfDatasetPlaceholder')}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={suggestionsOpen}
+                aria-controls="explorer-dataset-suggestions"
+                aria-activedescendant={
+                  highlightedSuggestionIndex >= 0
+                    ? `explorer-dataset-suggestion-${highlightedSuggestionIndex}`
+                    : undefined
+                }
+              />
+              {suggestionsOpen
+                && (suggestionsLoading
+                  || datasetSuggestions.length > 0
+                  || datasetIdInput.trim().length >= 2) && (
+                <div
+                  className="dataset-workbench__suggestions"
+                  id="explorer-dataset-suggestions"
+                  role="listbox"
+                >
+                  {suggestionsLoading ? (
+                    <div className="dataset-workbench__suggestion-status">
+                      {t('datasetSuggestionsLoading')}
+                    </div>
+                  ) : datasetSuggestions.length > 0 ? (
+                    datasetSuggestions.map((suggestion, index) => (
+                      <button
+                        key={suggestion.id}
+                        id={`explorer-dataset-suggestion-${index}`}
+                        type="button"
+                        role="option"
+                        aria-selected={index === highlightedSuggestionIndex}
+                        className={cn(
+                          'dataset-workbench__suggestion',
+                          index === highlightedSuggestionIndex && 'is-active',
+                        )}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                        onClick={() => {
+                          void handleSuggestionSelect(suggestion.id)
+                        }}
+                      >
+                        {suggestion.id}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="dataset-workbench__suggestion-status">
+                      {t('noDatasetSuggestions')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </label>
+          )}
+
+          {source === 'local' && (
+            <label className="dataset-workbench__control dataset-workbench__control--wide">
+              <span>{t('localDataset')}</span>
+              <select
+                className="dataset-workbench__select"
+                value={localDatasetInput}
+                onChange={(event) => {
+                  setPageState({ localDatasetInput: event.target.value })
+                  markExplorerDraft('local')
+                }}
+              >
+                <option value="">{t('selectDataset')}</option>
+                {localDatasets.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label || item.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {source === 'path' && (
+            <label className="dataset-workbench__control dataset-workbench__control--wide">
+              <span>{t('localDirectory')}</span>
+              <div className="dataset-workbench__path-row">
+                <ActionButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => localDirectoryInputRef.current?.click()}
+                  className="dataset-workbench__import-btn"
+                >
+                  {t('chooseLocalDirectory')}
+                </ActionButton>
+                <input
+                  className="dataset-workbench__input"
+                  type="text"
+                  value={localDatasetPathInput}
+                  onChange={(event) => {
+                    setPageState({
+                      localDatasetPathInput: event.target.value,
+                      localDatasetPathSelected: '',
+                      localPathDatasetLabel: '',
+                    })
+                    markExplorerDraft('path')
+                  }}
+                  placeholder={t('localPathPlaceholder')}
+                />
+                <input
+                  ref={localDirectoryInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  // @ts-expect-error vendor directory picker attribute
+                  webkitdirectory=""
+                  onChange={(event) => {
+                    void handleChooseLocalDirectory(event)
+                  }}
+                />
+              </div>
+            </label>
+          )}
 
           <ActionButton
             type="button"
             variant="secondary"
             onClick={() => void handleLoad()}
-            disabled={!datasetIdInput.trim()}
+            disabled={
+              preparingForQuality
+              || (source === 'remote'
+                ? !datasetIdInput.trim()
+                : source === 'local'
+                  ? !localDatasetInput.trim()
+                  : !localDatasetPathInput.trim())
+            }
             className="dataset-workbench__import-btn"
           >
-            {t('selectDataset')}
+            {t('browseDataset')}
           </ActionButton>
+
+          {source === 'remote' && (
+            <ActionButton
+              type="button"
+              variant="secondary"
+              onClick={() => void handlePrepareRemote()}
+              disabled={!datasetIdInput.trim() || preparingForQuality}
+              className="dataset-workbench__import-btn"
+            >
+              {preparingForQuality ? t('preparingForQuality') : t('prepareForQuality')}
+            </ActionButton>
+          )}
         </div>
+        {(prepareStatus || prepareError) && (
+          <div className={`dataset-workbench__status ${prepareError ? 'is-error' : ''}`}>
+            {prepareError || prepareStatus}
+          </div>
+        )}
       </div>
 
       {/* Info bar */}
       {currentDataset && datasetSummary ? (
         <div className="workflow-view__info-bar">
-          <span>{summary!.dataset}</span>
+          <span>{summaryForSource!.dataset}</span>
           <span>{datasetSummary.total_episodes} {t('episodes')}</span>
           <span>{datasetSummary.fps} fps</span>
           <span>{datasetSummary.robot_type}</span>
           {datasetSummary.codebase_version && <span>{datasetSummary.codebase_version}</span>}
         </div>
-      ) : summaryError ? (
+      ) : summaryErrorForSource ? (
         <GlassPanel className="quality-view__empty">
-          <span className="quality-sidebar__error">{summaryError}</span>
+          <span className="quality-sidebar__error">{summaryErrorForSource}</span>
         </GlassPanel>
-      ) : !summaryLoading ? (
+      ) : !summaryLoadingForSource ? (
         <GlassPanel className="quality-view__empty">
-          {t('hfDatasetPlaceholder')}
+          {source === 'remote' ? t('remoteDatasetEmpty') : t('chooseLocalDirectory')}
         </GlassPanel>
       ) : null}
 
-      {summaryLoading && (
+      {summaryLoadingForSource && (
         <GlassPanel className="quality-view__empty">{t('running')}...</GlassPanel>
       )}
 
-      {currentDataset && (datasetSummary || dashboard || episodePage) && (
-        <div className="quality-layout">
-          <div className="quality-layout__main">
-            {/* KPIs */}
-            <div className="quality-kpis">
-              <MetricCard label={t('totalEpisodes')} value={datasetSummary?.total_episodes ?? '--'} />
-              <MetricCard label="Frames" value={datasetSummary?.total_frames ?? '--'} accent="sage" />
-              <MetricCard label="FPS" value={datasetSummary?.fps ?? '--'} accent="amber" />
-              <MetricCard label={t('parquetFiles')} value={dashboard?.files.parquet_files ?? '--'} accent="teal" />
-              <MetricCard label={t('videoFiles')} value={dashboard?.files.video_files ?? '--'} accent="coral" />
-            </div>
-
-            {/* Modality chips */}
-            <GlassPanel className="explorer-section">
-              <h3>{t('modalities')}</h3>
-              {dashboardLoading && !dashboard ? (
-                <div className="explorer-empty">{t('running')}...</div>
-              ) : dashboard ? (
-                <ModalityChips items={dashboard.modality_summary} />
-              ) : (
-                <div className="explorer-empty">{dashboardError || t('noStats')}</div>
-              )}
-            </GlassPanel>
-
-            {/* Feature stats table */}
-            <GlassPanel className="explorer-section">
-              <h3>{t('featureStats')}</h3>
-              {dashboard ? (
-                <>
-                  <p className="explorer-section__sub">
-                    {dashboard.feature_names.length} features
-                    {dashboard.dataset_stats.features_with_stats > 0 &&
-                      ` / ${dashboard.dataset_stats.features_with_stats} with stats`}
-                  </p>
-                  <FeatureStatsTable stats={dashboard.feature_stats} />
-                </>
-              ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
-              )}
-            </GlassPanel>
-          </div>
-
-          {/* Sidebar */}
-          <GlassPanel className="quality-layout__sidebar">
-            <div className="quality-sidebar__section">
-              <h3>{t('episodeBrowser')}</h3>
-              <EpisodeBrowser />
-            </div>
-
-            <div className="quality-sidebar__section">
-              <h3>{t('fileInventory')}</h3>
-              {dashboard ? (
-                <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">{t('totalFiles')}</span> <span>{dashboard.files.total_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('parquetFiles')}</span> <span>{dashboard.files.parquet_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('videoFiles')}</span> <span>{dashboard.files.video_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('metaFiles')}</span> <span>{dashboard.files.meta_files}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('otherFiles')}</span> <span>{dashboard.files.other_files}</span></div>
-                </div>
-              ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
-              )}
-            </div>
-
-            <div className="quality-sidebar__section">
-              <h3>{t('featureType')}</h3>
-              {dashboard ? (
-                <TypeDistribution items={dashboard.feature_type_distribution} />
-              ) : (
-                <div className="explorer-empty">{dashboardLoading ? t('running') : (dashboardError || t('noStats'))}</div>
-              )}
-            </div>
-
-            {dashboard?.dataset_stats.row_count != null && (
-              <div className="quality-sidebar__section">
-                <div className="explorer-sidebar-stats">
-                  <div><span className="explorer-sidebar-stats__label">Total rows</span> <span>{dashboard.dataset_stats.row_count.toLocaleString()}</span></div>
-                  <div><span className="explorer-sidebar-stats__label">{t('vectorFeatures')}</span> <span>{dashboard.dataset_stats.vector_features}</span></div>
-                </div>
+      {currentDataset && (datasetSummary || dashboardForSource || episodePageForSource) && (
+        <div className="dataset-explorer-workspace">
+          <div className="dataset-explorer-workspace__main">
+            {datasetSummary && (
+              <div className="dataset-explorer-summary-strip" aria-label="Dataset summary">
+                <span>{prepareStatus || summaryForSource!.dataset}</span>
+                <span>{datasetSummary.total_episodes} {t('episodes')}</span>
+                <span>{datasetSummary.total_frames.toLocaleString()} frames</span>
+                <span>{datasetSummary.fps} fps</span>
+                {datasetSummary.robot_type && <span>{datasetSummary.robot_type}</span>}
+                {dashboardForSource && (
+                  <span>{dashboardForSource.files.parquet_files} parquet / {dashboardForSource.files.video_files} videos</span>
+                )}
               </div>
             )}
-          </GlassPanel>
+            <DatasetInsightStack
+              summary={datasetSummary}
+              dashboard={dashboardForSource}
+              episodePage={episodePageForSource}
+              dashboardLoading={dashboardLoadingForSource}
+              dashboardError={dashboardErrorForSource}
+              modalitiesNode={modalitiesNode}
+              featureStatsNode={featureStatsNode}
+              typeDistributionNode={typeDistributionNode}
+            />
+          </div>
+          <aside className="dataset-explorer-workspace__episodes" aria-label={t('episodeBrowser')}>
+            <div className="dataset-explorer-episodes__header">
+              <h3>{t('episodeBrowser')}</h3>
+              {episodePageForSource && (
+                <span>{episodePageForSource.total_episodes} total</span>
+              )}
+            </div>
+            <EpisodeBrowser datasetRef={datasetRef} />
+          </aside>
         </div>
       )}
     </div>

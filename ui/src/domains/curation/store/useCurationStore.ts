@@ -93,6 +93,19 @@ export interface PropagationResults {
   published_parquet_path?: string
 }
 
+export interface RemoteWorkflowPrepareResult {
+  dataset_id: string
+  local_path: string
+  dataset_name: string
+  display_name?: string
+}
+
+export interface LocalDirectorySessionResult {
+  dataset_name: string
+  display_name: string
+  local_path: string
+}
+
 export interface AnnotationItem {
   id: string
   label: string
@@ -193,6 +206,15 @@ interface WorkflowStore {
   loadDatasets: () => Promise<void>
   selectDataset: (datasetId: string) => Promise<void>
   importDatasetFromHf: (datasetId: string, includeVideos?: boolean) => Promise<void>
+  prepareRemoteDatasetForWorkflow: (
+    datasetId: string,
+    includeVideos?: boolean,
+  ) => Promise<RemoteWorkflowPrepareResult>
+  createLocalDirectorySession: (
+    files: File[],
+    relativePaths: string[],
+    displayName?: string,
+  ) => Promise<LocalDirectorySessionResult>
   toggleValidator: (name: string) => void
   setQualityThreshold: (key: string, value: number) => void
   runQualityValidation: () => Promise<void>
@@ -400,6 +422,42 @@ export const useWorkflow = create<WorkflowStore>((set, get) => ({
         await new Promise((resolve) => window.setTimeout(resolve, 1200))
       }
     }
+  },
+
+  prepareRemoteDatasetForWorkflow: async (datasetId: string, includeVideos = false) => {
+    const payload = await fetchJson<RemoteWorkflowPrepareResult>('/api/explorer/prepare-remote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dataset_id: datasetId,
+        include_videos: includeVideos,
+      }),
+    })
+    await get().loadDatasets()
+    persistDataset(payload.dataset_name)
+    await get().selectDataset(payload.dataset_name)
+    return payload
+  },
+
+  createLocalDirectorySession: async (files, relativePaths, displayName) => {
+    const form = new FormData()
+    files.forEach((file) => form.append('files', file))
+    relativePaths.forEach((path) => form.append('relative_paths', path))
+    if (displayName) {
+      form.append('display_name', displayName)
+    }
+    const response = await fetch('/api/explorer/local-directory-session', {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      throw new Error(await response.text())
+    }
+    const payload = (await response.json()) as LocalDirectorySessionResult
+    await get().loadDatasets()
+    persistDataset(payload.dataset_name)
+    await get().selectDataset(payload.dataset_name)
+    return payload
   },
 
   toggleValidator: (name: string) => {
