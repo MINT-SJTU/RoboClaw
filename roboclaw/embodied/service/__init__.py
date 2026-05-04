@@ -324,18 +324,19 @@ class EmbodiedService:
         steps: int = 100_000,
         device: str = "cuda",
     ) -> dict[str, Any]:
-        dataset = self.datasets.require_local_dataset(dataset_name)
-        argv = CommandBuilder.train(
-            self.manifest,
-            dataset=dataset.runtime,
+        # Run preflight before any IO so bad params are rejected immediately.
+        self._verify_train_preflight(
+            argv=[],
+            dataset=None,
+            dataset_name=dataset_name,
             policy_type=policy_type,
             steps=steps,
             device=device,
         )
-        self._verify_train_preflight(
-            argv=argv,
+        dataset = self.datasets.require_local_dataset(dataset_name)
+        argv = CommandBuilder.train(
+            self.manifest,
             dataset=dataset.runtime,
-            dataset_name=dataset_name,
             policy_type=policy_type,
             steps=steps,
             device=device,
