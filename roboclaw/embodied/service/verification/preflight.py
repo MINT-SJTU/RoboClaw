@@ -1,4 +1,4 @@
-"""Preflight checks for LeRobot subprocess inference."""
+"""Preflight checks for LeRobot subprocess sessions (inference, record, train)."""
 
 from __future__ import annotations
 
@@ -254,3 +254,204 @@ def _index_or_none(argv: Sequence[str], value: str) -> int | None:
 def _role_value(role: Any) -> str:
     value = getattr(role, "value", role)
     return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Record preflight
+# ---------------------------------------------------------------------------
+
+_MAX_RECORD_EPISODES = 10_000
+_MAX_RECORD_EPISODE_TIME_S = 3_600
+_MIN_FPS = 1
+_MAX_FPS = 120
+
+
+class RecordPreflightVerifier:
+    """Validate host-visible record inputs before spawning LeRobot.
+
+    Checks:
+    - wrapper action is ``record``
+    - required dataset args present (repo_id, root, num_episodes, episode_time_s)
+    - num_episodes and episode_time_s within sane bounds
+    - fps within [1, 120]
+    - at least one follower arm in the manifest
+    - bimanual setup has consistent left/right sides
+    - task string is non-empty
+    """
+
+    def verify(self, request: VerificationRequest) -> VerificationResult:
+        argv = list(request.argv)
+        violations: list[Violation] = []
+
+        violations.extend(_validate_record_wrapper_argv(argv))
+        violations.extend(_validate_record_dataset_args(argv))
+        violations.extend(_validate_record_limits(request, argv))
+        violations.extend(_validate_record_manifest(request.manifest))
+
+        return VerificationResult(tuple(violations), ())
+
+
+def _validate_record_wrapper_argv(argv: Sequence[str]) -> list[Violation]:
+    if not argv:
+        return [Violation("empty_argv", "Record command argv is empty.", "argv")]
+    wrapper_index = _index_or_none(argv, "roboclaw.embodied.command.wrapper")
+    if wrapper_index is None:
+        return [Violation(
+            "missing_wrapper",
+            "Record command must launch roboclaw.embodied.command.wrapper.",
+            "argv",
+        )]
+    action_index = wrapper_index + 1
+    if action_index >= len(argv) or argv[action_index] != "record":
+        return [Violation(
+            "unexpected_action",
+            "Record command wrapper action must be 'record'.",
+            "argv",
+        )]
+    return []
+
+
+def _validate_record_dataset_args(argv: Sequence[str]) -> list[Violation]:
+    required = (
+        "--dataset.repo_id=",
+        "--dataset.root=",
+        "--dataset.num_episodes=",
+        "--dataset.episode_time_s=",
+    )
+    return [
+        Violation("missing_record_arg", f"Record command is missing {p.rstrip('=')}.", "argv")
+        for p in required
+        if not _has_prefix(argv, p)
+    ]
+
+
+def _validate_record_limits(request: VerificationRequest, argv: Sequence[str]) -> list[Violation]:
+    violations: list[Violation] = []
+    if request.num_episodes < 1:
+        violations.append(Violation(
+            "invalid_num_episodes", "num_episodes must be at least 1.", "num_episodes",
+        ))
+    if request.num_episodes > _MAX_RECORD_EPISODES:
+        violations.append(Violation(
+            "too_many_episodes",
+            f"num_episodes must be <= {_MAX_RECORD_EPISODES}.",
+            "num_episodes",
+        ))
+    if request.episode_time_s < 1:
+        violations.append(Violation(
+            "invalid_episode_time", "episode_time_s must be at least 1.", "episode_time_s",
+        ))
+    if request.episode_time_s > _MAX_RECORD_EPISODE_TIME_S:
+        violations.append(Violation(
+            "episode_too_long",
+            f"episode_time_s must be <= {_MAX_RECORD_EPISODE_TIME_S}.",
+            "episode_time_s",
+        ))
+    fps_raw = _arg_value(argv, "--dataset.fps=")
+    if fps_raw:
+        try:
+            fps = int(fps_raw)
+            if fps < _MIN_FPS or fps > _MAX_FPS:
+                violations.append(Violation(
+                    "invalid_fps",
+                    f"fps must be between {_MIN_FPS} and {_MAX_FPS}, got {fps}.",
+                    "argv",
+                ))
+        except ValueError:
+            violations.append(Violation("invalid_fps", f"fps is not an integer: {fps_raw!r}.", "argv"))
+    task_raw = _arg_value(argv, "--dataset.task=")
+    if not task_raw or not task_raw.strip():
+        violations.append(Violation(
+            "missing_task", "Record command is missing a non-empty --dataset.task.", "argv",
+        ))
+    return violations
+
+
+def _validate_record_manifest(manifest: Any) -> list[Violation]:
+    arms = list(getattr(manifest, "arms", []) or [])
+    followers = [arm for arm in arms if _role_value(getattr(arm, "role", "")) == "follower"]
+    violations: list[Violation] = []
+    if not followers:
+        violations.append(Violation(
+            "missing_follower",
+            "Recording requires at least one follower arm in the manifest.",
+            "manifest.arms",
+        ))
+    if len(followers) == 2 and {getattr(arm, "side", "") for arm in followers} != {"left", "right"}:
+        violations.append(Violation(
+            "invalid_bimanual_sides",
+            "Bimanual recording requires one left and one right follower arm.",
+            "manifest.arms",
+        ))
+    return violations
+
+
+# ---------------------------------------------------------------------------
+# Train preflight
+# ---------------------------------------------------------------------------
+
+from roboclaw.embodied.command.builder import TRAIN_POLICY_TYPES as _TRAIN_POLICY_TYPES
+
+_SUPPORTED_POLICY_TYPES = _TRAIN_POLICY_TYPES
+_MIN_STEPS = 1
+_MAX_STEPS = 10_000_000
+
+
+class TrainPreflightVerifier:
+    """Validate training inputs before spawning lerobot-train.
+
+    Checks:
+    - dataset_name is a non-empty slug
+    - policy_type is a supported value
+    - steps within [1, 10_000_000]
+    - device is a non-empty string
+    - dataset directory exists locally (warns if absent, does not block)
+    """
+
+    def verify(self, request: VerificationRequest) -> VerificationResult:
+        violations: list[Violation] = []
+        warnings: list[Violation] = []
+
+        dataset_name = request.metadata.get("dataset_name", "")
+        policy_type = request.metadata.get("policy_type", "act")
+        steps = request.metadata.get("steps", 100_000)
+        device = request.metadata.get("device", "cuda")
+
+        if not dataset_name or not dataset_name.strip():
+            violations.append(Violation(
+                "missing_dataset_name", "Training requires a non-empty dataset_name.", "dataset_name",
+            ))
+
+        if policy_type not in _SUPPORTED_POLICY_TYPES:
+            allowed = ", ".join(sorted(_SUPPORTED_POLICY_TYPES))
+            violations.append(Violation(
+                "unsupported_policy_type",
+                f"policy_type '{policy_type}' is not supported. Expected one of: {allowed}.",
+                "policy_type",
+            ))
+
+        if not isinstance(steps, int) or steps < _MIN_STEPS:
+            violations.append(Violation(
+                "invalid_steps", f"steps must be an integer >= {_MIN_STEPS}.", "steps",
+            ))
+        elif steps > _MAX_STEPS:
+            violations.append(Violation(
+                "too_many_steps", f"steps must be <= {_MAX_STEPS}.", "steps",
+            ))
+
+        if not device or not str(device).strip():
+            violations.append(Violation(
+                "missing_device", "Training requires a non-empty device (e.g. 'cuda', 'cpu').", "device",
+            ))
+
+        if request.dataset is not None:
+            dataset_path = getattr(request.dataset, "local_path", None)
+            if dataset_path and not Path(dataset_path).exists():
+                warnings.append(Violation(
+                    "dataset_not_local",
+                    f"Dataset path does not exist locally: {dataset_path}. "
+                    "Training will fail unless the dataset is available at runtime.",
+                    "dataset",
+                ))
+
+        return VerificationResult(tuple(violations), tuple(warnings))

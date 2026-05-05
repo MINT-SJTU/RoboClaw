@@ -34,6 +34,8 @@ from roboclaw.embodied.service.session.calibrate import CalibrationSession
 from roboclaw.embodied.service.session.setup import SetupSession
 from roboclaw.embodied.service.verification import (
     PreflightVerifier,
+    RecordPreflightVerifier,
+    TrainPreflightVerifier,
     VerificationRequest,
     Verifier,
 )
@@ -66,6 +68,8 @@ class EmbodiedService:
         self._active_session: Session | None = None
         self._recording_started = False
         self._preflight_verifier = preflight_verifier or PreflightVerifier()
+        self._record_preflight_verifier = RecordPreflightVerifier()
+        self._train_preflight_verifier = TrainPreflightVerifier()
 
         # Sub-services
         self.calibration = CalibrationSession(self)
@@ -226,6 +230,48 @@ class EmbodiedService:
         if not result.ok:
             raise ActionError(result.format_violations())
 
+    def _verify_record_preflight(
+        self,
+        *,
+        argv: list[str],
+        dataset: Any,
+        num_episodes: int,
+        episode_time_s: int,
+    ) -> None:
+        result = self._record_preflight_verifier.verify(VerificationRequest(
+            argv=argv,
+            manifest=self.manifest,
+            dataset=dataset,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+        ))
+        if not result.ok:
+            raise ActionError(result.format_violations())
+
+    def _verify_train_preflight(
+        self,
+        *,
+        argv: list[str],
+        dataset: Any,
+        dataset_name: str,
+        policy_type: str,
+        steps: int,
+        device: str,
+    ) -> None:
+        result = self._train_preflight_verifier.verify(VerificationRequest(
+            argv=argv,
+            manifest=self.manifest,
+            dataset=dataset,
+            metadata={
+                "dataset_name": dataset_name,
+                "policy_type": policy_type,
+                "steps": steps,
+                "device": device,
+            },
+        ))
+        if not result.ok:
+            raise ActionError(result.format_violations())
+
     # -- Operations (Web entry points) --
 
     async def start_teleop(self, *, fps: int = 30, arms: str = "") -> None:
@@ -257,12 +303,51 @@ class EmbodiedService:
             use_cameras=use_cameras,
             arms=arms,
         )
+        self._verify_record_preflight(
+            argv=argv,
+            dataset=dataset.runtime,
+            num_episodes=num_episodes,
+            episode_time_s=episode_time_s,
+        )
         await self._start_managed_session(self.record, owner="recording", argv=argv)
         await self.board.update(target_episodes=num_episodes, dataset=dataset.runtime.name)
         self._recording_started = True
         if self._monitor is not None:
             self._monitor.set_recording_active(True)
         return dataset.runtime.name
+
+    async def start_training(
+        self,
+        *,
+        dataset_name: str,
+        policy_type: str = "act",
+        steps: int = 100_000,
+        device: str = "cuda",
+    ) -> dict[str, Any]:
+        # Run preflight before any IO so bad params are rejected immediately.
+        self._verify_train_preflight(
+            argv=[],
+            dataset=None,
+            dataset_name=dataset_name,
+            policy_type=policy_type,
+            steps=steps,
+            device=device,
+        )
+        _matches = [r for r in self.datasets.list_local_datasets() if r.runtime and r.runtime.name == dataset_name]
+        if not _matches:
+            raise ValueError(f"Dataset '{dataset_name}' not found")
+        dataset = _matches[0]
+        argv = CommandBuilder.train(
+            self.manifest,
+            dataset=dataset.runtime,
+            policy_type=policy_type,
+            steps=steps,
+            device=device,
+        )
+        from roboclaw.embodied.executor import SubprocessExecutor
+        from roboclaw.embodied.command import logs_dir
+        job_id = await SubprocessExecutor().run_detached(argv=argv, log_dir=logs_dir())
+        return {"message": f"Training started. Job ID: {job_id}", "job_id": job_id}
 
     async def start_replay(
         self,

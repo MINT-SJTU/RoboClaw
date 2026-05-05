@@ -102,12 +102,14 @@ export const useTrainingStore = create<TrainingStore>((set) => ({
   },
 
   doTrainStart: async (params) => {
-    set({ trainingLoading: true })
+    set({ trainingLoading: true, trainJobMessage: '' })
     try {
       const data = await postJson(`${TRAIN}/start`, params)
       const jobId = typeof data.job_id === 'string' ? data.job_id : ''
       storeTrainJobId(jobId)
       set({ trainJobMessage: data.message || '', currentTrainJobId: jobId })
+    } catch (err) {
+      set({ trainJobMessage: err instanceof Error ? err.message : String(err) })
     } finally {
       set({ trainingLoading: false })
     }

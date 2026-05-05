@@ -297,7 +297,7 @@ class CommandBuilder:
         output_dir = Path(policies_root).expanduser() / output_dir_name
 
         argv = [
-            "lerobot-train",
+            sys.executable, "-m", "lerobot.scripts.lerobot_train",
             f"--dataset.repo_id={dataset.repo_id}",
             f"--dataset.root={dataset.local_path}",
             "--dataset.video_backend=pyav",

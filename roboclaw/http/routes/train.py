@@ -26,18 +26,15 @@ def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/train/start")
     async def train_start(body: TrainStartRequest) -> dict[str, Any]:
-        result = await service.train.train(
-            manifest=service.manifest,
-            kwargs={
-                "dataset_name": body.dataset_name,
-                "policy_type": body.policy_type,
-                "steps": body.steps,
-                "device": body.device,
-            },
-            tty_handoff=None,
-        )
-        job_id = result.rsplit("Job ID:", 1)[-1].strip() if "Job ID:" in result else ""
-        return {"message": result, "job_id": job_id}
+        try:
+            return await service.start_training(
+                dataset_name=body.dataset_name,
+                policy_type=body.policy_type,
+                steps=body.steps,
+                device=body.device,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.post("/api/train/stop")
     async def train_stop(body: TrainStopRequest) -> dict[str, Any]:

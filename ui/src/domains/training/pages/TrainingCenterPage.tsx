@@ -37,6 +37,7 @@ export default function TrainingCenterPage() {
   const currentTrainJobId = useTrainingStore((state) => state.currentTrainJobId)
   const trainingLoading = useTrainingStore((state) => state.trainingLoading)
   const trainingStopLoading = useTrainingStore((state) => state.trainingStopLoading)
+  const trainJobMessage = useTrainingStore((state) => state.trainJobMessage)
   const hubLoading = useHubTransferStore((state) => state.hubLoading)
   const hubProgress = useHubTransferStore((state) => state.hubProgress)
   const pushPolicy = useHubTransferStore((state) => state.pushPolicy)
@@ -134,6 +135,11 @@ export default function TrainingCenterPage() {
               {trainingStopLoading ? t('stoppingTraining') : t('stopTraining')}
             </button>
           </div>
+          {trainJobMessage && (
+            <p className="mt-3 text-xs rounded-lg px-3 py-2 bg-rd/10 text-rd border border-rd/20">
+              {trainJobMessage}
+            </p>
+          )}
         </section>
 
         <section className="bg-sf rounded-xl p-5 shadow-card shadow-inset-gn">
