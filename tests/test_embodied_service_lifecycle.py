@@ -263,7 +263,9 @@ async def test_start_recording_releases_lock_on_session_start_failure(tmp_path: 
     with patch("roboclaw.embodied.service.check_arm_status", side_effect=_teleop_arm_statuses()), patch(
         "roboclaw.embodied.service.check_camera_status",
         return_value=CameraStatus("wrist", True, 640, 480),
-    ), patch("roboclaw.embodied.service.CommandBuilder.record", return_value=["record-cmd"]):
+    ), patch("roboclaw.embodied.service.CommandBuilder.record", return_value=["record-cmd"]), patch.object(
+        service, "_verify_record_preflight"
+    ):
         with pytest.raises(RuntimeError, match="boom"):
             await service.start_recording(task="pick", dataset_name="demo")
 
