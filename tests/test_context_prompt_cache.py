@@ -8,6 +8,7 @@ from pathlib import Path
 import datetime as datetime_module
 
 from roboclaw.agent.context import ContextBuilder
+from roboclaw.agent.experience import ExperienceRecord, ExperienceStore
 
 
 class _FakeDatetime(real_datetime):
@@ -71,3 +72,31 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_system_prompt_includes_relevant_experience_for_similar_request(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    store = ExperienceStore(workspace)
+    store.append(ExperienceRecord.create(
+        task_type="train",
+        summary="Local training for dataset 'demo' with policy 'act' ended as finished",
+        outcome="finished",
+        lesson="This dataset/policy pair finished successfully before.",
+        dataset="demo",
+        policy="act",
+        provider="local",
+        job_id="job-1",
+        source="test",
+    ))
+
+    builder = ContextBuilder(workspace)
+    messages = builder.build_messages(
+        history=[],
+        current_message="Please train demo with act again",
+    )
+
+    system_prompt = messages[0]["content"]
+    assert isinstance(system_prompt, str)
+    assert "# Relevant Experience" in system_prompt
+    assert "dataset=demo" in system_prompt
+    assert "finished" in system_prompt

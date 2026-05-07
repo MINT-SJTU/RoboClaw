@@ -6,6 +6,7 @@ import platform
 from pathlib import Path
 from typing import Any
 
+from roboclaw.agent.experience import ExperienceStore
 from roboclaw.utils.helpers import current_time_str
 
 from roboclaw.agent.memory import MemoryStore
@@ -22,9 +23,15 @@ class ContextBuilder:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
+        self.experiences = ExperienceStore(workspace)
         self.skills = SkillsLoader(workspace)
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        *,
+        current_message: str = "",
+    ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity()]
 
@@ -35,6 +42,10 @@ class ContextBuilder:
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
+
+        experience_context = self.experiences.build_context(query=current_message)
+        if experience_context:
+            parts.append(f"# Relevant Experience\n\n{experience_context}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -138,7 +149,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, current_message=current_message)},
             *history,
             {"role": "user", "content": merged},
         ]

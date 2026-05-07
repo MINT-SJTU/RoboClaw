@@ -8,6 +8,7 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from roboclaw.agent.experience import ExperienceRecord, ExperienceStore
 from roboclaw.embodied.command import CommandBuilder, logs_dir
 
 if TYPE_CHECKING:
@@ -23,6 +24,57 @@ class TrainSession:
 
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
+        self._experiences = ExperienceStore(parent.manifest._path.parent)
+        self._job_specs: dict[str, dict[str, str]] = {}
+
+    async def start_job_state(
+        self,
+        manifest: Manifest,
+        kwargs: dict[str, Any],
+    ) -> dict[str, str | int | bool | None]:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        dataset_name = str(kwargs.get("dataset_name", "default") or "default")
+        policy_type = str(kwargs.get("policy_type", "act") or "act")
+        steps = int(kwargs.get("steps", 100_000) or 100_000)
+        device = str(kwargs.get("device", "cuda") or "cuda")
+        dataset = self._parent.datasets.resolve_runtime_dataset(dataset_name)
+        experience_hint = self._build_experience_hint(dataset_name=dataset_name, policy_type=policy_type)
+        argv = CommandBuilder.train(
+            manifest,
+            dataset=dataset.runtime,
+            policy_type=policy_type,
+            steps=steps,
+            device=device,
+        )
+        job_id = await SubprocessExecutor().run_detached(argv=argv, log_dir=logs_dir())
+        self._job_specs[job_id] = {
+            "dataset_name": dataset_name,
+            "policy_type": policy_type,
+            "dataset_path": str(dataset.runtime.local_path),
+            "provider": "local",
+        }
+        state: dict[str, str | int | bool | None] = {
+            "job_id": job_id,
+            "status": "running",
+            "running": True,
+            "pid": None,
+            "log_path": str(SubprocessExecutor()._job_log_path(job_id, logs_dir())),
+            "log_tail": "",
+            "dataset_name": dataset_name,
+            "policy_type": policy_type,
+            "dataset_path": str(dataset.runtime.local_path),
+            "provider": "local",
+            "experience_hint": experience_hint,
+        }
+        state["message"] = self._format_status_message(state)
+        self._record_experience(
+            job_id=job_id,
+            status="submitted",
+            log_tail="",
+            log_path=str(state.get("log_path") or ""),
+        )
+        return state
 
     async def train(
         self,
@@ -30,19 +82,14 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
+        state = await self.start_job_state(manifest, kwargs)
+        return str(state["message"])
+
+    async def stop_job_state(self, job_id: str) -> dict[str, str | int | bool | None]:
         from roboclaw.embodied.executor import SubprocessExecutor
 
-        dataset_name = kwargs.get("dataset_name", "default")
-        dataset = self._parent.datasets.resolve_runtime_dataset(dataset_name)
-        argv = CommandBuilder.train(
-            manifest,
-            dataset=dataset.runtime,
-            policy_type=kwargs.get("policy_type", "act"),
-            steps=kwargs.get("steps", 100_000),
-            device=kwargs.get("device", "cuda"),
-        )
-        job_id = await SubprocessExecutor().run_detached(argv=argv, log_dir=logs_dir())
-        return f"Training started. Job ID: {job_id}"
+        status = await SubprocessExecutor().stop_job(job_id=job_id, log_dir=logs_dir())
+        return self._enrich_state(job_id, status)
 
     async def stop_job(
         self,
@@ -50,11 +97,15 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
+        job_id = kwargs.get("job_id", "")
+        status = await self.stop_job_state(str(job_id))
+        return str(status["message"])
+
+    async def job_status_state(self, job_id: str) -> dict[str, str | int | bool | None]:
         from roboclaw.embodied.executor import SubprocessExecutor
 
-        job_id = kwargs.get("job_id", "")
-        status = await SubprocessExecutor().stop_job(job_id=job_id, log_dir=logs_dir())
-        return "\n".join(f"{key}: {value}" for key, value in status.items())
+        status = await SubprocessExecutor().job_status(job_id=job_id, log_dir=logs_dir())
+        return self._enrich_state(job_id, status)
 
     async def job_status(
         self,
@@ -62,11 +113,20 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
+        job_id = kwargs.get("job_id", "")
+        status = await self.job_status_state(str(job_id))
+        return str(status["message"])
+
+    async def current_job_state(self) -> dict[str, str | int | bool | None]:
         from roboclaw.embodied.executor import SubprocessExecutor
 
-        job_id = kwargs.get("job_id", "")
-        status = await SubprocessExecutor().job_status(job_id=job_id, log_dir=logs_dir())
-        return "\n".join(f"{key}: {value}" for key, value in status.items())
+        status = await SubprocessExecutor().latest_running_job(log_dir=logs_dir())
+        job_id = str(status.get("job_id") or "")
+        if not job_id:
+            enriched = self._enrich_state("", status)
+            enriched["message"] = self._format_status_message(enriched)
+            return enriched
+        return self._enrich_state(job_id, status)
 
     async def current_job(
         self,
@@ -74,9 +134,7 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> dict[str, str | int | bool | None]:
-        from roboclaw.embodied.executor import SubprocessExecutor
-
-        return await SubprocessExecutor().latest_running_job(log_dir=logs_dir())
+        return await self.current_job_state()
 
     def curve_data(self, job_id: str) -> dict[str, Any]:
         job_id = job_id.strip()
@@ -128,6 +186,109 @@ class TrainSession:
             return "No policies found."
         return json.dumps(policies, indent=2, ensure_ascii=False)
 
+    def _build_experience_hint(self, *, dataset_name: str, policy_type: str) -> str:
+        records = self._experiences.search(
+            task_type="train",
+            dataset=dataset_name,
+            policy=policy_type,
+            provider="local",
+            limit=2,
+        )
+        if not records:
+            return ""
+        lines = []
+        for record in records:
+            lesson = record.lesson or record.summary
+            lines.append(f"{record.outcome}: {lesson}")
+        return "\n".join(lines)
+
+    def _enrich_state(
+        self,
+        job_id: str,
+        state: dict[str, str | int | bool | None],
+    ) -> dict[str, str | int | bool | None]:
+        enriched = dict(state)
+        metadata = self._job_specs.get(job_id, {})
+        enriched.setdefault("job_id", job_id)
+        enriched.setdefault("provider", metadata.get("provider", "local"))
+        enriched.setdefault("dataset_name", metadata.get("dataset_name", ""))
+        enriched.setdefault("policy_type", metadata.get("policy_type", ""))
+        enriched.setdefault("dataset_path", metadata.get("dataset_path", ""))
+        enriched.setdefault("experience_hint", "")
+        enriched["message"] = self._format_status_message(enriched)
+
+        status_text = str(enriched.get("status") or "").lower()
+        if status_text in _TERMINAL_TRAIN_STATUSES and job_id:
+            self._record_experience(
+                job_id=job_id,
+                status=status_text,
+                log_tail=str(enriched.get("log_tail") or ""),
+                log_path=str(enriched.get("log_path") or ""),
+            )
+        return enriched
+
+    def _format_status_message(self, state: dict[str, str | int | bool | None]) -> str:
+        order = (
+            "job_id",
+            "status",
+            "running",
+            "pid",
+            "dataset_name",
+            "policy_type",
+            "provider",
+            "dataset_path",
+            "log_path",
+            "experience_hint",
+        )
+        lines: list[str] = []
+        seen: set[str] = set()
+        for key in order:
+            value = state.get(key)
+            if value in {None, ""}:
+                continue
+            seen.add(key)
+            lines.append(f"{key}: {value}")
+        for key, value in state.items():
+            if key in seen or value in {None, ""}:
+                continue
+            lines.append(f"{key}: {value}")
+        return "\n".join(lines)
+
+    def _record_experience(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        log_tail: str,
+        log_path: str,
+    ) -> None:
+        metadata = self._job_specs.get(job_id, {})
+        dataset_name = metadata.get("dataset_name", "")
+        policy_type = metadata.get("policy_type", "")
+        provider = metadata.get("provider", "local")
+        if not dataset_name and not policy_type and not job_id:
+            return
+        lesson = _status_lesson(status, log_tail)
+        summary = (
+            f"Local training for dataset '{dataset_name or '<unknown>'}' "
+            f"with policy '{policy_type or '<unknown>'}' ended as {status}"
+        )
+        self._experiences.append(ExperienceRecord.create(
+            task_type="train",
+            summary=summary,
+            outcome=status,
+            lesson=lesson,
+            dataset=dataset_name,
+            policy=policy_type,
+            provider=provider,
+            job_id=job_id,
+            source="train_session",
+            error=log_tail if status in {"failed", "error"} else "",
+            dataset_path=metadata.get("dataset_path", ""),
+            task_name=job_id,
+            checkpoint_path=log_path,
+        ))
+
 def _scan_policies(root: Path) -> list[dict[str, Any]]:
     """Scan policy directories under *root* and return summary dicts."""
     policies: list[dict[str, Any]] = []
@@ -157,6 +318,7 @@ def _enrich_policy_entry(entry: dict[str, Any], checkpoint_dir: Path) -> None:
 
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9-]+$")
+_TERMINAL_TRAIN_STATUSES = {"finished", "stopped", "failed", "error", "missing", "idle"}
 _TRAIN_LOG_RE = re.compile(
     r"step:(?P<step>\S+).*?"
     r"ep:(?P<ep>\d+).*?"
@@ -246,3 +408,21 @@ def _parse_training_curve_line(line: str) -> dict[str, Any] | None:
         "epoch": epoch,
         "loss": loss,
     }
+
+
+def _status_lesson(status: str, log_tail: str) -> str:
+    normalized = status.strip().lower()
+    if normalized == "submitted":
+        return "A similar run was submitted successfully."
+    if normalized == "finished":
+        return "A similar run finished previously."
+    if normalized == "stopped":
+        return "A similar run had to be stopped manually."
+    if normalized in {"failed", "error"}:
+        tail = log_tail.strip()
+        if tail:
+            return f"Recent failure signal: {tail.splitlines()[-1]}"
+        return "A similar run failed previously."
+    if normalized == "missing":
+        return "A similar run lost its local process metadata before completion."
+    return f"A similar run reached status '{status}'."

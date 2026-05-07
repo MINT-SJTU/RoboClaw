@@ -26,7 +26,7 @@ def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/train/start")
     async def train_start(body: TrainStartRequest) -> dict[str, Any]:
-        result = await service.train.train(
+        result = await service.train.start_job_state(
             manifest=service.manifest,
             kwargs={
                 "dataset_name": body.dataset_name,
@@ -34,36 +34,20 @@ def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
                 "steps": body.steps,
                 "device": body.device,
             },
-            tty_handoff=None,
         )
-        job_id = result.rsplit("Job ID:", 1)[-1].strip() if "Job ID:" in result else ""
-        return {"message": result, "job_id": job_id}
+        return result
 
     @app.post("/api/train/stop")
     async def train_stop(body: TrainStopRequest) -> dict[str, Any]:
-        result = await service.train.stop_job(
-            manifest=service.manifest,
-            kwargs={"job_id": body.job_id},
-            tty_handoff=None,
-        )
-        return {"message": result}
+        return await service.train.stop_job_state(body.job_id)
 
     @app.get("/api/train/current")
     async def train_current() -> dict[str, Any]:
-        return await service.train.current_job(
-            manifest=service.manifest,
-            kwargs={},
-            tty_handoff=None,
-        )
+        return await service.train.current_job_state()
 
     @app.get("/api/train/status/{job_id}")
     async def train_status(job_id: str) -> dict[str, Any]:
-        result = await service.train.job_status(
-            manifest=service.manifest,
-            kwargs={"job_id": job_id},
-            tty_handoff=None,
-        )
-        return {"message": result}
+        return await service.train.job_status_state(job_id)
 
     @app.get("/api/train/curve/{job_id}")
     async def train_curve(job_id: str) -> dict[str, Any]:
