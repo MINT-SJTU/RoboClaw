@@ -24,7 +24,7 @@ class TrainSession:
 
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
-        self._experiences = ExperienceStore(parent.manifest._path.parent)
+        self._experiences = ExperienceStore(parent.manifest._path.parent.parent)
         self._job_specs: dict[str, dict[str, str]] = {}
 
     async def start_job_state(
