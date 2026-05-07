@@ -16,6 +16,7 @@ class TrainStartRequest(BaseModel):
     policy_type: str = "act"
     steps: int = 100_000
     device: str = "cuda"
+    continual_learning: bool = False
 
 
 class TrainStopRequest(BaseModel):
@@ -33,6 +34,7 @@ def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
                 "policy_type": body.policy_type,
                 "steps": body.steps,
                 "device": body.device,
+                "continual_learning": body.continual_learning,
             },
         )
         return result

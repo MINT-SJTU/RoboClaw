@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections import deque
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from roboclaw.agent.experience import ExperienceRecord, ExperienceStore
+from roboclaw.data.datasets import DatasetRuntimeRef
 from roboclaw.embodied.command import CommandBuilder, logs_dir
 
 if TYPE_CHECKING:
@@ -39,10 +42,21 @@ class TrainSession:
         steps = int(kwargs.get("steps", 100_000) or 100_000)
         device = str(kwargs.get("device", "cuda") or "cuda")
         dataset = self._parent.datasets.resolve_runtime_dataset(dataset_name)
-        experience_hint = self._build_experience_hint(dataset_name=dataset_name, policy_type=policy_type)
+        continual_learning = bool(kwargs.get("continual_learning", False))
+        training_runtime, replay_datasets = await self._resolve_training_runtime(
+            dataset_name=dataset_name,
+            policy_type=policy_type,
+            dataset=dataset.runtime,
+            continual_learning=continual_learning,
+        )
+        experience_hint = self._build_experience_hint(
+            dataset_name=dataset_name,
+            policy_type=policy_type,
+            replay_datasets=replay_datasets,
+        )
         argv = CommandBuilder.train(
             manifest,
-            dataset=dataset.runtime,
+            dataset=training_runtime,
             policy_type=policy_type,
             steps=steps,
             device=device,
@@ -51,8 +65,9 @@ class TrainSession:
         self._job_specs[job_id] = {
             "dataset_name": dataset_name,
             "policy_type": policy_type,
-            "dataset_path": str(dataset.runtime.local_path),
+            "dataset_path": str(training_runtime.local_path),
             "provider": "local",
+            "replay_datasets": ", ".join(replay_datasets),
         }
         state: dict[str, str | int | bool | None] = {
             "job_id": job_id,
@@ -63,9 +78,10 @@ class TrainSession:
             "log_tail": "",
             "dataset_name": dataset_name,
             "policy_type": policy_type,
-            "dataset_path": str(dataset.runtime.local_path),
+            "dataset_path": str(training_runtime.local_path),
             "provider": "local",
             "experience_hint": experience_hint,
+            "replay_datasets": ", ".join(replay_datasets),
         }
         state["message"] = self._format_status_message(state)
         self._record_experience(
@@ -186,21 +202,99 @@ class TrainSession:
             return "No policies found."
         return json.dumps(policies, indent=2, ensure_ascii=False)
 
-    def _build_experience_hint(self, *, dataset_name: str, policy_type: str) -> str:
+    def _build_experience_hint(
+        self,
+        *,
+        dataset_name: str,
+        policy_type: str,
+        replay_datasets: list[str],
+    ) -> str:
         records = self._experiences.search(
             task_type="train",
             dataset=dataset_name,
             policy=policy_type,
+            outcomes=frozenset({"success", "failed", "error", "stopped"}),
             provider="local",
             limit=2,
         )
-        if not records:
-            return ""
-        lines = []
-        for record in records:
-            lesson = record.lesson or record.summary
-            lines.append(f"{record.outcome}: {lesson}")
+        lines = [
+            f"{record.outcome}: {record.lesson or record.summary}"
+            for record in records
+        ]
+        if replay_datasets:
+            lines.append(f"continual replay mixed datasets: {', '.join(replay_datasets)}")
         return "\n".join(lines)
+
+    async def _resolve_training_runtime(
+        self,
+        *,
+        dataset_name: str,
+        policy_type: str,
+        dataset: DatasetRuntimeRef,
+        continual_learning: bool,
+    ) -> tuple[DatasetRuntimeRef, list[str]]:
+        if not continual_learning:
+            return dataset, []
+        replay_datasets = self._available_replay_datasets(
+            current_dataset=dataset_name,
+            policy=policy_type,
+        )
+        if not replay_datasets:
+            return dataset, []
+        replay_runtime = await asyncio.to_thread(
+            self._prepare_replay_runtime_dataset,
+            dataset,
+            replay_datasets,
+        )
+        return replay_runtime, replay_datasets
+
+    def _available_replay_datasets(self, *, current_dataset: str, policy: str) -> list[str]:
+        candidates = self._experiences.get_replay_datasets(
+            current_dataset=current_dataset,
+            policy=policy,
+        )
+        available: list[str] = []
+        for dataset_name in candidates:
+            ref = self._parent.datasets.get_local_dataset(f"local/{dataset_name}")
+            if ref is not None and ref.runtime is not None:
+                available.append(dataset_name)
+        return available
+
+    def _prepare_replay_runtime_dataset(
+        self,
+        dataset: DatasetRuntimeRef,
+        replay_datasets: list[str],
+    ) -> DatasetRuntimeRef:
+        from lerobot.datasets.dataset_tools import merge_datasets
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        replay_slug = _build_replay_slug(dataset.name, replay_datasets)
+        replay_root = self._parent.datasets.root / "replay" / replay_slug
+        replay_root.parent.mkdir(parents=True, exist_ok=True)
+        source_datasets = [dataset, *self._resolve_replay_runtime_refs(replay_datasets)]
+        merged = [
+            LeRobotDataset(repo_id=ref.repo_id, root=ref.local_path)
+            for ref in source_datasets
+        ]
+        merge_datasets(
+            merged,
+            output_repo_id=f"local/{replay_slug}",
+            output_dir=replay_root,
+        )
+        return DatasetRuntimeRef(
+            name=dataset.name,
+            repo_id=dataset.repo_id,
+            local_path=replay_root,
+        )
+
+    def _resolve_replay_runtime_refs(self, replay_datasets: list[str]) -> list[DatasetRuntimeRef]:
+        refs: list[DatasetRuntimeRef] = []
+        for dataset_name in replay_datasets:
+            runtime = self._parent.datasets.resolve_runtime_dataset(dataset_name).runtime
+            if runtime is None:
+                continue
+            refs.append(runtime)
+        return refs
 
     def _enrich_state(
         self,
@@ -214,6 +308,7 @@ class TrainSession:
         enriched.setdefault("dataset_name", metadata.get("dataset_name", ""))
         enriched.setdefault("policy_type", metadata.get("policy_type", ""))
         enriched.setdefault("dataset_path", metadata.get("dataset_path", ""))
+        enriched.setdefault("replay_datasets", metadata.get("replay_datasets", ""))
         enriched.setdefault("experience_hint", "")
         enriched["message"] = self._format_status_message(enriched)
 
@@ -237,6 +332,7 @@ class TrainSession:
             "policy_type",
             "provider",
             "dataset_path",
+            "replay_datasets",
             "log_path",
             "experience_hint",
         )
@@ -264,10 +360,12 @@ class TrainSession:
     ) -> None:
         metadata = self._job_specs.get(job_id, {})
         dataset_name = metadata.get("dataset_name", "")
+        replay_datasets = metadata.get("replay_datasets", "")
         policy_type = metadata.get("policy_type", "")
         provider = metadata.get("provider", "local")
         if not dataset_name and not policy_type and not job_id:
             return
+        outcome = _experience_outcome(status)
         lesson = _status_lesson(status, log_tail)
         summary = (
             f"Local training for dataset '{dataset_name or '<unknown>'}' "
@@ -276,9 +374,10 @@ class TrainSession:
         self._experiences.append(ExperienceRecord.create(
             task_type="train",
             summary=summary,
-            outcome=status,
+            outcome=outcome,
             lesson=lesson,
             dataset=dataset_name,
+            replay_datasets=replay_datasets,
             policy=policy_type,
             provider=provider,
             job_id=job_id,
@@ -337,6 +436,23 @@ def _update_best(
     if best is None or loss < best["loss"] or (loss == best["loss"] and ep < best["ep"]):
         return {"loss": loss, "ep": ep}
     return best
+
+
+def _experience_outcome(status: str) -> str:
+    if status == "finished":
+        return "success"
+    return status
+
+
+def _build_replay_slug(current_dataset: str, replay_datasets: list[str]) -> str:
+    tokens = [_slug_token(current_dataset), *[_slug_token(name) for name in replay_datasets]]
+    suffix = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+    return "__".join(["replay", *tokens, suffix])
+
+
+def _slug_token(value: str) -> str:
+    token = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip()).strip("_")
+    return token or "dataset"
 
 
 def _parse_training_curve(job_id: str, log_path: Path) -> tuple[dict[str, float | int] | None, list[dict[str, Any]]]:

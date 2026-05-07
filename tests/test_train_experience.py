@@ -29,7 +29,7 @@ def isolated_roboclaw_home(tmp_path):
 @pytest.fixture()
 def embodied_service(tmp_path: Path) -> EmbodiedService:
     board = Board()
-    manifest = Manifest(path=tmp_path / "manifest.json", board=board)
+    manifest = Manifest(path=tmp_path / "workspace" / "embodied" / "manifest.json", board=board)
     monitor = HardwareMonitor(board=board, manifest=manifest)
     return EmbodiedService(hardware_monitor=monitor, board=board, manifest=manifest)
 
@@ -72,11 +72,11 @@ def test_train_session_records_experience_and_reuses_it_as_hint(embodied_service
             {"dataset_name": "demo", "policy_type": "act", "steps": 1000, "device": "cuda"},
         ))
 
-    assert "finished" in str(second["experience_hint"])
+    assert "success" in str(second["experience_hint"])
     assert "demo" in str(second["message"])
 
-    store = ExperienceStore(embodied_service.manifest._path.parent)
+    store = ExperienceStore(embodied_service.manifest._path.parent.parent)
     records = store.read_all()
     outcomes = {record.outcome for record in records}
     assert "submitted" in outcomes
-    assert "finished" in outcomes
+    assert "success" in outcomes

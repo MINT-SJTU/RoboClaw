@@ -40,6 +40,7 @@ class ExperienceRecord:
     outcome: str
     lesson: str = ""
     dataset: str = ""
+    replay_datasets: str = ""
     policy: str = ""
     provider: str = ""
     job_id: str = ""
@@ -58,6 +59,7 @@ class ExperienceRecord:
         outcome: str,
         lesson: str = "",
         dataset: str = "",
+        replay_datasets: str = "",
         policy: str = "",
         provider: str = "",
         job_id: str = "",
@@ -74,6 +76,7 @@ class ExperienceRecord:
             outcome=_normalize_text(outcome),
             lesson=_normalize_text(lesson),
             dataset=_normalize_text(dataset),
+            replay_datasets=_normalize_text(replay_datasets),
             policy=_normalize_text(policy),
             provider=_normalize_text(provider),
             job_id=_normalize_text(job_id),
@@ -93,6 +96,7 @@ class ExperienceRecord:
             outcome=_normalize_text(str(payload.get("outcome") or "")),
             lesson=_normalize_text(str(payload.get("lesson") or "")),
             dataset=_normalize_text(str(payload.get("dataset") or "")),
+            replay_datasets=_normalize_text(str(payload.get("replay_datasets") or "")),
             policy=_normalize_text(str(payload.get("policy") or "")),
             provider=_normalize_text(str(payload.get("provider") or "")),
             job_id=_normalize_text(str(payload.get("job_id") or "")),
@@ -112,6 +116,7 @@ class ExperienceRecord:
             _normalize_key(self.summary),
             _normalize_key(self.outcome),
             _normalize_key(self.dataset),
+            _normalize_key(self.replay_datasets),
             _normalize_key(self.policy),
             _normalize_key(self.provider),
             _normalize_key(self.job_id),
@@ -161,11 +166,14 @@ class ExperienceStore:
         dataset: str = "",
         policy: str = "",
         provider: str = "",
+        outcomes: frozenset[str] | None = None,
         limit: int = 3,
     ) -> list[ExperienceRecord]:
         query_tokens = _tokenize(query, dataset, policy, provider, task_type)
         scored: list[tuple[int, ExperienceRecord]] = []
         for record in self.read_all():
+            if outcomes is not None and record.outcome not in outcomes:
+                continue
             score = 0
             if task_type and _normalize_key(record.task_type) == _normalize_key(task_type):
                 score += 6
@@ -221,6 +229,8 @@ class ExperienceStore:
             fields = [record.outcome]
             if record.dataset:
                 fields.append(f"dataset={record.dataset}")
+            if record.replay_datasets:
+                fields.append(f"replay={record.replay_datasets}")
             if record.policy:
                 fields.append(f"policy={record.policy}")
             if record.provider:
@@ -228,3 +238,29 @@ class ExperienceStore:
             summary = record.lesson or record.summary
             lines.append(f"- [{record.timestamp[:19]}] {'; '.join(fields)} -> {summary}")
         return "\n".join(lines)
+
+    def get_replay_datasets(
+        self,
+        current_dataset: str,
+        policy: str,
+        max_datasets: int = 3,
+    ) -> list[str]:
+        current_key = _normalize_key(current_dataset)
+        policy_key = _normalize_key(policy)
+        unique: list[str] = []
+        seen: set[str] = set()
+        records = sorted(self.read_all(), key=lambda record: record.timestamp, reverse=True)
+        for record in records:
+            dataset_name = _normalize_text(record.dataset)
+            dataset_key = _normalize_key(dataset_name)
+            if record.task_type != "train" or record.outcome != "success":
+                continue
+            if not dataset_name or dataset_key == current_key or dataset_key in seen:
+                continue
+            if policy_key and _normalize_key(record.policy) != policy_key:
+                continue
+            seen.add(dataset_key)
+            unique.append(dataset_name)
+            if len(unique) >= max_datasets:
+                break
+        return unique

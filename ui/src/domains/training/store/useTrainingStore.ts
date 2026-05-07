@@ -54,7 +54,13 @@ interface TrainingStore {
   trainingStopLoading: boolean
   loadPolicies: () => Promise<void>
   restoreCurrentTrainJob: () => Promise<void>
-  doTrainStart: (params: { dataset_name: string; steps?: number; device?: string; policy_type?: string }) => Promise<void>
+  doTrainStart: (params: {
+    dataset_name: string
+    steps?: number
+    device?: string
+    policy_type?: string
+    continual_learning?: boolean
+  }) => Promise<void>
   doTrainStop: () => Promise<void>
   fetchTrainStatus: (jobId: string) => Promise<void>
   fetchTrainCurve: (jobId: string) => Promise<void>
