@@ -1,6 +1,10 @@
 """Embodied verification interfaces and preflight checks."""
 
-from roboclaw.embodied.service.verification.preflight import PreflightVerifier, Verifier
+from roboclaw.embodied.service.verification.preflight import (
+    InferenceConfigVerifier,
+    PreflightVerifier,
+    Verifier,
+)
 from roboclaw.embodied.service.verification.types import (
     VerificationRequest,
     VerificationResult,
@@ -9,6 +13,7 @@ from roboclaw.embodied.service.verification.types import (
 
 __all__ = [
     "PreflightVerifier",
+    "InferenceConfigVerifier",
     "VerificationRequest",
     "VerificationResult",
     "Verifier",
