@@ -16,6 +16,10 @@ class CommandRequest(BaseModel):
     command: str  # "confirm", "recalibrate", "stop"
 
 
+class AutoStartRequest(BaseModel):
+    arm_alias: str | None = None
+
+
 def register_calibrate_routes(app: FastAPI, service: Any) -> None:
 
     @app.post("/api/calibration/start")
@@ -34,9 +38,9 @@ def register_calibrate_routes(app: FastAPI, service: Any) -> None:
         return {"status": "ok", "command": body.command}
 
     @app.post("/api/calibration/auto/start")
-    async def calibration_auto_start() -> dict:
+    async def calibration_auto_start(body: AutoStartRequest | None = None) -> dict:
         try:
-            return await service.start_auto_calibration()
+            return await service.start_auto_calibration(body.arm_alias if body else None)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
 

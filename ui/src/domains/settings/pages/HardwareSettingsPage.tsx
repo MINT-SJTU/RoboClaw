@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useToast } from '@/app/shell/ToastOutlet'
+import CalibrationSafetyCard from '@/domains/hardware/components/CalibrationSafetyCard'
 import { useSetup } from '@/domains/hardware/setup/store/useSetupStore'
 import { useHardwareStore } from '@/domains/hardware/store/useHardwareStore'
 import { useSessionStore } from '@/domains/session/store/useSessionStore'
@@ -11,6 +13,7 @@ import { TemperatureHeatMap } from '@/domains/hardware/components/TemperatureHea
 import { CalibrationPanel } from '@/domains/hardware/components/CalibrationPanel'
 import AutoCalibrationPanel from '@/domains/hardware/components/AutoCalibrationPanel'
 import { ServoPollingToggle } from '@/domains/hardware/components/ServoPollingToggle'
+import TorqueReleasePanel from '@/domains/hardware/components/TorqueReleasePanel'
 import SettingsPageFrame from '@/domains/settings/components/SettingsPageFrame'
 
 function SummaryTile({
@@ -42,6 +45,7 @@ function SummaryTile({
 
 export default function HardwareSettingsPage() {
   const { t } = useI18n()
+  const toast = useToast((state) => state.add)
   const {
     wizardActive,
     startWizard,
@@ -53,11 +57,15 @@ export default function HardwareSettingsPage() {
   } = useSetup()
   const fetchHardwareStatus = useHardwareStore((state) => state.fetchHardwareStatus)
   const fetchSessionStatus = useSessionStore((state) => state.fetchSessionStatus)
+  const doAutoCalibrationStart = useSessionStore((state) => state.doAutoCalibrationStart)
+  const loading = useSessionStore((state) => state.loading)
   const sessionState = useSessionStore((state) => state.session.state)
   const sessionCalArm = useSessionStore((state) => state.session.calibration_arm)
   const sessionCalMode = useSessionStore((state) => state.session.calibration_mode)
   const hardwareStatus = useHardwareStore((state) => state.hardwareStatus)
   const [calibratingArm, setCalibratingArm] = useState<string | null>(null)
+  const [pendingAutoArm, setPendingAutoArm] = useState<string | null>(null)
+  const pendingCalibrationRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -83,11 +91,30 @@ export default function HardwareSettingsPage() {
       sessionCalMode === 'manual'
       && sessionState === 'calibrating'
       && sessionCalArm
-      && !calibratingArm
     ) {
       setCalibratingArm(sessionCalArm)
     }
-  }, [calibratingArm, sessionCalArm, sessionCalMode, sessionState])
+  }, [sessionCalArm, sessionCalMode, sessionState])
+
+  useEffect(() => {
+    if (sessionCalMode === 'auto' && sessionState === 'calibrating') {
+      setPendingAutoArm(null)
+      setCalibratingArm(null)
+    }
+  }, [sessionCalMode, sessionState])
+
+  useEffect(() => {
+    if (!pendingAutoArm && !calibratingArm) {
+      return
+    }
+    const handle = window.requestAnimationFrame(() => {
+      pendingCalibrationRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    })
+    return () => window.cancelAnimationFrame(handle)
+  }, [calibratingArm, pendingAutoArm])
 
   const uncalibratedArms = useMemo(
     () => devices.arms.filter((arm) => !arm.calibrated).length,
@@ -121,6 +148,27 @@ export default function HardwareSettingsPage() {
       {t('addDevice')}
     </button>
   )
+
+  const handleManualCalibrationStart = async (armAlias: string) => {
+    try {
+      await postJson('/api/calibration/start', { arm_alias: armAlias })
+      setCalibratingArm(armAlias)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('calStartFailed'), 'e')
+    }
+  }
+
+  const handleAutoCalibrationConfirm = async () => {
+    if (!pendingAutoArm) {
+      return
+    }
+    try {
+      await doAutoCalibrationStart({ armAlias: pendingAutoArm })
+      setPendingAutoArm(null)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('autoCalStartFailed'), 'e')
+    }
+  }
 
   return (
     <SettingsPageFrame
@@ -168,10 +216,16 @@ export default function HardwareSettingsPage() {
               </div>
 
               <div className="mt-5">
-                <DeviceList onManualCalibrate={async (alias) => {
-                  setCalibratingArm(alias)
-                  await postJson('/api/calibration/start', { arm_alias: alias })
-                }} />
+                <DeviceList
+                  onAutoCalibrate={(alias) => {
+                    setCalibratingArm(null)
+                    setPendingAutoArm(alias)
+                  }}
+                  onManualCalibrate={(alias) => {
+                    setPendingAutoArm(null)
+                    void handleManualCalibrationStart(alias)
+                  }}
+                />
               </div>
             </section>
 
@@ -193,13 +247,34 @@ export default function HardwareSettingsPage() {
           <div className="space-y-6">
             <PermissionPanel onFixed={() => { void checkPermissions() }} />
 
+            <TorqueReleasePanel />
+
+            {pendingAutoArm && (
+              <section
+                ref={pendingCalibrationRef}
+                className="rounded-2xl border border-ac/30 bg-sf p-5 shadow-card ring-1 ring-ac/10"
+              >
+                <CalibrationSafetyCard
+                  key={pendingAutoArm}
+                  mode="auto"
+                  armAlias={pendingAutoArm}
+                  busy={loading === 'auto-calibration'}
+                  onConfirm={handleAutoCalibrationConfirm}
+                  onCancel={() => setPendingAutoArm(null)}
+                />
+              </section>
+            )}
+
             <AutoCalibrationPanel onRefresh={async () => {
               await fetchHardwareStatus()
               await loadDevices()
             }} />
 
             {calibratingArm ? (
-              <section className="rounded-2xl border border-bd/30 bg-sf p-5 shadow-card">
+              <section
+                ref={pendingCalibrationRef}
+                className="rounded-2xl border border-ac/30 bg-sf p-5 shadow-card ring-1 ring-ac/10"
+              >
                 <CalibrationPanel
                   armAlias={calibratingArm}
                   onClose={() => {

@@ -73,6 +73,29 @@ def _read_arm(
         bus.disconnect()
 
 
+def _release_arm(
+    arm: Binding,
+    spec: ArmRuntimeSpec,
+    motor_type: Any,
+    motor_norm_mode: Any,
+) -> None:
+    motor_config = _motor_config_from_arm(arm, spec)
+    motors = {
+        name: motor_type(id=motor_id, model=model, norm_mode=motor_norm_mode.RANGE_M100_100)
+        for name, (motor_id, model) in motor_config.items()
+    }
+    bus_class = _import_bus_class(spec)
+    bus = bus_class(port=arm.port, motors=motors)
+    connected = False
+    try:
+        bus.connect()
+        connected = True
+        bus.disable_torque()
+    finally:
+        if connected:
+            bus.disconnect(disable_torque=False)
+
+
 def read_servo_positions(arms: list[Binding]) -> dict[str, Any]:
     """Read current servo positions for all configured arms."""
     result: dict[str, Any] = {"error": None, "arms": {}}
@@ -83,4 +106,28 @@ def read_servo_positions(arms: list[Binding]) -> dict[str, Any]:
     motor_type, motor_norm_mode = _import_motor_types()
     for arm, spec in active_arms:
         result["arms"][arm.alias] = _read_arm(arm, spec, motor_type, motor_norm_mode)
+    return result
+
+
+def release_arm_torque(arms: list[Binding]) -> dict[str, Any]:
+    """Disable torque for each connected arm so it can be moved by hand."""
+    result: dict[str, Any] = {"released": [], "skipped": [], "failed": []}
+    active_arms = []
+    for arm, spec in _active_arms_with_specs(arms):
+        if not arm.connected:
+            result["skipped"].append({"alias": arm.alias, "reason": "disconnected"})
+            continue
+        active_arms.append((arm, spec))
+
+    if not active_arms:
+        return result
+
+    motor_type, motor_norm_mode = _import_motor_types()
+    for arm, spec in active_arms:
+        try:
+            _release_arm(arm, spec, motor_type, motor_norm_mode)
+        except Exception as exc:
+            result["failed"].append({"alias": arm.alias, "reason": str(exc)})
+            continue
+        result["released"].append(arm.alias)
     return result

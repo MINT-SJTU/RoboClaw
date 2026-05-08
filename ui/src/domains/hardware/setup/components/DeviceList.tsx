@@ -78,7 +78,13 @@ function dotColorForArm(connected: boolean, calibrated: boolean): string {
   return 'bg-gn'
 }
 
-export default function DeviceList({ onManualCalibrate }: { onManualCalibrate?: (alias: string) => void } = {}) {
+export default function DeviceList({
+  onAutoCalibrate,
+  onManualCalibrate,
+}: {
+  onAutoCalibrate?: (alias: string) => void
+  onManualCalibrate?: (alias: string) => void
+} = {}) {
   const { devices, removeArm, renameArm, removeCamera, renameCamera, removeHand, renameHand } =
     useSetup()
   const hwStatus = useHardwareStore((state) => state.hardwareStatus)
@@ -119,17 +125,29 @@ export default function DeviceList({ onManualCalibrate }: { onManualCalibrate?: 
                 onRemove={() => removeArm(a.alias)}
               />
             </div>
-            {connected && onManualCalibrate && (
-              <button
-                onClick={() => onManualCalibrate(a.alias)}
-                className={`shrink-0 px-2 py-1 text-2xs rounded ${
-                  a.calibrated
-                    ? 'text-tx3 border border-bd/40 hover:text-ac hover:border-ac/60 hover:bg-ac/5'
-                    : 'text-ac border border-ac/60 hover:bg-ac/10'
-                }`}
-              >
-                {t('manualCalibrate')}
-              </button>
+            {connected && (onAutoCalibrate || onManualCalibrate) && (
+              <div className="shrink-0 flex items-center gap-1">
+                {onAutoCalibrate && (
+                  <button
+                    onClick={() => onAutoCalibrate(a.alias)}
+                    className="px-2 py-1 text-2xs rounded text-ac border border-ac/60 hover:bg-ac/10"
+                  >
+                    {t('autoCalibrate')}
+                  </button>
+                )}
+                {onManualCalibrate && (
+                  <button
+                    onClick={() => onManualCalibrate(a.alias)}
+                    className={`px-2 py-1 text-2xs rounded ${
+                      a.calibrated
+                        ? 'text-tx3 border border-bd/40 hover:text-ac hover:border-ac/60 hover:bg-ac/5'
+                        : 'text-ac border border-ac/60 hover:bg-ac/10'
+                    }`}
+                  >
+                    {t('manualCalibrate')}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )

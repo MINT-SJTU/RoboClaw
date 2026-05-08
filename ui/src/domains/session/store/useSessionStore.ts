@@ -107,7 +107,7 @@ interface SessionStore {
     episode_time_s?: number
   }) => Promise<void>
   doInferStop: () => Promise<void>
-  doAutoCalibrationStart: () => Promise<void>
+  doAutoCalibrationStart: (params?: { armAlias?: string }) => Promise<void>
   doAutoCalibrationStop: () => Promise<void>
   handleDashboardEvent: (event: any) => void
 }
@@ -206,7 +206,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     doInferStart: (params) => runStart('infer', `${INFER}/start`, params),
     doInferStop: () => runStop('infer-stop', `${INFER}/stop`),
 
-    doAutoCalibrationStart: () => runStart('auto-calibration', `${CALIBRATION}/auto/start`),
+    doAutoCalibrationStart: (params) => runStart(
+      'auto-calibration',
+      `${CALIBRATION}/auto/start`,
+      params?.armAlias ? { arm_alias: params.armAlias } : undefined,
+    ),
     doAutoCalibrationStop: () => runStop('auto-calibration-stop', `${CALIBRATION}/auto/stop`),
 
     handleDashboardEvent: (event) => {

@@ -414,19 +414,27 @@ class EmbodiedService:
         """Properly terminate calibration subprocess (ESC → SIGINT → kill)."""
         await self.stop()
 
-    async def start_auto_calibration(self) -> dict[str, Any]:
-        arms = self.manifest.arms
+    async def start_auto_calibration(self, arm_alias: str | None = None) -> dict[str, Any]:
+        if arm_alias:
+            arm = self.manifest.find_arm(arm_alias)
+            if arm is None:
+                raise RuntimeError(f"Arm '{arm_alias}' not found in manifest.")
+            arms = [arm]
+            scope = "single"
+        else:
+            arms = self.manifest.arms
+            scope = "batch"
         if not arms:
             raise RuntimeError("No arms configured.")
         self.acquire_embodiment("calibrating")
         self._active_operation = self.auto_calibration
         self._active_session = None
         try:
-            total = await self.auto_calibration.start(arms)
+            total = await self.auto_calibration.start(arms, scope=scope)
         except Exception:
             self._finish_active_operation(self.auto_calibration, "calibrating")
             raise
-        return {"state": "calibrating", "mode": "auto", "scope": "batch", "total": total}
+        return {"state": "calibrating", "mode": "auto", "scope": scope, "total": total}
 
     async def stop_auto_calibration(self) -> None:
         await self.stop()
@@ -532,6 +540,15 @@ class EmbodiedService:
                 return read_servo_positions(self.manifest.arms)
             finally:
                 self._file_lock.release_shared()
+
+    def release_arm_torque(self) -> dict[str, Any]:
+        self.acquire_embodiment("release_torque")
+        try:
+            from roboclaw.embodied.embodiment.hardware.motors import release_arm_torque
+
+            return release_arm_torque(self.manifest.arms)
+        finally:
+            self.release_embodiment("release_torque")
 
     # -- Shutdown --
 
