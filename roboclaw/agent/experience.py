@@ -238,29 +238,3 @@ class ExperienceStore:
             summary = record.lesson or record.summary
             lines.append(f"- [{record.timestamp[:19]}] {'; '.join(fields)} -> {summary}")
         return "\n".join(lines)
-
-    def get_replay_datasets(
-        self,
-        current_dataset: str,
-        policy: str,
-        max_datasets: int = 3,
-    ) -> list[str]:
-        current_key = _normalize_key(current_dataset)
-        policy_key = _normalize_key(policy)
-        unique: list[str] = []
-        seen: set[str] = set()
-        records = sorted(self.read_all(), key=lambda record: record.timestamp, reverse=True)
-        for record in records:
-            dataset_name = _normalize_text(record.dataset)
-            dataset_key = _normalize_key(dataset_name)
-            if record.task_type != "train" or record.outcome != "success":
-                continue
-            if not dataset_name or dataset_key == current_key or dataset_key in seen:
-                continue
-            if policy_key and _normalize_key(record.policy) != policy_key:
-                continue
-            seen.add(dataset_key)
-            unique.append(dataset_name)
-            if len(unique) >= max_datasets:
-                break
-        return unique
