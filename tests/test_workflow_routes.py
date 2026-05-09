@@ -83,7 +83,12 @@ def test_workflow_plan_route_returns_compiled_stages(client):
     payload = resp.json()
     assert payload["ok"] is True
     assert [stage["stage"] for stage in payload["stages"]] == ["record", "train", "infer"]
+    assert payload["stages"][0]["ready"] is True
+    assert payload["stages"][1]["ready"] is False
+    assert payload["stages"][1]["blockedBy"] == ["record"]
     assert payload["stages"][1]["datasetName"] == "pick_cube_v1"
+    assert payload["stages"][2]["ready"] is False
+    assert payload["stages"][2]["blockedBy"] == ["train"]
     assert payload["stages"][2]["checkpointPath"].endswith(
         "pick_cube_v1/checkpoints/last/pretrained_model"
     )

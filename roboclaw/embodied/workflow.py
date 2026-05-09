@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from roboclaw.data.datasets import DatasetCatalog, DatasetRuntimeRef
+from roboclaw.data.datasets import DatasetCatalog, DatasetRuntimeRef, validate_dataset_slug
 from roboclaw.embodied.command import ActionError, CommandBuilder
 
 WorkflowStageName = Literal["record", "train", "infer"]
+_CHECKPOINT_CONFIG_FILES = (
+    "config.json",
+    "train_config.json",
+    "policy_config.json",
+    "preprocessor_config.json",
+)
+_CHECKPOINT_WEIGHT_PATTERNS = (
+    "model.safetensors",
+    "*.safetensors",
+    "*.pt",
+    "*.pth",
+    "*.bin",
+)
 
 
 class WorkflowModel(BaseModel):
@@ -92,6 +108,7 @@ class WorkflowStagePlan(WorkflowModel):
     output_path: str = ""
     command: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    blocked_by: list[WorkflowStageName] = Field(default_factory=list)
     issues: list[WorkflowIssue] = Field(default_factory=list)
 
 
@@ -155,11 +172,17 @@ class WorkflowPlanner:
         if not spec.record.enabled:
             return stage
 
-        dataset = self._datasets.prepare_recording_dataset(spec.record.dataset_name, prefix="rec")
+        dataset = self._prepare_output_dataset(
+            spec,
+            dataset_name=spec.record.dataset_name,
+            prefix="rec",
+        )
         stage.dataset_name = dataset.runtime.name
         stage.output_path = str(dataset.runtime.local_path)
         if not spec.record.dataset_name.strip():
-            stage.notes.append("dataset_name is omitted and will be auto-generated at runtime.")
+            stage.notes.append(
+                f"record.dataset_name is omitted and resolves deterministically to '{stage.dataset_name}'."
+            )
         if not spec.record.task.strip():
             stage.issues.append(WorkflowIssue(
                 stage="record",
@@ -195,7 +218,12 @@ class WorkflowPlanner:
         return stage
 
     def _plan_train(self, spec: WorkflowSpec, record_plan: WorkflowStagePlan) -> WorkflowStagePlan:
-        stage = WorkflowStagePlan(stage="train", enabled=spec.train.enabled, owner="training")
+        stage = WorkflowStagePlan(
+            stage="train",
+            enabled=spec.train.enabled,
+            owner="training",
+            capability="train",
+        )
         if not spec.train.enabled:
             return stage
 
@@ -210,18 +238,28 @@ class WorkflowPlanner:
             ))
             return stage
 
-        dataset_runtime = self._resolve_runtime_dataset(
-            dataset_name,
-            allow_planned=record_plan.enabled and dataset_name == record_plan.dataset_name,
+        dataset_runtime = self._resolve_runtime_dataset(dataset_name)
+        inherited_from_record = (
+            not spec.train.dataset_name.strip()
+            and record_plan.enabled
+            and dataset_name == record_plan.dataset_name
         )
         if dataset_runtime is None:
-            stage.issues.append(WorkflowIssue(
-                stage="train",
-                code="dataset_not_found",
-                field="train.dataset_name",
-                message=f"Runtime dataset '{dataset_name}' was not found.",
-            ))
-            return stage
+            if inherited_from_record:
+                dataset_runtime = self._planned_runtime_dataset(dataset_name)
+                stage.blocked_by.append("record")
+                stage.notes.append("train.dataset_name is inherited from the record stage output.")
+                stage.notes.append("train cannot run until the record stage materializes its dataset.")
+            else:
+                stage.issues.append(WorkflowIssue(
+                    stage="train",
+                    code="dataset_not_found",
+                    field="train.dataset_name",
+                    message=f"Runtime dataset '{dataset_name}' was not found.",
+                ))
+                return stage
+        elif inherited_from_record:
+            stage.notes.append("train.dataset_name is inherited from the record stage output.")
 
         try:
             stage.command = CommandBuilder.train(
@@ -244,10 +282,7 @@ class WorkflowPlanner:
             stage.output_path = output_dir
             stage.checkpoint_path = str(Path(output_dir) / "checkpoints" / "last" / "pretrained_model")
 
-        if not spec.train.dataset_name.strip() and record_plan.enabled:
-            stage.notes.append("train.dataset_name is inherited from the record stage output.")
-
-        stage.ready = True
+        stage.ready = not stage.blocked_by
         return stage
 
     def _plan_infer(
@@ -265,21 +300,39 @@ class WorkflowPlanner:
         if not spec.infer.enabled:
             return stage
 
-        output_dataset = self._datasets.prepare_recording_dataset(spec.infer.dataset_name, prefix="eval")
+        output_dataset = self._prepare_output_dataset(
+            spec,
+            dataset_name=spec.infer.dataset_name,
+            prefix="eval",
+        )
         stage.dataset_name = output_dataset.runtime.name
         stage.output_path = str(output_dataset.runtime.local_path)
-        if not spec.infer.dataset_name.strip():
-            stage.notes.append("infer.dataset_name is omitted and will be auto-generated at runtime.")
-
-        source_dataset_name = (
-            spec.infer.source_dataset.strip()
-            or train_plan.dataset_name
-            or record_plan.dataset_name
-        )
-        stage.source_dataset = source_dataset_name
-
         checkpoint_path = spec.infer.checkpoint_path.strip()
         stage.checkpoint_path = checkpoint_path
+        if not spec.infer.dataset_name.strip():
+            stage.notes.append(
+                f"infer.dataset_name is omitted and resolves deterministically to '{stage.dataset_name}'."
+            )
+        if checkpoint_path:
+            checkpoint_issue = _checkpoint_validation_message(checkpoint_path)
+            if checkpoint_issue:
+                stage.issues.append(WorkflowIssue(
+                    stage="infer",
+                    code="invalid_checkpoint",
+                    field="infer.checkpoint_path",
+                    message=checkpoint_issue,
+                ))
+                return stage
+
+        source_dataset_name = spec.infer.source_dataset.strip()
+        derived_from_train = False
+        if not checkpoint_path and not source_dataset_name and train_plan.enabled:
+            source_dataset_name = train_plan.dataset_name
+            derived_from_train = True
+        elif not checkpoint_path and not source_dataset_name:
+            source_dataset_name = record_plan.dataset_name
+        stage.source_dataset = source_dataset_name
+
         if not checkpoint_path and not source_dataset_name:
             stage.issues.append(WorkflowIssue(
                 stage="infer",
@@ -290,15 +343,12 @@ class WorkflowPlanner:
             return stage
 
         source_dataset = None
-        if source_dataset_name:
-            source_dataset = self._resolve_runtime_dataset(
-                source_dataset_name,
-                allow_planned=(
-                    (record_plan.enabled and source_dataset_name == record_plan.dataset_name)
-                    or (train_plan.enabled and source_dataset_name == train_plan.dataset_name)
-                ),
-            )
-            if source_dataset is None and not checkpoint_path:
+        if not checkpoint_path and source_dataset_name:
+            source_dataset = self._resolve_runtime_dataset(source_dataset_name)
+            if source_dataset is None and derived_from_train:
+                source_dataset = self._planned_runtime_dataset(source_dataset_name)
+                stage.blocked_by.append("train")
+            elif source_dataset is None:
                 stage.issues.append(WorkflowIssue(
                     stage="infer",
                     code="source_dataset_not_found",
@@ -330,25 +380,59 @@ class WorkflowPlanner:
         resolved_checkpoint = _argv_value(stage.command, "--policy.path=")
         if resolved_checkpoint:
             stage.checkpoint_path = resolved_checkpoint
-        if not checkpoint_path and train_plan.enabled and train_plan.checkpoint_path:
+        if not checkpoint_path and derived_from_train:
             stage.notes.append("infer.checkpoint_path is derived from the planned training output.")
+            if stage.checkpoint_path and not Path(stage.checkpoint_path).expanduser().exists():
+                if "train" not in stage.blocked_by:
+                    stage.blocked_by.append("train")
+                stage.notes.append("infer cannot run until the train stage produces the checkpoint.")
+            else:
+                checkpoint_issue = _checkpoint_validation_message(stage.checkpoint_path)
+                if checkpoint_issue:
+                    stage.issues.append(WorkflowIssue(
+                        stage="infer",
+                        code="invalid_checkpoint",
+                        field="infer.checkpoint_path",
+                        message=checkpoint_issue,
+                    ))
+                    return stage
         elif not checkpoint_path and source_dataset_name:
             stage.notes.append("infer.checkpoint_path is derived from the source dataset policy directory.")
+            checkpoint_issue = _checkpoint_validation_message(stage.checkpoint_path)
+            if checkpoint_issue:
+                stage.issues.append(WorkflowIssue(
+                    stage="infer",
+                    code="invalid_checkpoint",
+                    field="infer.checkpoint_path",
+                    message=checkpoint_issue,
+                ))
+                return stage
 
-        stage.ready = True
+        stage.ready = not stage.blocked_by
         return stage
 
-    def _resolve_runtime_dataset(self, name: str, *, allow_planned: bool) -> DatasetRuntimeRef | None:
+    def _resolve_runtime_dataset(self, name: str) -> DatasetRuntimeRef | None:
         try:
             return self._datasets.resolve_runtime_dataset(name).runtime
         except ValueError:
-            if not allow_planned:
-                return None
-            return DatasetRuntimeRef(
-                name=name,
-                repo_id=f"local/{name}",
-                local_path=self._datasets.root / "local" / name,
-            )
+            return None
+
+    def _planned_runtime_dataset(self, name: str) -> DatasetRuntimeRef:
+        return DatasetRuntimeRef(
+            name=name,
+            repo_id=f"local/{name}",
+            local_path=self._datasets.root / "local" / name,
+        )
+
+    def _prepare_output_dataset(
+        self,
+        spec: WorkflowSpec,
+        *,
+        dataset_name: str,
+        prefix: str,
+    ) -> Any:
+        resolved_name = dataset_name.strip() or _default_dataset_name(spec, prefix=prefix)
+        return self._datasets.prepare_recording_dataset(resolved_name, prefix=prefix)
 
 
 def _argv_value(argv: list[str], prefix: str) -> str:
@@ -356,3 +440,52 @@ def _argv_value(argv: list[str], prefix: str) -> str:
         if item.startswith(prefix):
             return item.split("=", 1)[1]
     return ""
+
+
+def _default_dataset_name(spec: WorkflowSpec, *, prefix: str) -> str:
+    slug = _slugify_name(spec.name)
+    if slug:
+        candidate = f"{prefix}_{slug}"
+    else:
+        payload = json.dumps(
+            spec.model_dump(mode="json", by_alias=False),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        candidate = f"{prefix}_{hashlib.sha1(payload.encode('utf-8')).hexdigest()[:10]}"
+    validate_dataset_slug(candidate)
+    return candidate
+
+
+def _slugify_name(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", value.strip().lower()).strip("_-")
+    return slug[:48]
+
+
+def _checkpoint_validation_message(raw_path: str) -> str:
+    if not raw_path or _looks_like_remote_policy_id(raw_path):
+        return ""
+
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        return f"Resolved checkpoint '{path}' was not found."
+    if not path.is_dir():
+        return f"Resolved checkpoint '{path}' must be a directory."
+    if not any((path / name).is_file() for name in _CHECKPOINT_CONFIG_FILES):
+        joined = ", ".join(_CHECKPOINT_CONFIG_FILES)
+        return f"Resolved checkpoint '{path}' is missing a recognized config file ({joined})."
+    if not any(any(path.glob(pattern)) for pattern in _CHECKPOINT_WEIGHT_PATTERNS):
+        joined = ", ".join(_CHECKPOINT_WEIGHT_PATTERNS)
+        return f"Resolved checkpoint '{path}' is missing model weights ({joined})."
+    return ""
+
+
+def _looks_like_remote_policy_id(raw_path: str) -> bool:
+    path = Path(raw_path).expanduser()
+    if path.exists() or path.is_absolute():
+        return False
+    if raw_path.startswith(("~", ".", "/")):
+        return False
+    parts = raw_path.split("/")
+    return len(parts) == 2 and all(parts) and not any(part in {".", ".."} for part in parts)

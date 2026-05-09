@@ -246,6 +246,11 @@ class EmbodiedService:
             raise RuntimeError(f"Workflow phase '{phase}' is disabled.")
         if stage.issues:
             raise RuntimeError(" · ".join(issue.message for issue in stage.issues))
+        if not stage.ready:
+            if stage.blocked_by:
+                blocked = ", ".join(stage.blocked_by)
+                raise RuntimeError(f"Workflow phase '{phase}' is waiting on: {blocked}.")
+            raise RuntimeError(f"Workflow phase '{phase}' is not ready.")
 
         if phase == "record":
             dataset_name = await self.start_recording(
@@ -360,7 +365,7 @@ class EmbodiedService:
     ) -> None:
         self._require_capability("infer" if use_cameras else "infer_without_cameras")
         output_dataset = self.datasets.prepare_recording_dataset(dataset_name, prefix="eval")
-        source = self.datasets.resolve_runtime_dataset(source_dataset) if source_dataset else None
+        source = self.datasets.resolve_runtime_dataset(source_dataset) if source_dataset and not checkpoint_path else None
         argv = CommandBuilder.infer(
             self.manifest,
             dataset=output_dataset.runtime,
@@ -414,7 +419,7 @@ class EmbodiedService:
     ) -> str:
         self._require_capability("infer" if use_cameras else "infer_without_cameras")
         output_dataset = self.datasets.prepare_recording_dataset(dataset_name, prefix="eval")
-        source = self.datasets.resolve_runtime_dataset(source_dataset) if source_dataset else None
+        source = self.datasets.resolve_runtime_dataset(source_dataset) if source_dataset and not checkpoint_path else None
         argv = CommandBuilder.infer(
             self.manifest,
             dataset=output_dataset.runtime,
