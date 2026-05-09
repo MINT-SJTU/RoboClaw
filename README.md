@@ -58,6 +58,16 @@ Help me install RoboClaw from https://github.com/MINT-SJTU/RoboClaw
 - [Non-Docker Installation](./docs/INSTALLATION.md)
 - [Docker Installation](./docs/DOCKERINSTALLATION.md)
 
+## 🧭 Workflow Planning
+
+RoboClaw includes a unified embodied workflow spec for `record`, `train`, and `infer`, so the same payload can be used to preview a pipeline before launching any hardware job.
+
+- `POST /api/workflows/validate`: compile the workflow and surface issues
+- `POST /api/workflows/plan`: preview derived datasets, checkpoint paths, and commands
+- `POST /api/workflows/run/{phase}`: execute one validated phase
+
+See [Workflow Planning API](./docs/WORKFLOWS.md) for the request format and a review-first flow using `/docs`.
+
 ## 📢 Community Co-Creation
 
 RoboClaw is being built in the open. We want major direction-setting choices, such as embodiment support, simulator priorities, and roadmap focus, to be discussed with the community.

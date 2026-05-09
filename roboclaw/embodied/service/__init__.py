@@ -254,18 +254,17 @@ class EmbodiedService:
                 fps=workflow.record.fps,
                 episode_time_s=workflow.record.episode_time_s,
                 reset_time_s=workflow.record.reset_time_s,
-                dataset_name=workflow.record.dataset_name,
+                dataset_name=stage.dataset_name,
                 use_cameras=workflow.hardware.use_cameras,
                 arms=workflow.hardware.arms,
             )
             return {"status": "recording", "dataset_name": dataset_name}
 
         if phase == "train":
-            train_dataset_name = workflow.train.dataset_name.strip() or plan.stage("record").dataset_name
             result = await self.train.train(
                 manifest=self.manifest,
                 kwargs={
-                    "dataset_name": train_dataset_name,
+                    "dataset_name": stage.dataset_name,
                     "policy_type": workflow.train.policy_type,
                     "steps": workflow.train.steps,
                     "device": workflow.train.device,
@@ -277,9 +276,9 @@ class EmbodiedService:
 
         if phase == "infer":
             await self.start_inference(
-                checkpoint_path=workflow.infer.checkpoint_path,
-                source_dataset=workflow.infer.source_dataset or plan.stage("train").dataset_name or plan.stage("record").dataset_name,
-                dataset_name=workflow.infer.dataset_name,
+                checkpoint_path=stage.checkpoint_path,
+                source_dataset=stage.source_dataset,
+                dataset_name=stage.dataset_name,
                 task=workflow.infer.task,
                 num_episodes=workflow.infer.num_episodes,
                 episode_time_s=workflow.infer.episode_time_s,

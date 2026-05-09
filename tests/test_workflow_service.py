@@ -53,6 +53,24 @@ def test_start_workflow_phase_train_inherits_record_dataset_name(tmp_path: Path)
     assert kwargs["dataset_name"] == "pick_cube_v1"
 
 
+def test_start_workflow_phase_record_uses_planned_dataset_name(tmp_path: Path) -> None:
+    service = _make_service(tmp_path)
+    service.start_recording = AsyncMock(side_effect=lambda **kwargs: kwargs["dataset_name"])
+
+    result = asyncio.run(service.start_workflow_phase({
+        "record": {
+            "enabled": True,
+            "task": "pick cube",
+        },
+    }, "record"))
+
+    assert result["status"] == "recording"
+    assert result["dataset_name"].startswith("rec_")
+    service.start_recording.assert_awaited_once()
+    kwargs = service.start_recording.await_args.kwargs
+    assert kwargs["dataset_name"] == result["dataset_name"]
+
+
 def test_start_workflow_phase_infer_inherits_train_source_dataset(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
     service.start_inference = AsyncMock(return_value=None)
@@ -79,4 +97,6 @@ def test_start_workflow_phase_infer_inherits_train_source_dataset(tmp_path: Path
     assert result["checkpoint_path"].endswith("pick_cube_v1/checkpoints/last/pretrained_model")
     service.start_inference.assert_awaited_once()
     kwargs = service.start_inference.await_args.kwargs
+    assert kwargs["checkpoint_path"].endswith("pick_cube_v1/checkpoints/last/pretrained_model")
     assert kwargs["source_dataset"] == "pick_cube_v1"
+    assert kwargs["dataset_name"] == "eval_pick_cube_v1"
