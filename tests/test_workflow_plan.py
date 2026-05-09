@@ -112,6 +112,30 @@ def test_workflow_planner_generates_stable_default_dataset_names(tmp_path: Path)
     assert first.stage("infer").dataset_name == second.stage("infer").dataset_name
 
 
+def test_workflow_planner_default_record_name_ignores_unrelated_downstream_changes(tmp_path: Path) -> None:
+    service = _make_service(tmp_path)
+    planner = WorkflowPlanner(service.manifest, service.datasets)
+
+    base = planner.plan({
+        "record": {
+            "enabled": True,
+            "task": "pick cube",
+        },
+    })
+    with_train = planner.plan({
+        "record": {
+            "enabled": True,
+            "task": "pick cube",
+        },
+        "train": {
+            "enabled": True,
+            "steps": 2000,
+        },
+    })
+
+    assert base.stage("record").dataset_name == with_train.stage("record").dataset_name
+
+
 def test_workflow_planner_reports_missing_explicit_checkpoint(tmp_path: Path) -> None:
     service = _make_service(tmp_path)
     plan = WorkflowPlanner(service.manifest, service.datasets).plan({

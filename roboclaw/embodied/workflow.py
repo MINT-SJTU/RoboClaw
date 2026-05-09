@@ -176,6 +176,11 @@ class WorkflowPlanner:
             spec,
             dataset_name=spec.record.dataset_name,
             prefix="rec",
+            payload={
+                "name": spec.name,
+                "hardware": spec.hardware.model_dump(mode="json", by_alias=False),
+                "record": spec.record.model_dump(mode="json", by_alias=False),
+            },
         )
         stage.dataset_name = dataset.runtime.name
         stage.output_path = str(dataset.runtime.local_path)
@@ -304,6 +309,11 @@ class WorkflowPlanner:
             spec,
             dataset_name=spec.infer.dataset_name,
             prefix="eval",
+            payload={
+                "name": spec.name,
+                "hardware": spec.hardware.model_dump(mode="json", by_alias=False),
+                "infer": spec.infer.model_dump(mode="json", by_alias=False),
+            },
         )
         stage.dataset_name = output_dataset.runtime.name
         stage.output_path = str(output_dataset.runtime.local_path)
@@ -430,8 +440,9 @@ class WorkflowPlanner:
         *,
         dataset_name: str,
         prefix: str,
+        payload: dict[str, Any],
     ) -> Any:
-        resolved_name = dataset_name.strip() or _default_dataset_name(spec, prefix=prefix)
+        resolved_name = dataset_name.strip() or _default_dataset_name(spec, prefix=prefix, payload=payload)
         return self._datasets.prepare_recording_dataset(resolved_name, prefix=prefix)
 
 
@@ -442,18 +453,18 @@ def _argv_value(argv: list[str], prefix: str) -> str:
     return ""
 
 
-def _default_dataset_name(spec: WorkflowSpec, *, prefix: str) -> str:
+def _default_dataset_name(spec: WorkflowSpec, *, prefix: str, payload: dict[str, Any]) -> str:
     slug = _slugify_name(spec.name)
     if slug:
         candidate = f"{prefix}_{slug}"
     else:
-        payload = json.dumps(
-            spec.model_dump(mode="json", by_alias=False),
+        encoded = json.dumps(
+            payload,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
         )
-        candidate = f"{prefix}_{hashlib.sha1(payload.encode('utf-8')).hexdigest()[:10]}"
+        candidate = f"{prefix}_{hashlib.sha1(encoded.encode('utf-8')).hexdigest()[:10]}"
     validate_dataset_slug(candidate)
     return candidate
 

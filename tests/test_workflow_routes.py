@@ -109,3 +109,22 @@ def test_workflow_run_route_delegates_to_service(client, app):
     assert resp.status_code == 200
     assert resp.json() == {"status": "recording", "dataset_name": "demo"}
     service.start_workflow_phase.assert_awaited_once()
+
+
+def test_workflow_run_route_returns_400_for_blocked_stage(client, app):
+    service = app.state.embodied_service
+    service.start_workflow_phase = AsyncMock(side_effect=RuntimeError("Workflow phase 'train' is waiting on: record."))
+
+    resp = client.post("/api/workflows/run/train", json={
+        "record": {
+            "enabled": True,
+            "task": "pick cube",
+            "datasetName": "pick_cube_v1",
+        },
+        "train": {
+            "enabled": True,
+        },
+    })
+
+    assert resp.status_code == 400
+    assert resp.json() == {"detail": "Workflow phase 'train' is waiting on: record."}
