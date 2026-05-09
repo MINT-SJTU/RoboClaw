@@ -37,6 +37,7 @@ from roboclaw.embodied.service.verification import (
     VerificationRequest,
     Verifier,
 )
+from roboclaw.embodied.workflow import WorkflowPlan, WorkflowPlanner, WorkflowSpec
 
 
 class EmbodiedService:
@@ -225,6 +226,73 @@ class EmbodiedService:
         ))
         if not result.ok:
             raise ActionError(result.format_violations())
+
+    def plan_workflow(self, spec: WorkflowSpec | dict[str, Any]) -> WorkflowPlan:
+        """Compile a workflow spec into concrete stage plans and validations."""
+        return WorkflowPlanner(self.manifest, self.datasets).plan(spec)
+
+    async def start_workflow_phase(
+        self,
+        spec: WorkflowSpec | dict[str, Any],
+        phase: str,
+    ) -> dict[str, Any]:
+        """Start a workflow phase using the unified workflow spec interface."""
+        workflow = spec if isinstance(spec, WorkflowSpec) else WorkflowSpec.model_validate(spec)
+        plan = self.plan_workflow(workflow)
+        stage = next((item for item in plan.stages if item.stage == phase), None)
+        if stage is None:
+            raise RuntimeError(f"Unknown workflow phase '{phase}'.")
+        if not stage.enabled:
+            raise RuntimeError(f"Workflow phase '{phase}' is disabled.")
+        if stage.issues:
+            raise RuntimeError(" · ".join(issue.message for issue in stage.issues))
+
+        if phase == "record":
+            dataset_name = await self.start_recording(
+                task=workflow.record.task,
+                num_episodes=workflow.record.num_episodes,
+                fps=workflow.record.fps,
+                episode_time_s=workflow.record.episode_time_s,
+                reset_time_s=workflow.record.reset_time_s,
+                dataset_name=workflow.record.dataset_name,
+                use_cameras=workflow.hardware.use_cameras,
+                arms=workflow.hardware.arms,
+            )
+            return {"status": "recording", "dataset_name": dataset_name}
+
+        if phase == "train":
+            train_dataset_name = workflow.train.dataset_name.strip() or plan.stage("record").dataset_name
+            result = await self.train.train(
+                manifest=self.manifest,
+                kwargs={
+                    "dataset_name": train_dataset_name,
+                    "policy_type": workflow.train.policy_type,
+                    "steps": workflow.train.steps,
+                    "device": workflow.train.device,
+                },
+                tty_handoff=None,
+            )
+            job_id = result.rsplit("Job ID:", 1)[-1].strip() if "Job ID:" in result else ""
+            return {"message": result, "job_id": job_id}
+
+        if phase == "infer":
+            await self.start_inference(
+                checkpoint_path=workflow.infer.checkpoint_path,
+                source_dataset=workflow.infer.source_dataset or plan.stage("train").dataset_name or plan.stage("record").dataset_name,
+                dataset_name=workflow.infer.dataset_name,
+                task=workflow.infer.task,
+                num_episodes=workflow.infer.num_episodes,
+                episode_time_s=workflow.infer.episode_time_s,
+                arms=workflow.hardware.arms,
+                use_cameras=workflow.hardware.use_cameras,
+            )
+            return {
+                "status": "inferring",
+                "dataset_name": stage.dataset_name,
+                "checkpoint_path": stage.checkpoint_path,
+            }
+
+        raise RuntimeError(f"Workflow phase '{phase}' is not supported.")
 
     # -- Operations (Web entry points) --
 

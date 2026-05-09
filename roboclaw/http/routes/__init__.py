@@ -29,6 +29,7 @@ def register_all_routes(
     from roboclaw.http.routes.train import register_train_routes
     from roboclaw.http.routes.infer import register_infer_routes
     from roboclaw.http.routes.hub import register_hub_routes
+    from roboclaw.http.routes.workflows import register_workflow_routes
     from roboclaw.http.routes.chat_uploads import register_chat_upload_routes
 
     register_chat_upload_routes(app)
@@ -45,6 +46,7 @@ def register_all_routes(
     register_train_routes(app, service)
     register_infer_routes(app, service)
     register_hub_routes(app, service)
+    register_workflow_routes(app, service)
 
     from roboclaw.http.routes.curation import register_curation_routes
     from roboclaw.http.routes.explorer import register_explorer_routes
