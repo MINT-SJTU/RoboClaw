@@ -19,6 +19,13 @@
   <img src="roboclaw_arch.png" alt="RoboClaw Architecture" width="800" />
 </p>
 
+## 🚀 FluxVLA Engine
+
+RoboClaw's end-to-end VLA workflow is powered by **FluxVLA Engine**, a full-stack engineering platform for embodied AI applications. Built around unified configuration, standardized interfaces, modular decoupling, and deployability, it closes the loop from data preparation to real-robot deployment and provides a standardized foundation for research, education, and production teams.
+
+- Documentation: [FluxVLA Engine (中文)](https://fluxvla.limxdynamics.com/zh/)
+- Scope: training, evaluation, inference, and real-robot deployment in one workflow
+
 ## 🎬 Demo
 
 <table>
