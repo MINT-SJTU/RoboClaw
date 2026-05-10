@@ -13,18 +13,6 @@ WorkflowPhase = Literal["record", "train", "infer"]
 
 
 def register_workflow_routes(app: FastAPI, service: EmbodiedService) -> None:
-
-    @app.post(
-        "/api/workflows/validate",
-        summary="Validate a unified embodied workflow",
-        description=(
-            "Compile a record/train/infer workflow spec and return any issues, "
-            "derived datasets, and resolved commands without starting a job."
-        ),
-    )
-    async def workflow_validate(body: WorkflowSpec) -> dict[str, Any]:
-        return service.plan_workflow(body).model_dump(by_alias=True)
-
     @app.post(
         "/api/workflows/plan",
         summary="Preview the compiled workflow plan",
