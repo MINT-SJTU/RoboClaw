@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
@@ -164,3 +164,109 @@ def test_start_workflow_phase_infer_uses_explicit_checkpoint_without_source_data
     assert kwargs["checkpoint_path"] == str(checkpoint_dir)
     assert kwargs["source_dataset"] == ""
     assert kwargs["dataset_name"] == "eval_pick-cube-pipeline"
+
+
+def test_start_workflow_phase_record_builds_record_command_from_planned_defaults(tmp_path: Path) -> None:
+    service = _make_service(tmp_path)
+    service._require_capability = lambda *_args, **_kwargs: None
+    starts: list[tuple[str, list[str]]] = []
+
+    async def fake_start_session(_session, *, owner: str, argv: list[str]) -> None:
+        starts.append((owner, argv))
+
+    service._start_managed_session = fake_start_session
+    spec = {
+        "name": "pick-cube-pipeline",
+        "record": {
+            "enabled": True,
+            "task": "pick cube",
+        },
+    }
+    expected = WorkflowPlanner(service.manifest, service.datasets).plan(spec).stage("record").dataset_name
+
+    result = asyncio.run(service.start_workflow_phase(spec, "record"))
+
+    assert result == {"status": "recording", "dataset_name": expected}
+    assert starts[0][0] == "recording"
+    argv = starts[0][1]
+    assert argv[:4] == [
+        "/Users/pearl/anaconda3/bin/python",
+        "-m",
+        "roboclaw.embodied.command.wrapper",
+        "record",
+    ]
+    assert f"--dataset.repo_id=local/{expected}" in argv
+    assert f"--dataset.root={tmp_path / 'datasets' / 'local' / expected}" in argv
+    assert "--dataset.single_task=pick cube" in argv
+
+
+def test_start_workflow_phase_train_builds_train_command_for_runtime_dataset(tmp_path: Path) -> None:
+    service = _make_service(tmp_path)
+    _materialize_runtime_dataset(tmp_path, "pick_cube_v1")
+    captured: list[tuple[list[str], str]] = []
+
+    async def fake_run_detached(self, argv: list[str], log_dir: Path) -> str:
+        captured.append((argv, str(log_dir)))
+        return "job-42"
+
+    with patch("roboclaw.embodied.executor.SubprocessExecutor.run_detached", new=fake_run_detached):
+        result = asyncio.run(service.start_workflow_phase({
+            "train": {
+                "enabled": True,
+                "dataset_name": "pick_cube_v1",
+                "policy_type": "act",
+                "steps": 1234,
+                "device": "cpu",
+            },
+        }, "train"))
+
+    assert result == {"message": "Training started. Job ID: job-42", "job_id": "job-42"}
+    argv = captured[0][0]
+    assert argv[0] == "lerobot-train"
+    assert "--dataset.repo_id=local/pick_cube_v1" in argv
+    assert f"--dataset.root={tmp_path / 'datasets' / 'local' / 'pick_cube_v1'}" in argv
+    assert f"--output_dir={tmp_path / 'policies' / 'pick_cube_v1'}" in argv
+    assert "--steps=1234" in argv
+    assert "--policy.device=cpu" in argv
+
+
+def test_start_workflow_phase_infer_builds_command_from_explicit_checkpoint(tmp_path: Path) -> None:
+    service = _make_service(tmp_path)
+    service._require_capability = lambda *_args, **_kwargs: None
+    starts: list[tuple[str, list[str]]] = []
+
+    async def fake_start_session(_session, *, owner: str, argv: list[str]) -> None:
+        starts.append((owner, argv))
+
+    service._start_managed_session = fake_start_session
+    checkpoint_dir = _materialize_checkpoint(tmp_path, "model")
+
+    result = asyncio.run(service.start_workflow_phase({
+        "name": "pick-cube-pipeline",
+        "infer": {
+            "enabled": True,
+            "checkpoint_path": str(checkpoint_dir),
+            "task": "eval pick",
+            "num_episodes": 2,
+            "episode_time_s": 15,
+        },
+    }, "infer"))
+
+    assert result == {
+        "status": "inferring",
+        "dataset_name": "eval_pick-cube-pipeline",
+        "checkpoint_path": str(checkpoint_dir),
+    }
+    assert starts[0][0] == "inferring"
+    argv = starts[0][1]
+    assert argv[:4] == [
+        "/Users/pearl/anaconda3/bin/python",
+        "-m",
+        "roboclaw.embodied.command.wrapper",
+        "record",
+    ]
+    assert f"--policy.path={checkpoint_dir}" in argv
+    assert "--dataset.single_task=eval pick" in argv
+    assert "--dataset.num_episodes=2" in argv
+    assert "--dataset.episode_time_s=15" in argv
+    assert "--dataset.repo_id=local/eval_pick-cube-pipeline" in argv
