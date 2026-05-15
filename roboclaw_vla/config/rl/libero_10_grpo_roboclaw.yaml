@@ -1,0 +1,66 @@
+# RoboClaw-owned RLinf GRPO template.
+#
+# This mirrors the structure expected by RLinf/Dexbotic-style configs more
+# closely than a plain intent document. It is still a template: replace the
+# placeholder checkpoint/model/env values before running production training.
+
+defaults:
+  - env/libero_10@env.train
+  - env/libero_10@env.eval
+  - model/roboclaw_pi0@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - _self_
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: all
+
+runner:
+  max_steps: 1000
+  eval_episodes: 10
+
+algorithm:
+  name: grpo
+  loss_type: grpo
+  group_size: 8
+  reward_type: chunk_level
+  logprob_type: chunk_level
+  entropy_type: token_level
+  use_reward_model: false
+  use_critic_model: false
+  kl_coef: 0.0
+  clip_range: 0.2
+  normalize_advantage: true
+
+actor:
+  enable_offload: true
+  model:
+    model_path: path/to/roboclaw_pi0_checkpoint
+    model_type: pi0
+    num_action_chunks: 5
+    action_dim: 7
+    registry_module: roboclaw_vla.rl.registry
+  optim:
+    lr: 1.0e-6
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    weight_decay: 0.0
+    clip_grad: 1.0
+
+rollout:
+  enable_offload: true
+  generation_backend: huggingface
+  num_action_chunks: 5
+
+env:
+  train:
+    benchmark: libero
+    suite: libero_10
+  eval:
+    benchmark: libero
+    suite: libero_10
+
+artifacts:
+  contract_file: run_contract.json
+  success_metric: success_rate

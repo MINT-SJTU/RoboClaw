@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from roboclaw.embodied.command.helpers import resolve_policy_checkpoint
 
 def list_policies(root: Path) -> list[dict[str, Any]]:
     """Scan *root* for trained-policy directories and return summary dicts.
@@ -35,16 +36,7 @@ def list_policies(root: Path) -> list[dict[str, Any]]:
 
 
 def _resolve_checkpoint(policy_dir: Path) -> Path | None:
-    for candidate in (
-        policy_dir / "checkpoints" / "last" / "pretrained_model",
-        policy_dir / "pretrained_model",
-    ):
-        if candidate.is_dir():
-            return candidate
-    # HuggingFace snapshot layout: safetensors directly in policy_dir
-    if any(policy_dir.glob("*.safetensors")):
-        return policy_dir
-    return None
+    return resolve_policy_checkpoint(policy_dir)
 
 
 def _enrich(entry: dict[str, Any], checkpoint_dir: Path) -> None:
