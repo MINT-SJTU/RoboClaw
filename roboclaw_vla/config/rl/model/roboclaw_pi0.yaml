@@ -1,0 +1,17 @@
+# RoboClaw Pi0 model group for RLinf-style configs.
+
+model_type: pi0
+model_path: path/to/roboclaw_pi0_checkpoint
+processor_path: path/to/roboclaw_pi0_checkpoint
+registry_module: roboclaw_vla.rl.registry
+tokenizer_padding_side: right
+trust_remote_code: true
+num_action_chunks: 5
+action_dim: 7
+add_value_head: true
+num_steps: 4
+safe_get_logprob: false
+chunk_critic_input: true
+precision: bfloat16
+use_lora: false
+gradient_checkpointing: true
