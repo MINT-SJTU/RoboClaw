@@ -19,6 +19,7 @@ class Wallet:
     username: str
     balance_cents: int = 0
     frozen_cents: int = 0
+    reward_points: int = 0
     updated_at: str = ""
 
     @property
@@ -28,6 +29,11 @@ class Wallet:
     def to_dict(self) -> dict[str, Any]:
         return {
             "username": self.username,
+            "creditCents": self.balance_cents,
+            "frozenCreditCents": self.frozen_cents,
+            "availableCreditCents": self.available_cents,
+            "rewardPoints": self.reward_points,
+            # Backward-compatible aliases while the app migrates to creditCents.
             "balanceCents": self.balance_cents,
             "frozenCents": self.frozen_cents,
             "availableCents": self.available_cents,
@@ -43,6 +49,7 @@ class BillingRecord:
     amount_cents: int
     balance_after_cents: int
     frozen_after_cents: int
+    reward_points_after: int = 0
     reason: str = ""
     task_name: str = ""
     job_id: str = ""
@@ -56,6 +63,9 @@ class BillingRecord:
             "amountCents": self.amount_cents,
             "balanceAfterCents": self.balance_after_cents,
             "frozenAfterCents": self.frozen_after_cents,
+            "creditAfterCents": self.balance_after_cents,
+            "frozenCreditAfterCents": self.frozen_after_cents,
+            "rewardPointsAfter": self.reward_points_after,
             "reason": self.reason,
             "taskName": self.task_name,
             "jobId": self.job_id,
@@ -68,6 +78,7 @@ class PaymentOrder:
     order_id: str
     username: str
     amount_cents: int
+    bonus_points: int = 0
     provider: str = "mock"
     status: PaymentOrderStatus = "pending"
     provider_order_id: str = ""
@@ -81,6 +92,7 @@ class PaymentOrder:
             "orderId": self.order_id,
             "username": self.username,
             "amountCents": self.amount_cents,
+            "bonusPoints": self.bonus_points,
             "provider": self.provider,
             "status": self.status,
             "providerOrderId": self.provider_order_id,
@@ -129,11 +141,14 @@ class AccountLedger:
         username: str,
         amount_cents: int,
         *,
+        bonus_points: int = 0,
         provider: str = "mock",
         reason: str = "credit topup",
     ) -> PaymentOrder:
         if amount_cents <= 0:
             raise ValueError("amount_cents must be positive")
+        if bonus_points < 0:
+            raise ValueError("bonus_points must be non-negative")
         username = _clean_username(username)
         provider = (provider or "mock").strip()
         if not provider:
@@ -145,6 +160,7 @@ class AccountLedger:
                 order_id=order_id,
                 username=username,
                 amount_cents=amount_cents,
+                bonus_points=bonus_points,
                 provider=provider,
                 status="pending",
                 provider_order_id=f"{provider}_{order_id}",
@@ -182,6 +198,7 @@ class AccountLedger:
                     order_id=order.order_id,
                     username=order.username,
                     amount_cents=order.amount_cents,
+                    bonus_points=order.bonus_points,
                     provider=order.provider,
                     status="paid",
                     provider_order_id=provider_order_id or order.provider_order_id,
@@ -195,6 +212,7 @@ class AccountLedger:
                     username=wallet.username,
                     balance_cents=wallet.balance_cents + order.amount_cents,
                     frozen_cents=wallet.frozen_cents,
+                    reward_points=wallet.reward_points + order.bonus_points,
                     updated_at=_now(),
                 )
                 record = self._append_record(
@@ -215,12 +233,12 @@ class AccountLedger:
         self,
         username: str,
         dataset_id: str,
-        amount_cents: int,
+        reward_points: int,
         *,
         reason: str = "dataset upload reward",
     ) -> tuple[Wallet, BillingRecord, bool]:
-        if amount_cents <= 0:
-            raise ValueError("amount_cents must be positive")
+        if reward_points <= 0:
+            raise ValueError("reward_points must be positive")
         username = _clean_username(username)
         dataset_id = dataset_id.strip()
         if not dataset_id:
@@ -234,15 +252,16 @@ class AccountLedger:
             wallet = self._wallet_from_state(state, username)
             wallet = Wallet(
                 username=username,
-                balance_cents=wallet.balance_cents + amount_cents,
+                balance_cents=wallet.balance_cents,
                 frozen_cents=wallet.frozen_cents,
+                reward_points=wallet.reward_points + reward_points,
                 updated_at=_now(),
             )
             record = self._append_record(
                 state,
                 wallet,
                 "dataset_reward",
-                amount_cents,
+                reward_points,
                 reason=reason,
                 job_id=dataset_id,
             )
@@ -261,6 +280,7 @@ class AccountLedger:
                 username=username,
                 balance_cents=wallet.balance_cents + amount_cents,
                 frozen_cents=wallet.frozen_cents,
+                reward_points=wallet.reward_points,
                 updated_at=_now(),
             )
             record = self._append_record(state, wallet, "admin_recharge", amount_cents, reason=reason)
@@ -289,6 +309,7 @@ class AccountLedger:
                 username=username,
                 balance_cents=wallet.balance_cents,
                 frozen_cents=wallet.frozen_cents + amount_cents,
+                reward_points=wallet.reward_points,
                 updated_at=_now(),
             )
             record = self._append_record(
@@ -325,6 +346,7 @@ class AccountLedger:
                 username=username,
                 balance_cents=wallet.balance_cents - amount_cents,
                 frozen_cents=wallet.frozen_cents - amount_cents,
+                reward_points=wallet.reward_points,
                 updated_at=_now(),
             )
             record = self._append_record(
@@ -361,6 +383,7 @@ class AccountLedger:
                 username=username,
                 balance_cents=wallet.balance_cents,
                 frozen_cents=wallet.frozen_cents - amount_cents,
+                reward_points=wallet.reward_points,
                 updated_at=_now(),
             )
             record = self._append_record(
@@ -394,6 +417,7 @@ class AccountLedger:
             amount_cents=amount_cents,
             balance_after_cents=wallet.balance_cents,
             frozen_after_cents=wallet.frozen_cents,
+            reward_points_after=wallet.reward_points,
             reason=reason,
             task_name=task_name,
             job_id=job_id,
@@ -406,8 +430,9 @@ class AccountLedger:
         payload = state.setdefault("wallets", {}).get(username) or {}
         return Wallet(
             username=username,
-            balance_cents=int(payload.get("balanceCents", 0) or 0),
-            frozen_cents=int(payload.get("frozenCents", 0) or 0),
+            balance_cents=int(payload.get("creditCents", payload.get("balanceCents", 0)) or 0),
+            frozen_cents=int(payload.get("frozenCreditCents", payload.get("frozenCents", 0)) or 0),
+            reward_points=int(payload.get("rewardPoints", 0) or 0),
             updated_at=str(payload.get("updatedAt") or ""),
         )
 
@@ -439,6 +464,7 @@ def _record_from_payload(payload: dict[str, Any]) -> BillingRecord:
         amount_cents=int(payload.get("amountCents", 0) or 0),
         balance_after_cents=int(payload.get("balanceAfterCents", 0) or 0),
         frozen_after_cents=int(payload.get("frozenAfterCents", 0) or 0),
+        reward_points_after=int(payload.get("rewardPointsAfter", 0) or 0),
         reason=str(payload.get("reason") or ""),
         task_name=str(payload.get("taskName") or ""),
         job_id=str(payload.get("jobId") or ""),
@@ -451,6 +477,7 @@ def _order_from_payload(payload: dict[str, Any]) -> PaymentOrder:
         order_id=str(payload.get("orderId") or ""),
         username=str(payload.get("username") or ""),
         amount_cents=int(payload.get("amountCents", 0) or 0),
+        bonus_points=int(payload.get("bonusPoints", 0) or 0),
         provider=str(payload.get("provider") or "mock"),
         status=str(payload.get("status") or "pending"),  # type: ignore[arg-type]
         provider_order_id=str(payload.get("providerOrderId") or ""),

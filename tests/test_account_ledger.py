@@ -41,9 +41,10 @@ def test_account_ledger_recharge_freeze_settle_release(tmp_path) -> None:
 def test_account_ledger_topup_order_auto_recharges_once(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
 
-    order = ledger.create_topup_order("pearl", 5_000, provider="mockpay")
+    order = ledger.create_topup_order("pearl", 5_000, bonus_points=500, provider="mockpay")
 
     assert order.status == "pending"
+    assert order.bonus_points == 500
     assert order.pay_url == f"roboclaw://pay/mockpay/{order.order_id}"
     assert ledger.wallet("pearl").balance_cents == 0
 
@@ -52,6 +53,7 @@ def test_account_ledger_topup_order_auto_recharges_once(tmp_path) -> None:
     assert paid_order.status == "paid"
     assert paid_order.provider_order_id == "txn-1"
     assert wallet.balance_cents == 5_000
+    assert wallet.reward_points == 500
     assert record is not None
     assert record.kind == "payment_recharge"
     assert record.job_id == order.order_id
@@ -59,6 +61,7 @@ def test_account_ledger_topup_order_auto_recharges_once(tmp_path) -> None:
     paid_order_2, wallet_2, record_2 = ledger.complete_topup_order(order.order_id)
     assert paid_order_2.status == "paid"
     assert wallet_2.balance_cents == 5_000
+    assert wallet_2.reward_points == 500
     assert record_2 is None
 
 
@@ -68,13 +71,17 @@ def test_account_ledger_dataset_reward_is_idempotent(tmp_path) -> None:
     wallet, record, granted = ledger.grant_dataset_reward("pearl", "dataset-1", 1_500)
 
     assert granted is True
-    assert wallet.available_cents == 1_500
+    assert wallet.available_cents == 0
+    assert wallet.reward_points == 1_500
     assert record.kind == "dataset_reward"
+    assert record.amount_cents == 1_500
+    assert record.reward_points_after == 1_500
     assert record.job_id == "dataset-1"
 
     wallet_2, record_2, granted_2 = ledger.grant_dataset_reward("pearl", "dataset-1", 1_500)
     assert granted_2 is False
-    assert wallet_2.available_cents == 1_500
+    assert wallet_2.available_cents == 0
+    assert wallet_2.reward_points == 1_500
     assert record_2.record_id == record.record_id
 
 
@@ -101,6 +108,7 @@ def test_account_routes_flow(tmp_path) -> None:
         json={"username": "pearl", "amount_cents": 10_000, "reason": "test topup"},
     )
     assert recharge.status_code == 200
+    assert recharge.json()["wallet"]["availableCreditCents"] == 10_000
     assert recharge.json()["wallet"]["availableCents"] == 10_000
 
     freeze = client.post(
@@ -137,7 +145,7 @@ def test_account_routes_topup_order_flow(tmp_path) -> None:
 
     order_response = client.post(
         "/api/account/topup-orders",
-        json={"username": "pearl", "amount_cents": 8_000, "provider": "mockpay"},
+        json={"username": "pearl", "amount_cents": 8_000, "bonus_points": 800, "provider": "mockpay"},
     )
     assert order_response.status_code == 200
     order = order_response.json()["order"]
@@ -152,7 +160,8 @@ def test_account_routes_topup_order_flow(tmp_path) -> None:
     )
     assert complete_response.status_code == 200
     assert complete_response.json()["order"]["status"] == "paid"
-    assert complete_response.json()["wallet"]["availableCents"] == 8_000
+    assert complete_response.json()["wallet"]["availableCreditCents"] == 8_000
+    assert complete_response.json()["wallet"]["rewardPoints"] == 800
     assert complete_response.json()["record"]["kind"] == "payment_recharge"
 
     orders = client.get("/api/account/topup-orders", params={"username": "pearl"})
@@ -170,21 +179,23 @@ def test_account_routes_dataset_reward_flow(tmp_path) -> None:
 
     reward = client.post(
         "/api/account/rewards/dataset-upload",
-        json={"username": "pearl", "dataset_id": "cloud/verify-so101", "amount_cents": 2_000},
+        json={"username": "pearl", "dataset_id": "cloud/verify-so101", "reward_points": 2_000},
     )
 
     assert reward.status_code == 200
     assert reward.json()["granted"] is True
-    assert reward.json()["wallet"]["availableCents"] == 2_000
+    assert reward.json()["wallet"]["availableCreditCents"] == 0
+    assert reward.json()["wallet"]["rewardPoints"] == 2_000
     assert reward.json()["record"]["kind"] == "dataset_reward"
 
     duplicate = client.post(
         "/api/account/rewards/dataset-upload",
-        json={"username": "pearl", "dataset_id": "cloud/verify-so101", "amount_cents": 2_000},
+        json={"username": "pearl", "dataset_id": "cloud/verify-so101", "reward_points": 2_000},
     )
     assert duplicate.status_code == 200
     assert duplicate.json()["granted"] is False
-    assert duplicate.json()["wallet"]["availableCents"] == 2_000
+    assert duplicate.json()["wallet"]["availableCreditCents"] == 0
+    assert duplicate.json()["wallet"]["rewardPoints"] == 2_000
 
     set_ledger_for_tests(None)
 

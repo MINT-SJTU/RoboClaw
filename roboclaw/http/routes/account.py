@@ -23,6 +23,7 @@ class RechargeRequest(BaseModel):
 class TopupOrderRequest(BaseModel):
     username: str
     amount_cents: int
+    bonus_points: int = 0
     provider: str = "mock"
     reason: str = "credit topup"
 
@@ -35,7 +36,7 @@ class CompleteTopupOrderRequest(BaseModel):
 class DatasetRewardRequest(BaseModel):
     username: str
     dataset_id: str
-    amount_cents: int
+    reward_points: int
     reason: str = "dataset upload reward"
 
 
@@ -85,6 +86,7 @@ def register_account_routes(app: FastAPI) -> None:
                 get_ledger().create_topup_order,
                 body.username,
                 body.amount_cents,
+                bonus_points=body.bonus_points,
                 provider=body.provider,
                 reason=body.reason,
             )
@@ -115,7 +117,7 @@ def register_account_routes(app: FastAPI) -> None:
                 get_ledger().grant_dataset_reward,
                 body.username,
                 body.dataset_id,
-                body.amount_cents,
+                body.reward_points,
                 reason=body.reason,
             )
         except ValueError as exc:
