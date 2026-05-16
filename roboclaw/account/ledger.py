@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-LedgerKind = Literal["admin_recharge", "payment_recharge", "freeze", "settle", "release"]
+LedgerKind = Literal["admin_recharge", "payment_recharge", "dataset_reward", "freeze", "settle", "release"]
 PaymentOrderStatus = Literal["pending", "paid", "cancelled"]
 
 
@@ -210,6 +210,45 @@ class AccountLedger:
                 self._save(state)
                 return paid_order, wallet, record
         raise ValueError("payment order not found")
+
+    def grant_dataset_reward(
+        self,
+        username: str,
+        dataset_id: str,
+        amount_cents: int,
+        *,
+        reason: str = "dataset upload reward",
+    ) -> tuple[Wallet, BillingRecord, bool]:
+        if amount_cents <= 0:
+            raise ValueError("amount_cents must be positive")
+        username = _clean_username(username)
+        dataset_id = dataset_id.strip()
+        if not dataset_id:
+            raise ValueError("dataset_id is required")
+        with self._lock:
+            state = self._load()
+            for payload in state.get("records", []):
+                record = _record_from_payload(payload)
+                if record.kind == "dataset_reward" and record.username == username and record.job_id == dataset_id:
+                    return self._wallet_from_state(state, username), record, False
+            wallet = self._wallet_from_state(state, username)
+            wallet = Wallet(
+                username=username,
+                balance_cents=wallet.balance_cents + amount_cents,
+                frozen_cents=wallet.frozen_cents,
+                updated_at=_now(),
+            )
+            record = self._append_record(
+                state,
+                wallet,
+                "dataset_reward",
+                amount_cents,
+                reason=reason,
+                job_id=dataset_id,
+            )
+            self._save_wallet(state, wallet)
+            self._save(state)
+            return wallet, record, True
 
     def admin_recharge(self, username: str, amount_cents: int, *, reason: str = "admin recharge") -> tuple[Wallet, BillingRecord]:
         if amount_cents <= 0:

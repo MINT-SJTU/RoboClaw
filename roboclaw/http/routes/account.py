@@ -32,6 +32,13 @@ class CompleteTopupOrderRequest(BaseModel):
     provider_order_id: str = ""
 
 
+class DatasetRewardRequest(BaseModel):
+    username: str
+    dataset_id: str
+    amount_cents: int
+    reason: str = "dataset upload reward"
+
+
 class BillingAmountRequest(BaseModel):
     username: str
     amount_cents: int
@@ -100,6 +107,20 @@ def register_account_routes(app: FastAPI) -> None:
             "wallet": wallet.to_dict(),
             "record": record.to_dict() if record else None,
         }
+
+    @app.post("/api/account/rewards/dataset-upload")
+    async def grant_dataset_upload_reward(body: DatasetRewardRequest) -> dict[str, Any]:
+        try:
+            wallet, record, granted = await asyncio.to_thread(
+                get_ledger().grant_dataset_reward,
+                body.username,
+                body.dataset_id,
+                body.amount_cents,
+                reason=body.reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"wallet": wallet.to_dict(), "record": record.to_dict(), "granted": granted}
 
     @app.post("/api/admin/account/recharge")
     async def admin_account_recharge(body: RechargeRequest) -> dict[str, Any]:

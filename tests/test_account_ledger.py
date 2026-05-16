@@ -62,6 +62,22 @@ def test_account_ledger_topup_order_auto_recharges_once(tmp_path) -> None:
     assert record_2 is None
 
 
+def test_account_ledger_dataset_reward_is_idempotent(tmp_path) -> None:
+    ledger = AccountLedger(tmp_path / "ledger.json")
+
+    wallet, record, granted = ledger.grant_dataset_reward("pearl", "dataset-1", 1_500)
+
+    assert granted is True
+    assert wallet.available_cents == 1_500
+    assert record.kind == "dataset_reward"
+    assert record.job_id == "dataset-1"
+
+    wallet_2, record_2, granted_2 = ledger.grant_dataset_reward("pearl", "dataset-1", 1_500)
+    assert granted_2 is False
+    assert wallet_2.available_cents == 1_500
+    assert record_2.record_id == record.record_id
+
+
 def test_account_ledger_rejects_insufficient_balance(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
     ledger.admin_recharge("pearl", 100)
@@ -142,6 +158,33 @@ def test_account_routes_topup_order_flow(tmp_path) -> None:
     orders = client.get("/api/account/topup-orders", params={"username": "pearl"})
     assert orders.status_code == 200
     assert orders.json()["orders"][0]["providerOrderId"] == "txn-2"
+
+    set_ledger_for_tests(None)
+
+
+def test_account_routes_dataset_reward_flow(tmp_path) -> None:
+    set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
+    app = FastAPI()
+    register_account_routes(app)
+    client = TestClient(app)
+
+    reward = client.post(
+        "/api/account/rewards/dataset-upload",
+        json={"username": "pearl", "dataset_id": "cloud/verify-so101", "amount_cents": 2_000},
+    )
+
+    assert reward.status_code == 200
+    assert reward.json()["granted"] is True
+    assert reward.json()["wallet"]["availableCents"] == 2_000
+    assert reward.json()["record"]["kind"] == "dataset_reward"
+
+    duplicate = client.post(
+        "/api/account/rewards/dataset-upload",
+        json={"username": "pearl", "dataset_id": "cloud/verify-so101", "amount_cents": 2_000},
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["granted"] is False
+    assert duplicate.json()["wallet"]["availableCents"] == 2_000
 
     set_ledger_for_tests(None)
 
