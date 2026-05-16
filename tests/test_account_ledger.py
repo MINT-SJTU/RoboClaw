@@ -38,6 +38,30 @@ def test_account_ledger_recharge_freeze_settle_release(tmp_path) -> None:
     assert [record.kind for record in records] == ["settle", "release", "freeze", "admin_recharge"]
 
 
+def test_account_ledger_topup_order_auto_recharges_once(tmp_path) -> None:
+    ledger = AccountLedger(tmp_path / "ledger.json")
+
+    order = ledger.create_topup_order("pearl", 5_000, provider="mockpay")
+
+    assert order.status == "pending"
+    assert order.pay_url == f"roboclaw://pay/mockpay/{order.order_id}"
+    assert ledger.wallet("pearl").balance_cents == 0
+
+    paid_order, wallet, record = ledger.complete_topup_order(order.order_id, provider_order_id="txn-1")
+
+    assert paid_order.status == "paid"
+    assert paid_order.provider_order_id == "txn-1"
+    assert wallet.balance_cents == 5_000
+    assert record is not None
+    assert record.kind == "payment_recharge"
+    assert record.job_id == order.order_id
+
+    paid_order_2, wallet_2, record_2 = ledger.complete_topup_order(order.order_id)
+    assert paid_order_2.status == "paid"
+    assert wallet_2.balance_cents == 5_000
+    assert record_2 is None
+
+
 def test_account_ledger_rejects_insufficient_balance(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
     ledger.admin_recharge("pearl", 100)
@@ -85,6 +109,39 @@ def test_account_routes_flow(tmp_path) -> None:
     records = client.get("/api/account/billing-records", params={"username": "pearl"})
     assert records.status_code == 200
     assert [record["kind"] for record in records.json()["records"]] == ["settle", "freeze", "admin_recharge"]
+
+    set_ledger_for_tests(None)
+
+
+def test_account_routes_topup_order_flow(tmp_path) -> None:
+    set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
+    app = FastAPI()
+    register_account_routes(app)
+    client = TestClient(app)
+
+    order_response = client.post(
+        "/api/account/topup-orders",
+        json={"username": "pearl", "amount_cents": 8_000, "provider": "mockpay"},
+    )
+    assert order_response.status_code == 200
+    order = order_response.json()["order"]
+    assert order["status"] == "pending"
+
+    balance = client.get("/api/account/balance", params={"username": "pearl"})
+    assert balance.json()["wallet"]["availableCents"] == 0
+
+    complete_response = client.post(
+        "/api/account/topup-orders/complete",
+        json={"order_id": order["orderId"], "provider_order_id": "txn-2"},
+    )
+    assert complete_response.status_code == 200
+    assert complete_response.json()["order"]["status"] == "paid"
+    assert complete_response.json()["wallet"]["availableCents"] == 8_000
+    assert complete_response.json()["record"]["kind"] == "payment_recharge"
+
+    orders = client.get("/api/account/topup-orders", params={"username": "pearl"})
+    assert orders.status_code == 200
+    assert orders.json()["orders"][0]["providerOrderId"] == "txn-2"
 
     set_ledger_for_tests(None)
 

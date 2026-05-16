@@ -20,6 +20,18 @@ class RechargeRequest(BaseModel):
     reason: str = "admin recharge"
 
 
+class TopupOrderRequest(BaseModel):
+    username: str
+    amount_cents: int
+    provider: str = "mock"
+    reason: str = "credit topup"
+
+
+class CompleteTopupOrderRequest(BaseModel):
+    order_id: str
+    provider_order_id: str = ""
+
+
 class BillingAmountRequest(BaseModel):
     username: str
     amount_cents: int
@@ -53,6 +65,41 @@ def register_account_routes(app: FastAPI) -> None:
     async def billing_records(username: str = "", limit: int = 50) -> dict[str, Any]:
         records = await asyncio.to_thread(get_ledger().records, username, limit=limit)
         return {"records": [record.to_dict() for record in records]}
+
+    @app.get("/api/account/topup-orders")
+    async def account_topup_orders(username: str = "", limit: int = 50) -> dict[str, Any]:
+        orders = await asyncio.to_thread(get_ledger().orders, username, limit=limit)
+        return {"orders": [order.to_dict() for order in orders]}
+
+    @app.post("/api/account/topup-orders")
+    async def create_topup_order(body: TopupOrderRequest) -> dict[str, Any]:
+        try:
+            order = await asyncio.to_thread(
+                get_ledger().create_topup_order,
+                body.username,
+                body.amount_cents,
+                provider=body.provider,
+                reason=body.reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"order": order.to_dict()}
+
+    @app.post("/api/account/topup-orders/complete")
+    async def complete_topup_order(body: CompleteTopupOrderRequest) -> dict[str, Any]:
+        try:
+            order, wallet, record = await asyncio.to_thread(
+                get_ledger().complete_topup_order,
+                body.order_id,
+                provider_order_id=body.provider_order_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404 if "not found" in str(exc) else 400, detail=str(exc)) from exc
+        return {
+            "order": order.to_dict(),
+            "wallet": wallet.to_dict(),
+            "record": record.to_dict() if record else None,
+        }
 
     @app.post("/api/admin/account/recharge")
     async def admin_account_recharge(body: RechargeRequest) -> dict[str, Any]:
