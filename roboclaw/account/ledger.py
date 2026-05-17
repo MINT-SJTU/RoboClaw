@@ -399,6 +399,70 @@ class AccountLedger:
             self._save(state)
             return wallet, record
 
+    def settle_job(
+        self,
+        username: str,
+        job_id: str,
+        charge_cents: int,
+        *,
+        reason: str = "settle training job",
+        task_name: str = "",
+    ) -> tuple[Wallet, BillingRecord, BillingRecord | None]:
+        if charge_cents <= 0:
+            raise ValueError("charge_cents must be positive")
+        username = _clean_username(username)
+        job_id = job_id.strip()
+        if not job_id:
+            raise ValueError("job_id is required")
+        with self._lock:
+            state = self._load()
+            outstanding = self._job_frozen_cents(state, username=username, job_id=job_id)
+            if outstanding <= 0:
+                raise ValueError("job has no frozen credit")
+            if charge_cents > outstanding:
+                raise ValueError("charge amount exceeds frozen credit for job")
+            wallet = self._wallet_from_state(state, username)
+            if wallet.frozen_cents < charge_cents:
+                raise ValueError("settle amount exceeds frozen balance")
+            wallet = Wallet(
+                username=username,
+                balance_cents=wallet.balance_cents - charge_cents,
+                frozen_cents=wallet.frozen_cents - charge_cents,
+                reward_points=wallet.reward_points,
+                updated_at=_now(),
+            )
+            settle_record = self._append_record(
+                state,
+                wallet,
+                "settle",
+                -charge_cents,
+                reason=reason,
+                task_name=task_name,
+                job_id=job_id,
+            )
+            release_record: BillingRecord | None = None
+            remainder = outstanding - charge_cents
+            if remainder:
+                wallet = Wallet(
+                    username=username,
+                    balance_cents=wallet.balance_cents,
+                    frozen_cents=wallet.frozen_cents - remainder,
+                    reward_points=wallet.reward_points,
+                    updated_at=_now(),
+                )
+                release_record = self._append_record(
+                    state,
+                    wallet,
+                    "release",
+                    remainder,
+                    reason="release unused training credit",
+                    task_name=task_name,
+                    job_id=job_id,
+                )
+            self._save_wallet(state, wallet)
+            self._save(state)
+            return wallet, settle_record, release_record
+
     def _append_record(
         self,
         state: dict[str, Any],
@@ -425,6 +489,20 @@ class AccountLedger:
         )
         state.setdefault("records", []).append(record.to_dict())
         return record
+
+    def _job_frozen_cents(self, state: dict[str, Any], *, username: str, job_id: str) -> int:
+        outstanding = 0
+        for payload in state.get("records", []):
+            record = _record_from_payload(payload)
+            if record.username != username or record.job_id != job_id:
+                continue
+            if record.kind == "freeze":
+                outstanding += record.amount_cents
+            elif record.kind == "settle":
+                outstanding -= abs(record.amount_cents)
+            elif record.kind == "release":
+                outstanding -= record.amount_cents
+        return max(outstanding, 0)
 
     def _wallet_from_state(self, state: dict[str, Any], username: str) -> Wallet:
         payload = state.setdefault("wallets", {}).get(username) or {}

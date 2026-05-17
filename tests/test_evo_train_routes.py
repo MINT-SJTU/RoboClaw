@@ -14,8 +14,10 @@ from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.service import EmbodiedService
 from roboclaw.cloud.evo_train import EvoTrainBridge, EvoTrainSettings
+from roboclaw.account import AccountLedger
 from roboclaw.http.routes.policies import register_policy_routes
 from roboclaw.http.routes.train import register_train_routes
+from roboclaw.http.routes import train_cloud as train_cloud_routes
 from roboclaw.http.routes.train_cloud import register_train_cloud_routes
 from roboclaw.training import TrainingJobStatus
 
@@ -192,6 +194,88 @@ def test_train_start_uses_cloud_bridge_when_enabled(route_app):
     assert data["mode"] == "cloud"
     assert data["job_id"] == "cloud-job-1"
     assert bridge.start_calls[0]["username"] == "13800138000"
+
+
+def test_train_start_freezes_first_hour_credit_when_cost_is_declared(route_app, tmp_path):
+    app, _, _ = route_app
+    bridge = StubBridge()
+    ledger = AccountLedger(tmp_path / "ledger.json")
+    ledger.admin_recharge("13800138000", 2_000)
+    train_cloud_routes.set_ledger_for_tests(ledger)
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_train_cloud_routes(app, app.state.embodied_service)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/train/cloud/start",
+        json={
+            "dataset_name": "demo",
+            "policy_type": "act",
+            "steps": 5000,
+            "username": "13800138000",
+            "hourly_cost_cents": 900,
+            "service_fee_bps": 1000,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["billing"]["holdCents"] == 990
+    assert data["billing"]["record"]["jobId"] == "cloud-job-1"
+    wallet = ledger.wallet("13800138000")
+    assert wallet.balance_cents == 2_000
+    assert wallet.frozen_cents == 990
+    train_cloud_routes.set_ledger_for_tests(None)
+
+
+def test_train_start_rejects_when_credit_is_insufficient(route_app, tmp_path):
+    app, _, _ = route_app
+    bridge = StubBridge()
+    train_cloud_routes.set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_train_cloud_routes(app, app.state.embodied_service)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/train/cloud/start",
+        json={"dataset_name": "demo", "username": "13800138000", "hourly_cost_cents": 900},
+    )
+
+    assert resp.status_code == 409
+    assert "insufficient" in resp.json()["detail"]
+    assert bridge.start_calls == []
+    train_cloud_routes.set_ledger_for_tests(None)
+
+
+def test_train_cloud_billing_settle_charges_service_fee_and_releases_remainder(route_app, tmp_path):
+    app, _, _ = route_app
+    ledger = AccountLedger(tmp_path / "ledger.json")
+    ledger.admin_recharge("13800138000", 2_000)
+    ledger.freeze("13800138000", 990, job_id="cloud-job-1", task_name="demo")
+    train_cloud_routes.set_ledger_for_tests(ledger)
+
+    register_train_cloud_routes(app, app.state.embodied_service)
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/train/cloud/billing/settle",
+        json={
+            "username": "13800138000",
+            "job_id": "cloud-job-1",
+            "provider_cost_cents": 500,
+            "service_fee_bps": 1000,
+            "task_name": "demo",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chargeCents"] == 550
+    assert data["releaseRecord"]["amountCents"] == 440
+    assert data["wallet"]["availableCreditCents"] == 1_450
+    assert data["wallet"]["frozenCreditCents"] == 0
+    train_cloud_routes.set_ledger_for_tests(None)
 
 
 def test_train_plan_forwards_skill_request_to_evo_train(route_app):

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from roboclaw.account import AccountLedger, apply_service_fee_cents, estimate_training_hold_cents, hourly_cost_from_params
 from roboclaw.embodied.service import EmbodiedService
 from roboclaw.training import TrainingPlanSpec, TrainingService, TrainingStartSpec, TrainingStopSpec
+
+_ledger: AccountLedger | None = None
 
 
 class CloudTrainStartRequest(BaseModel):
@@ -22,11 +26,24 @@ class CloudTrainStartRequest(BaseModel):
     sku_id: str = ""
     image_id: str = ""
     task_name: str = ""
+    hourly_cost_cents: int = Field(
+        default=0,
+        description="Provider hourly compute cost in cents before service fee.",
+    )
+    service_fee_bps: int = Field(default=1_000, description="Service fee in basis points. 1000 = 10%.")
 
 
 class CloudTrainStopRequest(BaseModel):
     job_id: str
     username: str = ""
+
+
+class CloudTrainBillingSettleRequest(BaseModel):
+    username: str
+    job_id: str
+    provider_cost_cents: int = Field(..., description="Actual provider compute cost in cents before service fee.")
+    service_fee_bps: int = Field(default=1_000, description="Service fee in basis points. 1000 = 10%.")
+    task_name: str = ""
 
 
 class CloudTrainPlanRequest(BaseModel):
@@ -51,11 +68,42 @@ def _bridge_error_status(exc: RuntimeError) -> int:
     return 503 if "bridge is not enabled" in str(exc).lower() else 502
 
 
+def get_ledger() -> AccountLedger:
+    global _ledger
+    if _ledger is None:
+        _ledger = AccountLedger()
+    return _ledger
+
+
+def set_ledger_for_tests(ledger: AccountLedger | None) -> None:
+    global _ledger
+    _ledger = ledger
+
+
 def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
     training = TrainingService(service)
 
     @app.post("/api/train/cloud/start")
     async def train_cloud_start(body: CloudTrainStartRequest) -> dict[str, Any]:
+        username = body.username.strip()
+        hourly_cost_cents = body.hourly_cost_cents or hourly_cost_from_params(body.params)
+        hold_cents = 0
+        freeze_record = None
+        if username and hourly_cost_cents:
+            try:
+                hold_cents = estimate_training_hold_cents(
+                    hourly_cost_cents=hourly_cost_cents,
+                    service_fee_bps=body.service_fee_bps,
+                )
+                _wallet, freeze_record = get_ledger().freeze(
+                    username,
+                    hold_cents,
+                    reason="cloud training first-hour hold",
+                    task_name=body.task_name or body.dataset_name,
+                    job_id=body.task_name or body.dataset_name or "pending-cloud-train",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409 if "insufficient" in str(exc) else 400, detail=str(exc)) from exc
         try:
             result = await training.start(
                 TrainingStartSpec(
@@ -72,8 +120,66 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                 )
             )
         except RuntimeError as exc:
+            if username and freeze_record is not None:
+                try:
+                    get_ledger().release(
+                        username,
+                        hold_cents,
+                        reason="release hold after cloud training start failure",
+                        task_name=body.task_name or body.dataset_name,
+                        job_id=freeze_record.job_id,
+                    )
+                except ValueError:
+                    pass
             raise HTTPException(status_code=_bridge_error_status(exc), detail=str(exc)) from exc
-        return result.to_dict()
+        payload = result.to_dict()
+        if username and freeze_record is not None:
+            job_id = payload.get("job_id") or freeze_record.job_id
+            if job_id != freeze_record.job_id:
+                try:
+                    get_ledger().release(username, hold_cents, reason="replace pending hold", job_id=freeze_record.job_id)
+                    _wallet, freeze_record = get_ledger().freeze(
+                        username,
+                        hold_cents,
+                        reason="cloud training first-hour hold",
+                        task_name=body.task_name or body.dataset_name,
+                        job_id=str(job_id),
+                    )
+                except ValueError:
+                    pass
+            payload["billing"] = {
+                "holdCents": hold_cents,
+                "hourlyCostCents": hourly_cost_cents,
+                "serviceFeeBps": body.service_fee_bps,
+                "record": freeze_record.to_dict(),
+            }
+        return payload
+
+    @app.post("/api/train/cloud/billing/settle")
+    async def train_cloud_billing_settle(body: CloudTrainBillingSettleRequest) -> dict[str, Any]:
+        try:
+            charge_cents = apply_service_fee_cents(
+                body.provider_cost_cents,
+                service_fee_bps=body.service_fee_bps,
+            )
+            wallet, settle_record, release_record = await asyncio.to_thread(
+                get_ledger().settle_job,
+                body.username,
+                body.job_id,
+                charge_cents,
+                reason="cloud training final settlement",
+                task_name=body.task_name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "exceeds" in str(exc) or "no frozen" in str(exc) else 400, detail=str(exc)) from exc
+        return {
+            "wallet": wallet.to_dict(),
+            "chargeCents": charge_cents,
+            "providerCostCents": body.provider_cost_cents,
+            "serviceFeeBps": body.service_fee_bps,
+            "settleRecord": settle_record.to_dict(),
+            "releaseRecord": release_record.to_dict() if release_record else None,
+        }
 
     @app.post("/api/train/cloud/stop")
     async def train_cloud_stop(body: CloudTrainStopRequest) -> dict[str, Any]:
