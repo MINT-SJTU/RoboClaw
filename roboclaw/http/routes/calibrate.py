@@ -40,7 +40,9 @@ def register_calibrate_routes(app: FastAPI, service: Any) -> None:
     @app.post("/api/calibration/auto/start")
     async def calibration_auto_start(body: AutoStartRequest | None = None) -> dict:
         try:
-            return await service.start_auto_calibration(body.arm_alias if body else None)
+            if body and body.arm_alias:
+                return await service.start_auto_calibration(body.arm_alias)
+            return await service.start_auto_calibration()
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
 
