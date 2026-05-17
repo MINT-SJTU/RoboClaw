@@ -29,6 +29,11 @@ def schedule_dashboard_restart(app: FastAPI, delay_s: float = 0.5) -> None:
 
 
 def register_recovery_routes(app: FastAPI) -> None:
+    @app.get("/api/recovery/faults")
+    async def recovery_faults() -> dict[str, Any]:
+        monitor: HardwareMonitor = app.state.hardware_monitor
+        return {"faults": [fault.to_dict() for fault in monitor.active_faults]}
+
     @app.post("/api/recovery/check-hardware")
     async def recovery_check_hardware() -> dict[str, Any]:
         monitor: HardwareMonitor = app.state.hardware_monitor
