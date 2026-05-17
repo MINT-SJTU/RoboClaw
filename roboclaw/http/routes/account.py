@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from roboclaw.account import AccountLedger
 
@@ -22,8 +22,11 @@ class RechargeRequest(BaseModel):
 
 class TopupOrderRequest(BaseModel):
     username: str
-    amount_cents: int
-    bonus_points: int = 0
+    amount_cents: int = Field(..., description="Training credit in cents. 100 cents = 1 CNY.")
+    bonus_points: int = Field(
+        default=0,
+        description="Small non-cash reward points granted as a top-up bonus, e.g. 5-20.",
+    )
     provider: str = "mock"
     reason: str = "credit topup"
 
@@ -36,7 +39,10 @@ class CompleteTopupOrderRequest(BaseModel):
 class DatasetRewardRequest(BaseModel):
     username: str
     dataset_id: str
-    reward_points: int
+    reward_points: int = Field(
+        ...,
+        description="Small non-cash contribution points for an accepted dataset, e.g. 10-100.",
+    )
     reason: str = "dataset upload reward"
 
 
