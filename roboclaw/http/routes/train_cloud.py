@@ -122,12 +122,11 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
         except RuntimeError as exc:
             if username and freeze_record is not None:
                 try:
-                    get_ledger().release(
+                    get_ledger().release_job_hold(
                         username,
-                        hold_cents,
+                        freeze_record.job_id,
                         reason="release hold after cloud training start failure",
                         task_name=body.task_name or body.dataset_name,
-                        job_id=freeze_record.job_id,
                     )
                 except ValueError:
                     pass

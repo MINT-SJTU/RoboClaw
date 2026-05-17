@@ -7,12 +7,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from roboclaw.account import AccountLedger
 
 _ledger: AccountLedger | None = None
+_ADMIN_TOKEN_ENV = "EVO_STUDIO_ADMIN_TOKEN"
 
 
 class RechargeRequest(BaseModel):
@@ -65,6 +66,17 @@ def payment_config() -> dict[str, Any]:
         "payeeAccount": payee_account,
         "configured": bool(payee_name and payee_account and provider != "mock"),
     }
+
+
+def _require_admin_token(token: str) -> None:
+    expected = os.environ.get(_ADMIN_TOKEN_ENV, "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{_ADMIN_TOKEN_ENV} is required for admin billing routes",
+        )
+    if token.strip() != expected:
+        raise HTTPException(status_code=403, detail="invalid admin token")
 
 
 def get_ledger() -> AccountLedger:
@@ -151,7 +163,11 @@ def register_account_routes(app: FastAPI) -> None:
         return {"wallet": wallet.to_dict(), "record": record.to_dict(), "granted": granted}
 
     @app.post("/api/admin/account/recharge")
-    async def admin_account_recharge(body: RechargeRequest) -> dict[str, Any]:
+    async def admin_account_recharge(
+        body: RechargeRequest,
+        x_roboclaw_admin_token: str = Header(default=""),
+    ) -> dict[str, Any]:
+        _require_admin_token(x_roboclaw_admin_token)
         try:
             wallet, record = await asyncio.to_thread(
                 get_ledger().admin_recharge,
@@ -164,7 +180,11 @@ def register_account_routes(app: FastAPI) -> None:
         return {"wallet": wallet.to_dict(), "record": record.to_dict()}
 
     @app.post("/api/billing/freeze")
-    async def billing_freeze(body: BillingAmountRequest) -> dict[str, Any]:
+    async def billing_freeze(
+        body: BillingAmountRequest,
+        x_roboclaw_admin_token: str = Header(default=""),
+    ) -> dict[str, Any]:
+        _require_admin_token(x_roboclaw_admin_token)
         try:
             wallet, record = await asyncio.to_thread(
                 get_ledger().freeze,
@@ -179,7 +199,11 @@ def register_account_routes(app: FastAPI) -> None:
         return {"wallet": wallet.to_dict(), "record": record.to_dict()}
 
     @app.post("/api/billing/settle")
-    async def billing_settle(body: BillingAmountRequest) -> dict[str, Any]:
+    async def billing_settle(
+        body: BillingAmountRequest,
+        x_roboclaw_admin_token: str = Header(default=""),
+    ) -> dict[str, Any]:
+        _require_admin_token(x_roboclaw_admin_token)
         try:
             wallet, record = await asyncio.to_thread(
                 get_ledger().settle,
@@ -194,7 +218,11 @@ def register_account_routes(app: FastAPI) -> None:
         return {"wallet": wallet.to_dict(), "record": record.to_dict()}
 
     @app.post("/api/billing/release")
-    async def billing_release(body: BillingAmountRequest) -> dict[str, Any]:
+    async def billing_release(
+        body: BillingAmountRequest,
+        x_roboclaw_admin_token: str = Header(default=""),
+    ) -> dict[str, Any]:
+        _require_admin_token(x_roboclaw_admin_token)
         try:
             wallet, record = await asyncio.to_thread(
                 get_ledger().release,

@@ -514,6 +514,46 @@ class AccountLedger:
                     return updated
         raise ValueError("frozen job hold not found")
 
+    def release_job_hold(
+        self,
+        username: str,
+        job_id: str,
+        *,
+        reason: str = "release job hold",
+        task_name: str = "",
+    ) -> tuple[Wallet, BillingRecord]:
+        username = _clean_username(username)
+        job_id = job_id.strip()
+        if not job_id:
+            raise ValueError("job_id is required")
+        with self._lock:
+            state = self._load()
+            amount_cents = self._job_frozen_cents(state, username=username, job_id=job_id)
+            if amount_cents <= 0:
+                raise ValueError("job has no frozen balance")
+            wallet = self._wallet_from_state(state, username)
+            if wallet.frozen_cents < amount_cents:
+                raise ValueError("release amount exceeds frozen balance")
+            wallet = Wallet(
+                username=username,
+                balance_cents=wallet.balance_cents,
+                frozen_cents=wallet.frozen_cents - amount_cents,
+                reward_points=wallet.reward_points,
+                updated_at=_now(),
+            )
+            record = self._append_record(
+                state,
+                wallet,
+                "release",
+                amount_cents,
+                reason=reason,
+                task_name=task_name,
+                job_id=job_id,
+            )
+            self._save_wallet(state, wallet)
+            self._save(state)
+            return wallet, record
+
     def _append_record(
         self,
         state: dict[str, Any],

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -110,6 +112,21 @@ def test_account_ledger_reassigns_pending_training_hold(tmp_path) -> None:
     assert ledger.wallet("pearl").frozen_cents == 990
 
 
+def test_account_ledger_releases_only_matching_job_hold(tmp_path) -> None:
+    ledger = AccountLedger(tmp_path / "ledger.json")
+    ledger.admin_recharge("pearl", 10_000)
+    ledger.freeze("pearl", 990, job_id="job-a")
+    ledger.freeze("pearl", 990, job_id="job-b")
+
+    wallet, release = ledger.release_job_hold("pearl", "job-a")
+
+    assert release.amount_cents == 990
+    assert release.job_id == "job-a"
+    assert wallet.frozen_cents == 990
+    records = ledger.records("pearl")
+    assert [record.job_id for record in records if record.kind == "freeze"] == ["job-b", "job-a"]
+
+
 def test_account_ledger_rejects_insufficient_balance(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
     ledger.admin_recharge("pearl", 100)
@@ -123,33 +140,40 @@ def test_account_ledger_rejects_insufficient_balance(tmp_path) -> None:
 
 
 def test_account_routes_flow(tmp_path) -> None:
+    headers = {"X-Roboclaw-Admin-Token": "admin-test"}
+    from roboclaw.http.routes import account as account_routes
+
     set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
     app = FastAPI()
     register_account_routes(app)
     client = TestClient(app)
 
-    recharge = client.post(
-        "/api/admin/account/recharge",
-        json={"username": "pearl", "amount_cents": 10_000, "reason": "test topup"},
-    )
-    assert recharge.status_code == 200
-    assert recharge.json()["wallet"]["availableBalanceCents"] == 10_000
-    assert recharge.json()["wallet"]["availableCents"] == 10_000
+    with patch.dict(account_routes.os.environ, {"EVO_STUDIO_ADMIN_TOKEN": "admin-test"}):
+        recharge = client.post(
+            "/api/admin/account/recharge",
+            json={"username": "pearl", "amount_cents": 10_000, "reason": "test topup"},
+            headers=headers,
+        )
+        assert recharge.status_code == 200
+        assert recharge.json()["wallet"]["availableBalanceCents"] == 10_000
+        assert recharge.json()["wallet"]["availableCents"] == 10_000
 
-    freeze = client.post(
-        "/api/billing/freeze",
-        json={"username": "pearl", "amount_cents": 4_000, "task_name": "train-1"},
-    )
-    assert freeze.status_code == 200
-    assert freeze.json()["wallet"]["frozenCents"] == 4_000
+        freeze = client.post(
+            "/api/billing/freeze",
+            json={"username": "pearl", "amount_cents": 4_000, "task_name": "train-1"},
+            headers=headers,
+        )
+        assert freeze.status_code == 200
+        assert freeze.json()["wallet"]["frozenCents"] == 4_000
 
-    settle = client.post(
-        "/api/billing/settle",
-        json={"username": "pearl", "amount_cents": 2_500, "task_name": "train-1"},
-    )
-    assert settle.status_code == 200
-    assert settle.json()["wallet"]["balanceCents"] == 7_500
-    assert settle.json()["wallet"]["frozenCents"] == 1_500
+        settle = client.post(
+            "/api/billing/settle",
+            json={"username": "pearl", "amount_cents": 2_500, "task_name": "train-1"},
+            headers=headers,
+        )
+        assert settle.status_code == 200
+        assert settle.json()["wallet"]["balanceCents"] == 7_500
+        assert settle.json()["wallet"]["frozenCents"] == 1_500
 
     balance = client.get("/api/account/balance", params={"username": "pearl"})
     assert balance.status_code == 200
@@ -252,13 +276,44 @@ def test_account_routes_dataset_reward_flow(tmp_path) -> None:
 
 
 def test_account_routes_reject_insufficient_balance(tmp_path) -> None:
+    from roboclaw.http.routes import account as account_routes
+
     set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
     app = FastAPI()
     register_account_routes(app)
     client = TestClient(app)
 
-    response = client.post("/api/billing/freeze", json={"username": "pearl", "amount_cents": 1})
+    with patch.dict(account_routes.os.environ, {"EVO_STUDIO_ADMIN_TOKEN": "admin-test"}):
+        response = client.post(
+            "/api/billing/freeze",
+            json={"username": "pearl", "amount_cents": 1},
+            headers={"X-Roboclaw-Admin-Token": "admin-test"},
+        )
 
     assert response.status_code == 409
     assert "insufficient" in response.json()["detail"]
+    set_ledger_for_tests(None)
+
+
+def test_account_admin_routes_require_token(tmp_path) -> None:
+    from roboclaw.http.routes import account as account_routes
+
+    set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
+    app = FastAPI()
+    register_account_routes(app)
+    client = TestClient(app)
+
+    with patch.dict(account_routes.os.environ, {"EVO_STUDIO_ADMIN_TOKEN": "admin-test"}):
+        missing = client.post(
+            "/api/admin/account/recharge",
+            json={"username": "pearl", "amount_cents": 10_000},
+        )
+        wrong = client.post(
+            "/api/admin/account/recharge",
+            json={"username": "pearl", "amount_cents": 10_000},
+            headers={"X-Roboclaw-Admin-Token": "wrong"},
+        )
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
     set_ledger_for_tests(None)
