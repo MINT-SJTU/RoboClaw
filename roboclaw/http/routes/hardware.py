@@ -51,3 +51,10 @@ def register_hardware_routes(app: FastAPI, service: EmbodiedService) -> None:
     @app.get("/api/hardware/servos")
     async def servo_positions() -> dict[str, Any]:
         return await asyncio.to_thread(service.read_servo_positions)
+
+    @app.post("/api/hardware/release-torque")
+    async def release_torque() -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(service.release_arm_torque)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc

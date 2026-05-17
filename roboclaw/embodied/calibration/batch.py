@@ -43,7 +43,7 @@ class AutoCalibrationBatch:
     def busy(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start(self, arms: list[ArmBinding]) -> int:
+    async def start(self, arms: list[ArmBinding], *, scope: str = "batch") -> int:
         items = self._plan(arms)
         owner = self.board.get("embodiment_owner", "")
         self._stop_event.clear()
@@ -52,7 +52,7 @@ class AutoCalibrationBatch:
             state=SessionState.CALIBRATING,
             embodiment_owner=owner,
             calibration_mode="auto",
-            calibration_scope="batch",
+            calibration_scope=scope,
             calibration_phase="planning",
             calibration_current_arm="",
             calibration_index=0,
