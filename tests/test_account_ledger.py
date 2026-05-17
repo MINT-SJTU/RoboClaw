@@ -95,6 +95,21 @@ def test_account_ledger_dataset_reward_is_idempotent(tmp_path) -> None:
     assert record_2.record_id == record.record_id
 
 
+def test_account_ledger_reassigns_pending_training_hold(tmp_path) -> None:
+    ledger = AccountLedger(tmp_path / "ledger.json")
+    ledger.admin_recharge("pearl", 10_000)
+    _wallet, hold = ledger.freeze("pearl", 990, job_id="pending-cloud-train")
+
+    updated = ledger.reassign_job_hold("pearl", "pending-cloud-train", "cloud-job-1")
+
+    assert updated.record_id == hold.record_id
+    assert updated.job_id == "cloud-job-1"
+    records = ledger.records("pearl")
+    assert records[0].kind == "freeze"
+    assert records[0].job_id == "cloud-job-1"
+    assert ledger.wallet("pearl").frozen_cents == 990
+
+
 def test_account_ledger_rejects_insufficient_balance(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
     ledger.admin_recharge("pearl", 100)

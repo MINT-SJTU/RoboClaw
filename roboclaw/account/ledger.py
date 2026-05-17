@@ -479,6 +479,41 @@ class AccountLedger:
             self._save(state)
             return wallet, settle_record, release_record
 
+    def reassign_job_hold(
+        self,
+        username: str,
+        old_job_id: str,
+        new_job_id: str,
+    ) -> BillingRecord:
+        username = _clean_username(username)
+        old_job_id = old_job_id.strip()
+        new_job_id = new_job_id.strip()
+        if not old_job_id or not new_job_id:
+            raise ValueError("old_job_id and new_job_id are required")
+        with self._lock:
+            state = self._load()
+            records = state.setdefault("records", [])
+            for index in range(len(records) - 1, -1, -1):
+                record = _record_from_payload(records[index])
+                if record.username == username and record.job_id == old_job_id and record.kind == "freeze":
+                    updated = BillingRecord(
+                        record_id=record.record_id,
+                        username=record.username,
+                        kind=record.kind,
+                        amount_cents=record.amount_cents,
+                        balance_after_cents=record.balance_after_cents,
+                        frozen_after_cents=record.frozen_after_cents,
+                        reward_points_after=record.reward_points_after,
+                        reason=record.reason,
+                        task_name=record.task_name,
+                        job_id=new_job_id,
+                        created_at=record.created_at,
+                    )
+                    records[index] = updated.to_dict()
+                    self._save(state)
+                    return updated
+        raise ValueError("frozen job hold not found")
+
     def _append_record(
         self,
         state: dict[str, Any],

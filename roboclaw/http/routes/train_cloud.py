@@ -137,13 +137,10 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
             job_id = payload.get("job_id") or freeze_record.job_id
             if job_id != freeze_record.job_id:
                 try:
-                    get_ledger().release(username, hold_cents, reason="replace pending hold", job_id=freeze_record.job_id)
-                    _wallet, freeze_record = get_ledger().freeze(
+                    freeze_record = get_ledger().reassign_job_hold(
                         username,
-                        hold_cents,
-                        reason="cloud training first-hour hold",
-                        task_name=body.task_name or body.dataset_name,
-                        job_id=str(job_id),
+                        freeze_record.job_id,
+                        str(job_id),
                     )
                 except ValueError:
                     pass
