@@ -101,6 +101,26 @@ class TestSessionStatus:
             assert field in data
 
 
+class TestWorkflowRoutes:
+    def test_workflow_plan_route_is_registered(self, client):
+        resp = client.post("/api/workflows/plan", json={
+            "record": {
+                "enabled": True,
+                "task": "pick cube",
+                "datasetName": "pick_cube_v1",
+            },
+            "train": {
+                "enabled": True,
+            },
+        })
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["stages"][0]["stage"] == "record"
+        assert payload["stages"][1]["stage"] == "train"
+        assert payload["stages"][1]["blockedBy"] == ["record"]
+
+
 # ---------------------------------------------------------------------------
 # Session lifecycle
 # ---------------------------------------------------------------------------
