@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,18 @@ class BillingAmountRequest(BaseModel):
     job_id: str = ""
 
 
+def payment_config() -> dict[str, Any]:
+    provider = os.environ.get("EVO_STUDIO_PAYMENT_PROVIDER", "mock").strip() or "mock"
+    payee_name = os.environ.get("EVO_STUDIO_PAYEE_NAME", "").strip()
+    payee_account = os.environ.get("EVO_STUDIO_PAYEE_ACCOUNT", "").strip()
+    return {
+        "provider": provider,
+        "payeeName": payee_name,
+        "payeeAccount": payee_account,
+        "configured": bool(payee_name and payee_account and provider != "mock"),
+    }
+
+
 def get_ledger() -> AccountLedger:
     global _ledger
     if _ledger is None:
@@ -67,6 +80,10 @@ def set_ledger_for_tests(ledger: AccountLedger | None) -> None:
 
 
 def register_account_routes(app: FastAPI) -> None:
+    @app.get("/api/account/payment-config")
+    async def account_payment_config() -> dict[str, Any]:
+        return payment_config()
+
     @app.get("/api/account/balance")
     async def account_balance(username: str) -> dict[str, Any]:
         try:
@@ -87,18 +104,21 @@ def register_account_routes(app: FastAPI) -> None:
 
     @app.post("/api/account/topup-orders")
     async def create_topup_order(body: TopupOrderRequest) -> dict[str, Any]:
+        config = payment_config()
         try:
             order = await asyncio.to_thread(
                 get_ledger().create_topup_order,
                 body.username,
                 body.amount_cents,
                 bonus_points=body.bonus_points,
-                provider=body.provider,
+                provider=body.provider or config["provider"],
+                payee_name=config["payeeName"],
+                payee_account=config["payeeAccount"],
                 reason=body.reason,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"order": order.to_dict()}
+        return {"order": order.to_dict(), "paymentConfig": config}
 
     @app.post("/api/account/topup-orders/complete")
     async def complete_topup_order(body: CompleteTopupOrderRequest) -> dict[str, Any]:

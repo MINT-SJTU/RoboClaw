@@ -41,16 +41,26 @@ def test_account_ledger_recharge_freeze_settle_release(tmp_path) -> None:
 def test_account_ledger_topup_order_auto_recharges_once(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
 
-    order = ledger.create_topup_order("pearl", 5_000, bonus_points=5, provider="mockpay")
+    order = ledger.create_topup_order(
+        "pearl",
+        5_000,
+        bonus_points=5,
+        provider="mockpay",
+        payee_name="Evo Studio",
+        payee_account="merchant-001",
+    )
 
     assert order.status == "pending"
     assert order.bonus_points == 5
+    assert order.payee_name == "Evo Studio"
+    assert order.payee_account == "merchant-001"
     assert order.pay_url == f"roboclaw://pay/mockpay/{order.order_id}"
     assert ledger.wallet("pearl").balance_cents == 0
 
     paid_order, wallet, record = ledger.complete_topup_order(order.order_id, provider_order_id="txn-1")
 
     assert paid_order.status == "paid"
+    assert paid_order.payee_account == "merchant-001"
     assert paid_order.provider_order_id == "txn-1"
     assert wallet.balance_cents == 5_000
     assert wallet.reward_points == 5
@@ -150,6 +160,7 @@ def test_account_routes_topup_order_flow(tmp_path) -> None:
     assert order_response.status_code == 200
     order = order_response.json()["order"]
     assert order["status"] == "pending"
+    assert "paymentConfig" in order_response.json()
 
     balance = client.get("/api/account/balance", params={"username": "pearl"})
     assert balance.json()["wallet"]["availableCents"] == 0
@@ -167,6 +178,31 @@ def test_account_routes_topup_order_flow(tmp_path) -> None:
     orders = client.get("/api/account/topup-orders", params={"username": "pearl"})
     assert orders.status_code == 200
     assert orders.json()["orders"][0]["providerOrderId"] == "txn-2"
+
+    set_ledger_for_tests(None)
+
+
+def test_account_routes_payment_config_from_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("EVO_STUDIO_PAYMENT_PROVIDER", "alipay")
+    monkeypatch.setenv("EVO_STUDIO_PAYEE_NAME", "Evo Studio")
+    monkeypatch.setenv("EVO_STUDIO_PAYEE_ACCOUNT", "merchant-001")
+    set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
+    app = FastAPI()
+    register_account_routes(app)
+    client = TestClient(app)
+
+    config = client.get("/api/account/payment-config")
+    assert config.status_code == 200
+    assert config.json()["configured"] is True
+    assert config.json()["payeeAccount"] == "merchant-001"
+
+    order = client.post(
+        "/api/account/topup-orders",
+        json={"username": "pearl", "amount_cents": 1_000, "provider": "alipay"},
+    )
+    assert order.status_code == 200
+    assert order.json()["order"]["payeeName"] == "Evo Studio"
+    assert order.json()["order"]["payeeAccount"] == "merchant-001"
 
     set_ledger_for_tests(None)
 

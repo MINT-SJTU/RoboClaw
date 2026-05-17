@@ -83,6 +83,8 @@ class PaymentOrder:
     status: PaymentOrderStatus = "pending"
     provider_order_id: str = ""
     pay_url: str = ""
+    payee_name: str = ""
+    payee_account: str = ""
     reason: str = "credit topup"
     created_at: str = ""
     paid_at: str = ""
@@ -97,6 +99,8 @@ class PaymentOrder:
             "status": self.status,
             "providerOrderId": self.provider_order_id,
             "payUrl": self.pay_url,
+            "payeeName": self.payee_name,
+            "payeeAccount": self.payee_account,
             "reason": self.reason,
             "createdAt": self.created_at,
             "paidAt": self.paid_at,
@@ -143,6 +147,8 @@ class AccountLedger:
         *,
         bonus_points: int = 0,
         provider: str = "mock",
+        payee_name: str = "",
+        payee_account: str = "",
         reason: str = "credit topup",
     ) -> PaymentOrder:
         if amount_cents <= 0:
@@ -165,6 +171,8 @@ class AccountLedger:
                 status="pending",
                 provider_order_id=f"{provider}_{order_id}",
                 pay_url=f"roboclaw://pay/{provider}/{order_id}",
+                payee_name=payee_name,
+                payee_account=payee_account,
                 reason=reason,
                 created_at=_now(),
             )
@@ -203,6 +211,8 @@ class AccountLedger:
                     status="paid",
                     provider_order_id=provider_order_id or order.provider_order_id,
                     pay_url=order.pay_url,
+                    payee_name=order.payee_name,
+                    payee_account=order.payee_account,
                     reason=order.reason,
                     created_at=order.created_at,
                     paid_at=_now(),
@@ -560,6 +570,8 @@ def _order_from_payload(payload: dict[str, Any]) -> PaymentOrder:
         status=str(payload.get("status") or "pending"),  # type: ignore[arg-type]
         provider_order_id=str(payload.get("providerOrderId") or ""),
         pay_url=str(payload.get("payUrl") or ""),
+        payee_name=str(payload.get("payeeName") or ""),
+        payee_account=str(payload.get("payeeAccount") or ""),
         reason=str(payload.get("reason") or ""),
         created_at=str(payload.get("createdAt") or ""),
         paid_at=str(payload.get("paidAt") or ""),
