@@ -118,7 +118,7 @@ def test_account_routes_flow(tmp_path) -> None:
         json={"username": "pearl", "amount_cents": 10_000, "reason": "test topup"},
     )
     assert recharge.status_code == 200
-    assert recharge.json()["wallet"]["availableCreditCents"] == 10_000
+    assert recharge.json()["wallet"]["availableBalanceCents"] == 10_000
     assert recharge.json()["wallet"]["availableCents"] == 10_000
 
     freeze = client.post(
@@ -171,8 +171,8 @@ def test_account_routes_topup_order_flow(tmp_path) -> None:
     )
     assert complete_response.status_code == 200
     assert complete_response.json()["order"]["status"] == "paid"
-    assert complete_response.json()["wallet"]["availableCreditCents"] == 8_000
-    assert complete_response.json()["wallet"]["rewardPoints"] == 8
+    assert complete_response.json()["wallet"]["availableBalanceCents"] == 8_000
+    assert complete_response.json()["wallet"]["creditPoints"] == 8
     assert complete_response.json()["record"]["kind"] == "payment_recharge"
 
     orders = client.get("/api/account/topup-orders", params={"username": "pearl"})
@@ -220,8 +220,8 @@ def test_account_routes_dataset_reward_flow(tmp_path) -> None:
 
     assert reward.status_code == 200
     assert reward.json()["granted"] is True
-    assert reward.json()["wallet"]["availableCreditCents"] == 0
-    assert reward.json()["wallet"]["rewardPoints"] == 20
+    assert reward.json()["wallet"]["availableBalanceCents"] == 0
+    assert reward.json()["wallet"]["creditPoints"] == 20
     assert reward.json()["record"]["kind"] == "dataset_reward"
 
     duplicate = client.post(
@@ -230,8 +230,8 @@ def test_account_routes_dataset_reward_flow(tmp_path) -> None:
     )
     assert duplicate.status_code == 200
     assert duplicate.json()["granted"] is False
-    assert duplicate.json()["wallet"]["availableCreditCents"] == 0
-    assert duplicate.json()["wallet"]["rewardPoints"] == 20
+    assert duplicate.json()["wallet"]["availableBalanceCents"] == 0
+    assert duplicate.json()["wallet"]["creditPoints"] == 20
 
     set_ledger_for_tests(None)
 

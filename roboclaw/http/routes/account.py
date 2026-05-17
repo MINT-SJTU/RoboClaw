@@ -1,4 +1,4 @@
-"""Account credit and billing routes."""
+"""Account balance and contribution credit routes."""
 
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ class RechargeRequest(BaseModel):
 
 class TopupOrderRequest(BaseModel):
     username: str
-    amount_cents: int = Field(..., description="Training credit in cents. 100 cents = 1 CNY.")
+    amount_cents: int = Field(..., description="Cash balance top-up in cents. 100 cents = 1 CNY.")
     bonus_points: int = Field(
         default=0,
-        description="Small non-cash reward points granted as a top-up bonus, e.g. 5-20.",
+        description="Small non-cash credit points granted as a top-up bonus, e.g. 5-20.",
     )
     provider: str = "mock"
     reason: str = "credit topup"
@@ -42,7 +42,7 @@ class DatasetRewardRequest(BaseModel):
     dataset_id: str
     reward_points: int = Field(
         ...,
-        description="Small non-cash contribution points for an accepted dataset, e.g. 10-100.",
+        description="Small non-cash contribution credit points for an accepted dataset, e.g. 10-100.",
     )
     reason: str = "dataset upload reward"
 
@@ -170,7 +170,7 @@ def register_account_routes(app: FastAPI) -> None:
                 get_ledger().freeze,
                 body.username,
                 body.amount_cents,
-                reason=body.reason or "freeze credits",
+                reason=body.reason or "freeze training balance",
                 task_name=body.task_name,
                 job_id=body.job_id,
             )
@@ -185,7 +185,7 @@ def register_account_routes(app: FastAPI) -> None:
                 get_ledger().settle,
                 body.username,
                 body.amount_cents,
-                reason=body.reason or "settle credits",
+                reason=body.reason or "settle training balance",
                 task_name=body.task_name,
                 job_id=body.job_id,
             )
@@ -200,7 +200,7 @@ def register_account_routes(app: FastAPI) -> None:
                 get_ledger().release,
                 body.username,
                 body.amount_cents,
-                reason=body.reason or "release frozen credits",
+                reason=body.reason or "release frozen training balance",
                 task_name=body.task_name,
                 job_id=body.job_id,
             )

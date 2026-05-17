@@ -15,7 +15,7 @@ def estimate_training_hold_cents(
     service_fee_bps: int = DEFAULT_SERVICE_FEE_BPS,
     min_billable_minutes: int = DEFAULT_MIN_BILLABLE_MINUTES,
 ) -> int:
-    """Estimate the upfront credit hold for a cloud training job."""
+    """Estimate the upfront balance hold for a cloud training job."""
     if hourly_cost_cents <= 0:
         raise ValueError("hourly_cost_cents must be positive")
     if service_fee_bps < 0:

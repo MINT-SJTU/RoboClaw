@@ -29,12 +29,15 @@ class Wallet:
     def to_dict(self) -> dict[str, Any]:
         return {
             "username": self.username,
+            "balanceCents": self.balance_cents,
+            "frozenBalanceCents": self.frozen_cents,
+            "availableBalanceCents": self.available_cents,
+            "creditPoints": self.reward_points,
+            # Backward-compatible aliases while the app migrates to balance/credit point names.
             "creditCents": self.balance_cents,
             "frozenCreditCents": self.frozen_cents,
             "availableCreditCents": self.available_cents,
             "rewardPoints": self.reward_points,
-            # Backward-compatible aliases while the app migrates to creditCents.
-            "balanceCents": self.balance_cents,
             "frozenCents": self.frozen_cents,
             "availableCents": self.available_cents,
             "updatedAt": self.updated_at,
@@ -62,6 +65,9 @@ class BillingRecord:
             "kind": self.kind,
             "amountCents": self.amount_cents,
             "balanceAfterCents": self.balance_after_cents,
+            "frozenBalanceAfterCents": self.frozen_after_cents,
+            "creditPointsAfter": self.reward_points_after,
+            # Backward-compatible aliases.
             "frozenAfterCents": self.frozen_after_cents,
             "creditAfterCents": self.balance_after_cents,
             "frozenCreditAfterCents": self.frozen_after_cents,
@@ -377,7 +383,7 @@ class AccountLedger:
         username: str,
         amount_cents: int,
         *,
-        reason: str = "release frozen credits",
+        reason: str = "release frozen balance",
         task_name: str = "",
         job_id: str = "",
     ) -> tuple[Wallet, BillingRecord]:
@@ -428,9 +434,9 @@ class AccountLedger:
             state = self._load()
             outstanding = self._job_frozen_cents(state, username=username, job_id=job_id)
             if outstanding <= 0:
-                raise ValueError("job has no frozen credit")
+                raise ValueError("job has no frozen balance")
             if charge_cents > outstanding:
-                raise ValueError("charge amount exceeds frozen credit for job")
+                raise ValueError("charge amount exceeds frozen balance for job")
             wallet = self._wallet_from_state(state, username)
             if wallet.frozen_cents < charge_cents:
                 raise ValueError("settle amount exceeds frozen balance")
@@ -465,7 +471,7 @@ class AccountLedger:
                     wallet,
                     "release",
                     remainder,
-                    reason="release unused training credit",
+                    reason="release unused training balance",
                     task_name=task_name,
                     job_id=job_id,
                 )
@@ -518,9 +524,9 @@ class AccountLedger:
         payload = state.setdefault("wallets", {}).get(username) or {}
         return Wallet(
             username=username,
-            balance_cents=int(payload.get("creditCents", payload.get("balanceCents", 0)) or 0),
-            frozen_cents=int(payload.get("frozenCreditCents", payload.get("frozenCents", 0)) or 0),
-            reward_points=int(payload.get("rewardPoints", 0) or 0),
+            balance_cents=int(payload.get("balanceCents", payload.get("creditCents", 0)) or 0),
+            frozen_cents=int(payload.get("frozenBalanceCents", payload.get("frozenCreditCents", payload.get("frozenCents", 0))) or 0),
+            reward_points=int(payload.get("creditPoints", payload.get("rewardPoints", 0)) or 0),
             updated_at=str(payload.get("updatedAt") or ""),
         )
 
@@ -552,7 +558,7 @@ def _record_from_payload(payload: dict[str, Any]) -> BillingRecord:
         amount_cents=int(payload.get("amountCents", 0) or 0),
         balance_after_cents=int(payload.get("balanceAfterCents", 0) or 0),
         frozen_after_cents=int(payload.get("frozenAfterCents", 0) or 0),
-        reward_points_after=int(payload.get("rewardPointsAfter", 0) or 0),
+        reward_points_after=int(payload.get("creditPointsAfter", payload.get("rewardPointsAfter", 0)) or 0),
         reason=str(payload.get("reason") or ""),
         task_name=str(payload.get("taskName") or ""),
         job_id=str(payload.get("jobId") or ""),

@@ -196,7 +196,7 @@ def test_train_start_uses_cloud_bridge_when_enabled(route_app):
     assert bridge.start_calls[0]["username"] == "13800138000"
 
 
-def test_train_start_freezes_first_hour_credit_when_cost_is_declared(route_app, tmp_path):
+def test_train_start_freezes_first_hour_balance_when_cost_is_declared(route_app, tmp_path):
     app, _, _ = route_app
     bridge = StubBridge()
     ledger = AccountLedger(tmp_path / "ledger.json")
@@ -229,7 +229,7 @@ def test_train_start_freezes_first_hour_credit_when_cost_is_declared(route_app, 
     train_cloud_routes.set_ledger_for_tests(None)
 
 
-def test_train_start_rejects_when_credit_is_insufficient(route_app, tmp_path):
+def test_train_start_rejects_when_balance_is_insufficient(route_app, tmp_path):
     app, _, _ = route_app
     bridge = StubBridge()
     train_cloud_routes.set_ledger_for_tests(AccountLedger(tmp_path / "ledger.json"))
@@ -273,8 +273,8 @@ def test_train_cloud_billing_settle_charges_service_fee_and_releases_remainder(r
     data = resp.json()
     assert data["chargeCents"] == 550
     assert data["releaseRecord"]["amountCents"] == 440
-    assert data["wallet"]["availableCreditCents"] == 1_450
-    assert data["wallet"]["frozenCreditCents"] == 0
+    assert data["wallet"]["availableBalanceCents"] == 1_450
+    assert data["wallet"]["frozenBalanceCents"] == 0
     train_cloud_routes.set_ledger_for_tests(None)
 
 
