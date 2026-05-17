@@ -1,18 +1,21 @@
 """CLI commands for roboclaw."""
 
 import asyncio
-from contextlib import contextmanager, nullcontext
 import os
 import select
 import signal
 import sys
 import time
 import uuid
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
 # Force UTF-8 encoding for CLI stdio
 os.environ["PYTHONIOENCODING"] = "utf-8"
+# Keep CLI startup/status offline-friendly: LiteLLM otherwise tries to
+# refresh its model cost map at import time and logs network warnings.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -20,18 +23,18 @@ except (AttributeError, ValueError):
     pass
 
 import typer
-from prompt_toolkit import print_formatted_text
-from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession, print_formatted_text
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.application import run_in_terminal
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
 from roboclaw import __logo__, __version__
+from roboclaw.cli.dev import dev_app
 from roboclaw.config.paths import get_workspace_path
 from roboclaw.config.schema import Config
 from roboclaw.utils.helpers import sync_workspace_templates
@@ -45,9 +48,6 @@ web_app = typer.Typer(name="web", help="Web UI server commands.")
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
-
-# Register sub-apps
-from roboclaw.cli.dev import dev_app
 
 app.add_typer(dev_app, name="dev", help="Developer utilities (reset workspace, etc.).")
 app.add_typer(web_app, name="web", help="Web UI server commands.")
@@ -1059,6 +1059,8 @@ def plugins_list():
 @app.command()
 def status():
     """Show roboclaw status."""
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
     from roboclaw.config.loader import get_config_path, load_config
 
     config_path = get_config_path()

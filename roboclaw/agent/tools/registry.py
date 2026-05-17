@@ -1,6 +1,9 @@
 """Tool registry for dynamic tool management."""
 
+import uuid
 from typing import Any
+
+from loguru import logger
 
 from roboclaw.agent.tools.base import Tool
 
@@ -41,7 +44,7 @@ class ToolRegistry:
 
     async def execute(self, name: str, params: dict[str, Any]) -> str | list:
         """Execute a tool by name with given parameters."""
-        _HINT = "\n\n[Analyze the error above and try a different approach.]"
+        hint = "\n\n[Analyze the error above and try a different approach.]"
 
         tool = self._tools.get(name)
         if not tool:
@@ -50,17 +53,28 @@ class ToolRegistry:
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
-            
+
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _HINT
+                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + hint
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
-                return result + _HINT
+                return result + hint
             return result
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _HINT
+            trace_id = uuid.uuid4().hex[:12]
+            logger.exception(
+                "Tool execution failed trace_id={} tool={} error_type={}",
+                trace_id,
+                name,
+                e.__class__.__name__,
+            )
+            return (
+                f"Error executing {name} "
+                f"[trace_id={trace_id}, error_type={e.__class__.__name__}]: {str(e)}"
+                + hint
+            )
 
     @property
     def tool_names(self) -> list[str]:

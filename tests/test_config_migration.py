@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -56,6 +57,24 @@ def test_save_config_writes_context_window_tokens_but_not_memory_window(tmp_path
     assert defaults["maxTokens"] == 2222
     assert defaults["contextWindowTokens"] == 65_536
     assert "memoryWindow" not in defaults
+
+
+def test_status_forces_litellm_local_cost_map(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_path.write_text(
+        json.dumps({"agents": {"defaults": {"workspace": str(workspace)}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr("roboclaw.config.loader.get_config_path", lambda: config_path)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "true"
 
 
 def test_onboard_refresh_rewrites_legacy_config_template(tmp_path, monkeypatch) -> None:
