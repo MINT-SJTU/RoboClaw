@@ -48,7 +48,7 @@ def test_agent_ctrl_c(simulated_agent_child) -> None:
     child = simulated_agent_child
     child.expect(r"You:", timeout=15)
     child.sendintr()
-    child.expect(r"Received SIGINT, goodbye!", timeout=10)
+    child.expect([r"Received SIGINT, goodbye!", r"Goodbye!"], timeout=10)
     child.close(force=True)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -190,7 +191,7 @@ def test_start_workflow_phase_record_builds_record_command_from_planned_defaults
     assert starts[0][0] == "recording"
     argv = starts[0][1]
     assert argv[:4] == [
-        "/Users/pearl/anaconda3/bin/python",
+        sys.executable,
         "-m",
         "roboclaw.embodied.command.wrapper",
         "record",
@@ -260,7 +261,7 @@ def test_start_workflow_phase_infer_builds_command_from_explicit_checkpoint(tmp_
     assert starts[0][0] == "inferring"
     argv = starts[0][1]
     assert argv[:4] == [
-        "/Users/pearl/anaconda3/bin/python",
+        sys.executable,
         "-m",
         "roboclaw.embodied.command.wrapper",
         "record",

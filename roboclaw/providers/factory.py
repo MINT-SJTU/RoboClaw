@@ -40,7 +40,7 @@ def build_provider(config: Config) -> LLMProvider:
             )
         from roboclaw.providers.custom_provider import CustomProvider
         provider = CustomProvider(
-            api_key=provider_config.api_key if provider_config else "no-key",
+            api_key=(provider_config.api_key if provider_config else "") or "no-key",
             api_base=provider_config.api_base,
             default_model=model,
         )
