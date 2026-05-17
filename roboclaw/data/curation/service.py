@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from loguru import logger
 
+from roboclaw.account import AccountLedger
+
 from .canonical import build_canonical_trajectory
 from .clustering import discover_prototype_clusters, refine_clusters_with_dba
 from .dtw import resolve_dtw_configuration
@@ -63,6 +65,7 @@ from .validators import VALIDATOR_REGISTRY, load_episode_data, run_quality_valid
 
 
 _load_info = load_dataset_info
+_QUALITY_REWARD_POINTS_PER_PASSED_EPISODE = 10
 
 
 def _episode_range(info: dict[str, Any]) -> list[int]:
@@ -123,6 +126,59 @@ def _load_episode_duration(dataset_path: Path, episode_index: int) -> float:
     if len(valid) < 2:
         return 0.0
     return max(valid[-1] - valid[0], 0.0)
+
+
+def _grant_quality_reward(
+    *,
+    dataset_path: Path,
+    dataset_id: str,
+    username: str,
+) -> None:
+    """Grant contribution points for passed quality episodes.
+
+    Rewarding is deliberately best-effort: quality validation should remain
+    the source of truth even when the account ledger is temporarily unavailable.
+    """
+    username = username.strip()
+    if not username:
+        return
+
+    state = load_workflow_state(dataset_path)
+    quality_stage = state.get("stages", {}).get("quality_validation", {})
+    if quality_stage.get("status") != "completed":
+        return
+
+    results = load_quality_results(dataset_path) or {}
+    try:
+        passed = int(results.get("passed", 0) or 0)
+    except (TypeError, ValueError):
+        passed = 0
+    if passed <= 0:
+        return
+
+    reward_points = passed * _QUALITY_REWARD_POINTS_PER_PASSED_EPISODE
+    try:
+        _wallet, _record, granted = AccountLedger().grant_dataset_reward(
+            username,
+            dataset_id,
+            reward_points,
+            reason="quality validation reward",
+        )
+    except Exception as exc:  # pragma: no cover - defensive integration guard
+        logger.warning(
+            "Failed to grant quality reward for dataset '{}': {}",
+            dataset_id,
+            exc,
+        )
+        return
+
+    if granted:
+        logger.info(
+            "Granted {} quality reward points to '{}' for dataset '{}'",
+            reward_points,
+            username,
+            dataset_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +285,7 @@ class CurationService:
         selected_validators: list[str],
         episode_indices: list[int] | None,
         threshold_overrides: dict[str, float] | None,
+        username: str = "",
     ) -> dict[str, str]:
         svc = _LegacyCurationService(dataset_path, dataset_name)
 
@@ -238,6 +295,12 @@ class CurationService:
                 selected_validators,
                 episode_indices,
                 threshold_overrides,
+            )
+            await asyncio.to_thread(
+                _grant_quality_reward,
+                dataset_path=dataset_path,
+                dataset_id=dataset_name,
+                username=username,
             )
 
         self._register_workflow_task(dataset_path, "quality_validation", _task())
