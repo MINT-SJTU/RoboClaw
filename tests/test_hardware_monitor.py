@@ -21,6 +21,7 @@ from roboclaw.embodied.embodiment.manifest.binding import load_binding
 def _stub_profile_on_disk(monkeypatch):
     """Report calibration JSON present so ``arm.calibrated=True`` isn't downgraded."""
     monkeypatch.setattr(monitor_mod, "_has_profile_on_disk", lambda arm: True)
+    monkeypatch.setattr(monitor_mod, "get_missing_arm_motors", lambda arm: [])
 
 
 # ---------------------------------------------------------------------------

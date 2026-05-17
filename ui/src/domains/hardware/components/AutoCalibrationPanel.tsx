@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useToast } from '@/app/shell/ToastOutlet'
 import { useSessionStore } from '@/domains/session/store/useSessionStore'
-import CalibrationSafetyCard from '@/domains/hardware/components/CalibrationSafetyCard'
 import { useI18n } from '@/i18n'
 
 export function AutoCalibrationPanel({ onRefresh }: { onRefresh: () => Promise<void> }) {
@@ -11,18 +10,11 @@ export function AutoCalibrationPanel({ onRefresh }: { onRefresh: () => Promise<v
   const loading = useSessionStore((state) => state.loading)
   const doAutoCalibrationStart = useSessionStore((state) => state.doAutoCalibrationStart)
   const doAutoCalibrationStop = useSessionStore((state) => state.doAutoCalibrationStop)
-  const [showSafetyPrompt, setShowSafetyPrompt] = useState(false)
 
   const isRunning = session.calibration_mode === 'auto' && (
     session.state === 'calibrating' || session.state === 'stopping'
   )
   const hasResults = session.calibration_mode === 'auto' && session.calibration_results.length > 0
-
-  useEffect(() => {
-    if (isRunning) {
-      setShowSafetyPrompt(false)
-    }
-  }, [isRunning])
 
   const summary = useMemo(() => {
     const counts = { success: 0, skipped: 0, failed: 0 }
@@ -69,7 +61,6 @@ export function AutoCalibrationPanel({ onRefresh }: { onRefresh: () => Promise<v
   const handleStart = async () => {
     try {
       await doAutoCalibrationStart()
-      setShowSafetyPrompt(false)
     } catch (error) {
       toast(error instanceof Error ? error.message : t('autoCalStartFailed'), 'e')
     }
@@ -89,12 +80,9 @@ export function AutoCalibrationPanel({ onRefresh }: { onRefresh: () => Promise<v
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-tx">
-            {t('autoCalibrateTitle')}
+            {t('autoCalibrateAll')}
           </h3>
-          <p className="mt-2 text-sm text-tx3">{t('autoCalibrateDesc')}</p>
-          <div className="mt-3 rounded-xl border border-ac/15 bg-white/80 px-4 py-3 text-xs leading-6 text-tx3">
-            {t('autoCalibrateCoverage')}
-          </div>
+          <p className="mt-2 text-sm text-tx3">{t('autoCalibrateAllDesc')}</p>
         </div>
         {isRunning ? (
           <button
@@ -105,18 +93,10 @@ export function AutoCalibrationPanel({ onRefresh }: { onRefresh: () => Promise<v
           >
             {loading === 'auto-calibration-stop' ? t('autoCalStopping') : t('stop')}
           </button>
-        ) : showSafetyPrompt ? (
-          <button
-            type="button"
-            onClick={() => setShowSafetyPrompt(false)}
-            className="rounded-full border border-bd/40 bg-white px-4 py-2 text-sm font-semibold text-tx2 transition-all hover:border-bd hover:text-tx"
-          >
-            {t('cancel')}
-          </button>
         ) : (
           <button
             type="button"
-            onClick={() => setShowSafetyPrompt(true)}
+            onClick={handleStart}
             disabled={loading === 'auto-calibration'}
             className="rounded-full bg-ac px-4 py-2 text-sm font-semibold text-white shadow-glow-ac transition-all hover:bg-ac2 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -187,17 +167,8 @@ export function AutoCalibrationPanel({ onRefresh }: { onRefresh: () => Promise<v
             </div>
           )}
         </div>
-      ) : showSafetyPrompt ? (
-        <div className="mt-5">
-          <CalibrationSafetyCard
-            mode="auto"
-            busy={loading === 'auto-calibration'}
-            onConfirm={handleStart}
-            onCancel={() => setShowSafetyPrompt(false)}
-          />
-        </div>
       ) : (
-        <p className="mt-5 text-sm text-tx3">{t('autoCalibrateHint')}</p>
+        <p className="mt-5 text-sm text-tx3">{t('autoCalibrateAllHint')}</p>
       )}
     </section>
   )
