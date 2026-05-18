@@ -151,6 +151,28 @@ class TestDispatch:
 
         assert set(started) == {"a", "b"}
 
+    @pytest.mark.asyncio
+    async def test_process_direct_serializes_same_session(self):
+        from roboclaw.bus.events import OutboundMessage
+
+        loop, bus = _make_loop()
+        order = []
+
+        async def mock_process(m, **kwargs):
+            order.append(f"start-{m.content}")
+            await asyncio.sleep(0.05)
+            order.append(f"end-{m.content}")
+            return OutboundMessage(channel=m.channel, chat_id=m.chat_id, content=m.content)
+
+        loop._process_message = mock_process
+
+        await asyncio.gather(
+            loop.process_direct("a", session_key="cli:same"),
+            loop.process_direct("b", session_key="cli:same"),
+        )
+
+        assert order == ["start-a", "end-a", "start-b", "end-b"]
+
 
 class TestSubagentCancellation:
     @pytest.mark.asyncio

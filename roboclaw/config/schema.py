@@ -95,6 +95,8 @@ class HeartbeatConfig(Base):
 
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
+    target_channel: str = ""  # Explicit heartbeat delivery channel. Empty = most recent external session.
+    target_chat_id: str = ""  # Explicit heartbeat delivery chat id. Requires target_channel.
 
 
 class GatewayConfig(Base):

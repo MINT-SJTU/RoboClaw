@@ -14,6 +14,7 @@ from openai import (
     AsyncOpenAI,
     AuthenticationError,
     BadRequestError,
+    DefaultAsyncHttpxClient,
     RateLimitError,
 )
 
@@ -45,12 +46,14 @@ class CustomProvider(LLMProvider):
         self.extra_headers = dict(extra_headers or {})
         default_headers = dict(self.extra_headers)
         default_headers.setdefault("x-session-affinity", uuid.uuid4().hex)
+        http_client = DefaultAsyncHttpxClient(timeout=timeout, trust_env=False)
         # Keep affinity stable for this provider instance to improve backend cache locality.
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=api_base,
             default_headers=default_headers,
             timeout=timeout,
+            http_client=http_client,
         )
 
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,

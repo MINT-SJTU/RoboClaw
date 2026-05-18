@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
@@ -116,6 +117,9 @@ async def test_registry_returns_validation_error() -> None:
     reg.register(SampleTool())
     result = await reg.execute("sample", {"query": "hi"})
     assert "Invalid parameters" in result
+    payload = json.loads(result)
+    assert payload["tool_error"]["error_type"] == "ToolValidationError"
+    assert payload["tool_error"]["retry_hint"]
 
 
 async def test_registry_returns_trace_id_for_tool_exception() -> None:
@@ -128,6 +132,10 @@ async def test_registry_returns_trace_id_for_tool_exception() -> None:
     assert "trace_id=" in result
     assert "error_type=RuntimeError" in result
     assert "boom" in result
+    payload = json.loads(result)
+    assert payload["tool_error"]["error_type"] == "RuntimeError"
+    assert payload["tool_error"]["trace_id"]
+    assert payload["tool_error"]["retry_hint"]
 
 
 def test_exec_extract_absolute_paths_keeps_full_windows_path() -> None:

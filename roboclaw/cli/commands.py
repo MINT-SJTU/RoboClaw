@@ -451,6 +451,7 @@ def gateway(
     from roboclaw.cron.service import CronService
     from roboclaw.cron.types import CronJob
     from roboclaw.heartbeat.service import HeartbeatService
+    from roboclaw.heartbeat.routing import pick_heartbeat_target
     from roboclaw.session.manager import SessionManager
 
     if verbose:
@@ -538,26 +539,24 @@ def gateway(
     # Create channel manager
     channels = ChannelManager(config, bus)
 
+    hb_cfg = config.gateway.heartbeat
+    heartbeat_target: tuple[str, str] | None = None
+
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
+        return pick_heartbeat_target(
+            enabled_channels=channels.enabled_channels,
+            sessions=session_manager.list_sessions(),
+            target_channel=hb_cfg.target_channel,
+            target_chat_id=hb_cfg.target_chat_id,
+        )
 
     # Create heartbeat service
     async def on_heartbeat_execute(tasks: str) -> str:
         """Phase 2: execute heartbeat tasks through the full agent loop."""
+        nonlocal heartbeat_target
         channel, chat_id = _pick_heartbeat_target()
+        heartbeat_target = (channel, chat_id)
 
         async def _silent(*_args, **_kwargs):
             pass
@@ -572,13 +571,14 @@ def gateway(
 
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
+        nonlocal heartbeat_target
         from roboclaw.bus.events import OutboundMessage
-        channel, chat_id = _pick_heartbeat_target()
+        channel, chat_id = heartbeat_target or _pick_heartbeat_target()
+        heartbeat_target = None
         if channel == "cli":
             return  # No external channel available to deliver to
         await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
-    hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         provider=provider,

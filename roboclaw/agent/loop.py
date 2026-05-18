@@ -299,6 +299,10 @@ class AgentLoop:
         if tasks:
             return
         self._active_tasks.pop(session_key, None)
+        self._prune_session_lock(session_key)
+
+    def _prune_session_lock(self, session_key: str) -> None:
+        """Drop an idle per-session lock."""
         lock = self._session_locks.get(session_key)
         if lock is not None and not lock.locked():
             self._session_locks.pop(session_key, None)
@@ -313,9 +317,7 @@ class AgentLoop:
             except (asyncio.CancelledError, Exception):
                 pass
         sub_cancelled = await self.subagents.cancel_by_session(msg.session_key)
-        lock = self._session_locks.get(msg.session_key)
-        if lock is not None and not lock.locked():
-            self._session_locks.pop(msg.session_key, None)
+        self._prune_session_lock(msg.session_key)
         total = cancelled + sub_cancelled
         content = f"Stopped {total} task(s)." if total else "No active task to stop."
         await self.bus.publish_outbound(OutboundMessage(
@@ -543,5 +545,10 @@ class AgentLoop:
         """Process a message directly (for CLI or cron usage)."""
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
-        return response.content if response else ""
+        lock = self._lock_for_session(session_key)
+        async with lock:
+            try:
+                response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
+                return response.content if response else ""
+            finally:
+                self._prune_session_lock(session_key)

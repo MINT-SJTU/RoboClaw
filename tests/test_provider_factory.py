@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from roboclaw.config.schema import Config
@@ -56,12 +58,18 @@ async def test_unconfigured_provider_returns_helpful_error() -> None:
 
 def test_custom_provider_uses_timeout_and_extra_headers(monkeypatch) -> None:
     captured = {}
+    http_client_kwargs = {}
+
+    class FakeDefaultAsyncHttpxClient:
+        def __init__(self, **kwargs):
+            http_client_kwargs.update(kwargs)
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
     monkeypatch.setattr("roboclaw.providers.custom_provider.AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setattr("roboclaw.providers.custom_provider.DefaultAsyncHttpxClient", FakeDefaultAsyncHttpxClient)
 
     CustomProvider(
         api_key="key",
@@ -76,6 +84,21 @@ def test_custom_provider_uses_timeout_and_extra_headers(monkeypatch) -> None:
     assert captured["timeout"] == 12.5
     assert captured["default_headers"]["APP-Code"] == "abc"
     assert captured["default_headers"]["x-session-affinity"]
+    assert captured["http_client"] is not None
+    assert http_client_kwargs == {"timeout": 12.5, "trust_env": False}
+
+
+def test_custom_provider_ignores_invalid_env_proxy(monkeypatch) -> None:
+    monkeypatch.setenv("ALL_PROXY", "socks://127.0.0.1:10808")
+
+    provider = CustomProvider(
+        api_key="key",
+        api_base="https://example.test/v1",
+        default_model="model",
+    )
+
+    assert provider.get_default_model() == "model"
+    asyncio.run(provider._client.close())
 
 
 def test_custom_provider_builds_compatible_retry_without_reasoning_effort() -> None:
