@@ -44,18 +44,24 @@ async def _run_quality_binding(
     passed: int,
     failed: int = 0,
     owner_username: str = "",
+    visibility: str = "public",
     episode_duration_s: float = 60.0,
     overall_score: float | None = None,
     ledger: AccountLedger | None = None,
 ) -> AccountLedger:
     dataset_path = tmp_path / "datasets" / dataset_id
     dataset_path.mkdir(parents=True, exist_ok=True)
+    (dataset_path / "meta").mkdir(parents=True, exist_ok=True)
+    info_payload = {
+        "contributionSource": "self_collected",
+        "visibility": visibility,
+    }
     if owner_username:
-        (dataset_path / "meta").mkdir(parents=True, exist_ok=True)
-        (dataset_path / "meta" / "info.json").write_text(
-            json.dumps({"ownerUsername": owner_username, "contributionSource": "self_collected"}),
-            encoding="utf-8",
-        )
+        info_payload["ownerUsername"] = owner_username
+    (dataset_path / "meta" / "info.json").write_text(
+        json.dumps(info_payload),
+        encoding="utf-8",
+    )
     ledger = ledger or AccountLedger(tmp_path / "ledger.json")
     scheduled: list[Any] = []
 
@@ -158,6 +164,24 @@ def test_quality_run_does_not_grant_points_without_owner_or_username(tmp_path, m
     )
 
     assert ledger.records() == []
+
+
+def test_quality_run_does_not_grant_points_for_private_dataset(tmp_path, monkeypatch) -> None:
+    ledger = asyncio.run(
+        _run_quality_binding(
+            monkeypatch,
+            tmp_path,
+            username="",
+            owner_username="owner-pearl",
+            visibility="private",
+            passed=3,
+            episode_duration_s=60.0,
+            overall_score=90.0,
+        ),
+    )
+
+    assert ledger.wallet("owner-pearl").reward_points == 0
+    assert ledger.records("owner-pearl") == []
 
 
 def test_quality_run_uses_quality_multiplier_and_minimum_reward(tmp_path, monkeypatch) -> None:

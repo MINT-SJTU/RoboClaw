@@ -1,6 +1,7 @@
 export interface DatasetStats {
   total_episodes: number
   total_frames: number
+  total_bytes?: number
   fps: number
   robot_type: string
   features: string[]
@@ -31,6 +32,25 @@ export interface DatasetRef {
   stats: DatasetStats
   capabilities: DatasetCapabilities
   runtime: DatasetRuntime | null
+}
+
+export interface DatasetStorageUsage {
+  username: string
+  quotaBytes: number
+  usedBytes: number
+  availableBytes: number
+  datasetCount: number
+  privateBytes: number
+  publicBytes: number
+  datasets: Array<{
+    id: string
+    label: string
+    visibility: string
+    totalBytes: number
+    sourceKind: string
+    sourceUri: string
+    canTrain: boolean
+  }>
 }
 
 export interface DatasetImportJob {

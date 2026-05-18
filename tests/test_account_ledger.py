@@ -97,6 +97,59 @@ def test_account_ledger_dataset_reward_is_idempotent(tmp_path) -> None:
     assert record_2.record_id == record.record_id
 
 
+def test_account_ledger_redeems_public_dataset_access_once(tmp_path) -> None:
+    ledger = AccountLedger(tmp_path / "ledger.json")
+    ledger.grant_dataset_reward("buyer", "seed-buyer", 40)
+    ledger.grant_dataset_reward("owner", "seed-owner", 5)
+
+    wallet, grant, buyer_record, contributor_record, granted = ledger.redeem_dataset_access(
+        "buyer",
+        "public/demo",
+        10,
+        contributor_username="owner",
+        contributor_share_bps=5000,
+    )
+
+    assert granted is True
+    assert wallet.reward_points == 30
+    assert grant.points_spent == 10
+    assert grant.contributor_username == "owner"
+    assert grant.contributor_points == 5
+    assert buyer_record is not None
+    assert buyer_record.kind == "dataset_access_charge"
+    assert buyer_record.amount_cents == -10
+    assert contributor_record is not None
+    assert contributor_record.kind == "dataset_access_reward"
+    assert contributor_record.amount_cents == 5
+    assert ledger.wallet("owner").reward_points == 10
+
+    wallet_2, grant_2, buyer_record_2, contributor_record_2, granted_2 = ledger.redeem_dataset_access(
+        "buyer",
+        "public/demo",
+        10,
+        contributor_username="owner",
+    )
+
+    assert granted_2 is False
+    assert wallet_2.reward_points == 30
+    assert grant_2.grant_id == grant.grant_id
+    assert buyer_record_2 is None
+    assert contributor_record_2 is None
+    assert ledger.wallet("owner").reward_points == 10
+
+
+def test_account_ledger_rejects_dataset_access_without_points(tmp_path) -> None:
+    ledger = AccountLedger(tmp_path / "ledger.json")
+    ledger.grant_dataset_reward("buyer", "seed", 3)
+
+    try:
+        ledger.redeem_dataset_access("buyer", "public/demo", 10)
+    except ValueError as exc:
+        assert "insufficient credit points" in str(exc)
+    else:
+        raise AssertionError("redeem should fail")
+
+
 def test_account_ledger_reassigns_pending_training_hold(tmp_path) -> None:
     ledger = AccountLedger(tmp_path / "ledger.json")
     ledger.admin_recharge("pearl", 10_000)

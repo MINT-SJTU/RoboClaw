@@ -243,6 +243,15 @@ def _quality_reward_multiplier(score: Any) -> float:
 
 
 def _source_reward_multiplier(info: dict[str, Any]) -> float:
+    visibility = str(
+        info.get("visibility")
+        or info.get("accessLevel")
+        or info.get("access_level")
+        or "private",
+    ).strip().lower()
+    if visibility not in {"public", "shared", "open"}:
+        return 0.0
+
     source_type = str(
         info.get("contributionSource")
         or info.get("contribution_source")

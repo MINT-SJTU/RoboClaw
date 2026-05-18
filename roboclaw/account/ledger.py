@@ -10,7 +10,16 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-LedgerKind = Literal["admin_recharge", "payment_recharge", "dataset_reward", "freeze", "settle", "release"]
+LedgerKind = Literal[
+    "admin_recharge",
+    "payment_recharge",
+    "dataset_reward",
+    "dataset_access_charge",
+    "dataset_access_reward",
+    "freeze",
+    "settle",
+    "release",
+]
 PaymentOrderStatus = Literal["pending", "paid", "cancelled"]
 
 
@@ -110,6 +119,28 @@ class PaymentOrder:
             "reason": self.reason,
             "createdAt": self.created_at,
             "paidAt": self.paid_at,
+        }
+
+
+@dataclass(frozen=True)
+class DatasetAccessGrant:
+    grant_id: str
+    username: str
+    dataset_id: str
+    points_spent: int
+    contributor_username: str = ""
+    contributor_points: int = 0
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "grantId": self.grant_id,
+            "username": self.username,
+            "datasetId": self.dataset_id,
+            "pointsSpent": self.points_spent,
+            "contributorUsername": self.contributor_username,
+            "contributorPoints": self.contributor_points,
+            "createdAt": self.created_at,
         }
 
 
@@ -284,6 +315,87 @@ class AccountLedger:
             self._save_wallet(state, wallet)
             self._save(state)
             return wallet, record, True
+
+    def redeem_dataset_access(
+        self,
+        username: str,
+        dataset_id: str,
+        price_points: int,
+        *,
+        contributor_username: str = "",
+        contributor_share_bps: int = 5000,
+        reason: str = "public dataset access",
+    ) -> tuple[Wallet, DatasetAccessGrant, BillingRecord | None, BillingRecord | None, bool]:
+        if price_points < 0:
+            raise ValueError("price_points must be non-negative")
+        if contributor_share_bps < 0 or contributor_share_bps > 10_000:
+            raise ValueError("contributor_share_bps must be between 0 and 10000")
+        username = _clean_username(username)
+        dataset_id = dataset_id.strip()
+        if not dataset_id:
+            raise ValueError("dataset_id is required")
+        contributor_username = contributor_username.strip()
+        with self._lock:
+            state = self._load()
+            for payload in state.get("datasetAccessGrants", []):
+                grant = _dataset_access_grant_from_payload(payload)
+                if grant.username == username and grant.dataset_id == dataset_id:
+                    return self._wallet_from_state(state, username), grant, None, None, False
+
+            wallet = self._wallet_from_state(state, username)
+            if wallet.reward_points < price_points:
+                raise ValueError("insufficient credit points")
+
+            wallet = Wallet(
+                username=username,
+                balance_cents=wallet.balance_cents,
+                frozen_cents=wallet.frozen_cents,
+                reward_points=wallet.reward_points - price_points,
+                updated_at=_now(),
+            )
+            buyer_record = self._append_record(
+                state,
+                wallet,
+                "dataset_access_charge",
+                -price_points,
+                reason=reason,
+                job_id=dataset_id,
+            )
+            contributor_points = 0
+            contributor_record: BillingRecord | None = None
+            if contributor_username and contributor_username != username and price_points:
+                contributor_points = price_points * contributor_share_bps // 10_000
+                if contributor_points:
+                    contributor_wallet = self._wallet_from_state(state, contributor_username)
+                    contributor_wallet = Wallet(
+                        username=contributor_username,
+                        balance_cents=contributor_wallet.balance_cents,
+                        frozen_cents=contributor_wallet.frozen_cents,
+                        reward_points=contributor_wallet.reward_points + contributor_points,
+                        updated_at=_now(),
+                    )
+                    contributor_record = self._append_record(
+                        state,
+                        contributor_wallet,
+                        "dataset_access_reward",
+                        contributor_points,
+                        reason="public dataset reuse reward",
+                        job_id=dataset_id,
+                    )
+                    self._save_wallet(state, contributor_wallet)
+            grant = DatasetAccessGrant(
+                grant_id=uuid4().hex,
+                username=username,
+                dataset_id=dataset_id,
+                points_spent=price_points,
+                contributor_username=contributor_username,
+                contributor_points=contributor_points,
+                created_at=_now(),
+            )
+            state.setdefault("datasetAccessGrants", []).append(grant.to_dict())
+            self._save_wallet(state, wallet)
+            self._save(state)
+            return wallet, grant, buyer_record, contributor_record, True
 
     def admin_recharge(self, username: str, amount_cents: int, *, reason: str = "admin recharge") -> tuple[Wallet, BillingRecord]:
         if amount_cents <= 0:
@@ -610,7 +722,7 @@ class AccountLedger:
 
     def _load(self) -> dict[str, Any]:
         if not self.path.is_file():
-            return {"wallets": {}, "records": [], "paymentOrders": []}
+            return {"wallets": {}, "records": [], "paymentOrders": [], "datasetAccessGrants": []}
         return json.loads(self.path.read_text(encoding="utf-8"))
 
     def _save(self, state: dict[str, Any]) -> None:
@@ -656,6 +768,18 @@ def _order_from_payload(payload: dict[str, Any]) -> PaymentOrder:
         reason=str(payload.get("reason") or ""),
         created_at=str(payload.get("createdAt") or ""),
         paid_at=str(payload.get("paidAt") or ""),
+    )
+
+
+def _dataset_access_grant_from_payload(payload: dict[str, Any]) -> DatasetAccessGrant:
+    return DatasetAccessGrant(
+        grant_id=str(payload.get("grantId") or ""),
+        username=str(payload.get("username") or ""),
+        dataset_id=str(payload.get("datasetId") or ""),
+        points_spent=int(payload.get("pointsSpent", 0) or 0),
+        contributor_username=str(payload.get("contributorUsername") or ""),
+        contributor_points=int(payload.get("contributorPoints", 0) or 0),
+        created_at=str(payload.get("createdAt") or ""),
     )
 
 
