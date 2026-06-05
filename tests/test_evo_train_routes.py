@@ -453,9 +453,9 @@ def test_train_cloud_dev_rebind_ssh_updates_local_runtime_env(route_app, tmp_pat
 
     client = TestClient(app, raise_server_exceptions=False)
     with (
-        patch("roboclaw.http.routes.train_cloud._probe_ssh_banner", return_value=(True, "")),
+        patch("roboclaw.http.routes.cloud_runtime_binding._probe_ssh_banner", return_value=(True, "")),
         patch(
-            "roboclaw.http.routes.train_cloud._restart_local_evo_train_bridge",
+            "roboclaw.http.routes.cloud_runtime_binding._restart_local_evo_train_bridge",
             return_value={"restarted": True, "pid": 1234, "listening": True},
         ),
     ):
@@ -503,8 +503,8 @@ def test_train_cloud_dev_rebind_ssh_rejects_bad_banner_without_saving(route_app,
 
     client = TestClient(app, raise_server_exceptions=False)
     with (
-        patch("roboclaw.http.routes.train_cloud._probe_ssh_banner", return_value=(False, "端口已连接，但远端没有返回 SSH 登录协议。")),
-        patch("roboclaw.http.routes.train_cloud._restart_local_evo_train_bridge") as restart_mock,
+        patch("roboclaw.http.routes.cloud_runtime_binding._probe_ssh_banner", return_value=(False, "端口已连接，但远端没有返回 SSH 登录协议。")),
+        patch("roboclaw.http.routes.cloud_runtime_binding._restart_local_evo_train_bridge") as restart_mock,
     ):
         resp = client.post(
             "/api/train/cloud/dev/rebind-ssh",

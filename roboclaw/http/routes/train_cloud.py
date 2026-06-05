@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
@@ -17,38 +16,32 @@ from roboclaw.embodied.service import EmbodiedService
 from roboclaw.training import TrainingPlanSpec, TrainingService, TrainingStartSpec, TrainingStopSpec
 
 from . import cloud_snapshot as cloud_snapshot_state
-from . import cloud_supervisor as cloud_supervisor_state
 from .cloud_autonomy import build_cloud_autonomy_state
+from .cloud_artifacts import _attach_cloud_artifacts, _cloud_metrics_from_payload
 from .cloud_billing import _attach_user_wallet, _release_failed_cloud_hold, get_ledger, set_ledger_for_tests
+from .cloud_policy import _resolve_automation_policy
 from .cloud_snapshot import _lookup_cloud_start, _remember_cloud_start
 from .cloud_supervisor import (
-    _auto_repair_policy,
     _cloud_failure_signal,
     _cloud_supervisor_payload,
-    _cloud_supervisor_runtime_state,
-    _cloud_supervisor_task_key,
     _cloud_training_active,
     _is_prepare_only_params,
     _normalize_cloud_failure_payload,
     _repair_harden_known_training_params,
     _repair_start_request,
     _set_cloud_supervisor_state,
-    _training_intervention_start_request,
-    _training_time_intervention,
     clear_cloud_supervisor_runtime_for_tests,
 )
 from .cloud_ssh import (
     _clear_ssh_runtime_env,
     _listening_on_local_port,
     _local_runtime_bind_enabled,
-    _parse_ssh_command,
-    _probe_ssh_banner,
     _read_remote_text_file,
     _read_ssh_runtime_endpoint,
     _restart_local_evo_train_bridge,
     _ssh_runtime_env_path,
-    _write_ssh_runtime_env,
 )
+from .cloud_runtime_binding import bind_ssh_runtime, unbind_ssh_runtime
 from .train_cloud_schema import (
     AuthConnectionSaveRequest,
     CloudResourceCatalogRequest,
@@ -84,13 +77,12 @@ from .train_cloud_helpers import (
     _validate_cloud_training_start,
     clear_cloud_supervisor_snapshots_for_tests,
 )
+from .cloud_watch import schedule_cloud_supervisor
 
+_log = logging.getLogger(__name__)
 _cloud_start_snapshots = cloud_snapshot_state._cloud_start_snapshots
 _cloud_start_snapshots_lock = cloud_snapshot_state._cloud_start_snapshots_lock
 _cloud_start_snapshots_loaded = cloud_snapshot_state._cloud_start_snapshots_loaded
-_cloud_supervisor_tasks = cloud_supervisor_state._cloud_supervisor_tasks
-_cloud_supervisor_runtime_lock = cloud_supervisor_state._cloud_supervisor_runtime_lock
-_log = logging.getLogger(__name__)
 
 _TERMINAL_CLOUD_STATUSES = {"failed", "missing", "stopped", "completed", "complete", "succeeded", "success"}
 _RUNTIME_BINDING_FAILURE_CODES = {"CLOUD_GPU_UNAVAILABLE", "CLOUD_INSTANCE_UNREACHABLE"}
@@ -101,35 +93,6 @@ _STALE_SSH_BINDING_MARKERS = (
     "kex_exchange_identification",
     "connection closed by remote host",
 )
-_CLOUD_ARTIFACT_PATH_RE = re.compile(r"(?P<path>/(?:root/autodl-tmp|workspace|tmp)/[^\s'\"`]+?\.(?:json|txt|log))")
-
-_DEFAULT_SAFE_AUTOMATION_POLICY: dict[str, Any] = {
-    "mode": "safe_auto",
-    "autoRetrySameRuntime": True,
-    "allowAgentRepairSameRuntime": True,
-    "paidStartRequiresConfirmation": True,
-}
-
-
-def _resolve_automation_policy(
-    automation_policy: dict[str, Any] | None,
-    automation_mode: str = "",
-) -> dict[str, Any]:
-    policy = dict(_DEFAULT_SAFE_AUTOMATION_POLICY)
-    supplied = dict(automation_policy or {})
-    policy.update(supplied)
-    requested_mode = str(automation_mode or "").strip()
-    if requested_mode and "mode" not in supplied:
-        policy["mode"] = requested_mode
-    if policy.get("mode") == "full_auto":
-        policy.setdefault("autoRetrySameRuntime", True)
-        policy.setdefault("allowAgentRepairSameRuntime", True)
-        if "paidStartRequiresConfirmation" not in supplied:
-            policy["paidStartRequiresConfirmation"] = False
-        else:
-            policy["paidStartRequiresConfirmation"] = bool(policy.get("paidStartRequiresConfirmation", False))
-    return policy
-
 
 def _stale_ssh_binding_detected(warnings: list[str]) -> bool:
     warning_text = " ".join(warnings).lower()
@@ -143,80 +106,6 @@ def _ensure_local_evo_train_bridge_env() -> None:
     os.environ.setdefault("ROBOCLAW_EVO_TRAIN_PORT", "9000")
     os.environ.setdefault("ROBOCLAW_EVO_TRAIN_PROVIDER", "autodl")
     os.environ.setdefault("ROBOCLAW_EVO_TRAIN_BILLING_MODE", "external")
-
-
-def _cloud_artifacts_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    text = "\n".join(
-        str(payload.get(key) or "")
-        for key in ("message", "log_tail", "logTail", "error")
-    )
-    candidates: list[tuple[str, str]] = []
-    captured = re.findall(r"__EVO_RLINF_METRICS_CAPTURED__=([^\s]+)", text)
-    candidates.extend(("metrics", path.strip()) for path in captured)
-    for match in _CLOUD_ARTIFACT_PATH_RE.finditer(text):
-        path = match.group("path").rstrip(".,;)")
-        lower = path.lower()
-        if "metrics" in lower:
-            kind = "metrics"
-        elif "rollout_summary" in lower:
-            kind = "rollout_summary"
-        elif lower.endswith(".log"):
-            kind = "log"
-        else:
-            kind = "artifact"
-        candidates.append((kind, path))
-    log_path = str(payload.get("log_path") or "").strip()
-    if log_path:
-        candidates.append(("log", log_path))
-    seen: set[str] = set()
-    artifacts: list[dict[str, Any]] = []
-    for kind, path in candidates:
-        if not path or path in seen:
-            continue
-        seen.add(path)
-        artifacts.append({
-            "kind": kind,
-            "name": path.rsplit("/", 1)[-1],
-            "path": path,
-            "previewable": path.endswith((".json", ".txt", ".log")),
-        })
-    return artifacts
-
-
-def _cloud_metrics_from_payload(payload: dict[str, Any]) -> dict[str, float | int]:
-    text = "\n".join(
-        str(payload.get(key) or "")
-        for key in ("message", "log_tail", "logTail", "error")
-    )
-    metrics: dict[str, float | int] = {}
-    for key, raw_value in re.findall(
-        r"['\"]([^'\"]+)['\"]\s*:\s*(?:array\()?([+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)",
-        text,
-    ):
-        try:
-            value = float(raw_value)
-        except ValueError:
-            continue
-        metrics[key] = int(value) if value.is_integer() else value
-    return metrics
-
-
-def _attach_cloud_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
-    artifacts = _cloud_artifacts_from_payload(payload)
-    metrics = _cloud_metrics_from_payload(payload)
-    if not artifacts and not metrics:
-        return payload
-    result = dict(payload)
-    if artifacts:
-        result["artifacts"] = artifacts
-    if metrics:
-        result["metrics"] = metrics
-        result["metricsSource"] = "log_tail"
-    for artifact in artifacts:
-        if artifact.get("kind") == "metrics":
-            result["metricsPath"] = artifact.get("path")
-            break
-    return result
 
 
 def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
@@ -342,336 +231,27 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
         payload = _normalize_cloud_failure_payload(result.to_dict())
         return _cloud_training_active(payload)
 
-    async def _cloud_supervisor_watch(
-        *,
-        root_job_id: str,
-        username: str,
-        automation_policy: dict[str, Any],
-        initial_payload: dict[str, Any],
-    ) -> None:
-        policy = _auto_repair_policy(automation_policy)
-        if not policy["autoRetrySameRuntime"]:
-            return
-        provider = str(initial_payload.get("provider") or "")
-        current_job_id = root_job_id
-        runtime_seed = _cloud_supervisor_runtime_state(
-            username,
-            {
-                "job_id": root_job_id,
-                "supervisor": {
-                    "runtime": {
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                    }
-                },
-            },
-        )
-        seeded_current_job_id = str(runtime_seed.get("currentJobId") or "").strip()
-        if seeded_current_job_id:
-            current_job_id = seeded_current_job_id
-        try:
-            repair_count = max(
-                0,
-                int(runtime_seed.get("repairAttempts", runtime_seed.get("repairCount", 0)) or 0),
-            )
-        except (TypeError, ValueError):
-            repair_count = 0
-        seen_failure_fingerprints: set[str] = set()
-        seed_interventions = runtime_seed.get("appliedInterventions")
-        seen_training_interventions: set[str] = (
-            {str(item) for item in seed_interventions if str(item).strip()}
-            if isinstance(seed_interventions, list)
-            else set()
-        )
-        max_repairs = _cloud_supervisor_max_repairs()
-        interval = max(1.0, float(os.environ.get("EVO_STUDIO_CLOUD_SUPERVISOR_INTERVAL_SECONDS", "6") or "6"))
-        initial_delay = max(0.0, float(os.environ.get("EVO_STUDIO_CLOUD_SUPERVISOR_INITIAL_DELAY_SECONDS", "4") or "4"))
-        _set_cloud_supervisor_state(username, root_job_id, {
-            "state": "watching",
-            "rootJobId": root_job_id,
-            "currentJobId": current_job_id,
-            "repairCount": repair_count,
-            "repairAttempts": repair_count,
-            "maxRepairs": max_repairs,
-            "appliedInterventions": sorted(seen_training_interventions),
-            "message": "后端总控正在观察云端任务。",
-        })
-        if initial_delay:
-            await asyncio.sleep(initial_delay)
-        while True:
-            try:
-                result = await training.status(job_id=current_job_id, username=username)
-                payload = _normalize_cloud_failure_payload(result.to_dict())
-                payload = _release_failed_cloud_hold(
-                    payload,
-                    username,
-                    reason="release hold before autonomous supervisor retry",
-                )
-                deployment_mode = await _cloud_deployment_mode(provider=str(payload.get("provider") or provider))
-                if _cloud_training_active(payload):
-                    intervention = _training_time_intervention(payload)
-                    intervention_key = "|".join(
-                        part
-                        for part in (
-                            current_job_id,
-                            str(intervention.get("code") or ""),
-                            str(intervention.get("strategy") or ""),
-                        )
-                        if part
-                    )
-                    if intervention and intervention_key not in seen_training_interventions:
-                        seen_training_interventions.add(intervention_key)
-                        intervention_payload = _training_intervention_start_request(
-                            payload,
-                            username,
-                            automation_policy,
-                            intervention,
-                            deployment_mode=deployment_mode,
-                        )
-                        if intervention_payload is not None:
-                            _set_cloud_supervisor_state(username, root_job_id, {
-                                "state": "repairing",
-                                "rootJobId": root_job_id,
-                                "currentJobId": current_job_id,
-                                "repairCount": repair_count,
-                                "repairAttempts": repair_count,
-                                "maxRepairs": max_repairs,
-                                "appliedInterventions": sorted(seen_training_interventions),
-                                "interventionCode": intervention.get("code") or "",
-                                "trainingIntervention": intervention,
-                                "message": "后端总控检测到训练异常，正在调整参数并续跑。",
-                            })
-                            _log.warning(
-                                "Training intervention triggered for job %s: %s",
-                                current_job_id,
-                                intervention.get("summary") or intervention.get("code") or "",
-                            )
-                            await training.stop(TrainingStopSpec(job_id=current_job_id, username=username))
-                            intervention_request = CloudTrainStartRequest(**intervention_payload)
-                            started = await _start_cloud_training(intervention_request, schedule_supervisor=False)
-                            next_job_id = str(started.get("job_id") or intervention_request.task_name or "").strip()
-                            if not next_job_id:
-                                _set_cloud_supervisor_state(username, root_job_id, {
-                                    "state": "needs_review",
-                                    "rootJobId": root_job_id,
-                                    "currentJobId": current_job_id,
-                                    "repairCount": repair_count,
-                                    "repairAttempts": repair_count,
-                                    "maxRepairs": max_repairs,
-                                    "appliedInterventions": sorted(seen_training_interventions),
-                                    "interventionCode": intervention.get("code") or "",
-                                    "trainingIntervention": intervention,
-                                    "message": "训练异常干预请求没有返回任务 ID，需要人工确认。",
-                                })
-                                return
-                            current_job_id = next_job_id
-                            _set_cloud_supervisor_state(username, root_job_id, {
-                                "state": "repairing",
-                                "rootJobId": root_job_id,
-                                "currentJobId": current_job_id,
-                                "repairOfJobId": str(payload.get("job_id") or ""),
-                                "repairCount": repair_count,
-                                "repairAttempts": repair_count,
-                                "maxRepairs": max_repairs,
-                                "appliedInterventions": sorted(seen_training_interventions),
-                                "interventionCode": intervention.get("code") or "",
-                                "trainingIntervention": intervention,
-                                "message": "训练异常已自动处理，后端总控继续观察。",
-                            })
-                            await asyncio.sleep(interval)
-                            continue
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "watching",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "status": payload.get("status") or "",
-                        "message": "后端总控正在观察云端任务。",
-                    })
-                    await asyncio.sleep(interval)
-                    continue
-                if not _cloud_failure_signal(payload):
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "completed",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "status": payload.get("status") or "",
-                        "message": "任务已结束，后端总控停止观察。",
-                    })
-                    return
-                runtime_binding_message = _runtime_binding_failure_message(payload)
-                if runtime_binding_message:
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "needs_rebind",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "status": payload.get("status") or "",
-                        "failureRemediation": payload.get("failureRemediation") or {},
-                        "message": runtime_binding_message,
-                    })
-                    return
-                failure_fingerprint = _cloud_failure_fingerprint(payload)
-                if failure_fingerprint in seen_failure_fingerprints:
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "needs_review",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "status": payload.get("status") or "",
-                        "failureRemediation": payload.get("failureRemediation") or {},
-                        "failureFingerprint": failure_fingerprint,
-                        "message": "同一错误已经自动修复过，已暂停连续重试，避免反复生成新的 repair 任务。",
-                    })
-                    return
-                seen_failure_fingerprints.add(failure_fingerprint)
-                if max_repairs >= 0 and repair_count >= max_repairs:
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "needs_review",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "status": payload.get("status") or "",
-                        "failureRemediation": payload.get("failureRemediation") or {},
-                        "message": "自动修复已暂停，避免在同一错误上无限重试。请确认下一步处理方式。",
-                    })
-                    return
-                repair_payload = await _repair_start_request(
-                    payload,
-                    username,
-                    training,
-                    automation_policy,
-                    deployment_mode=deployment_mode,
-                    llm_provider=getattr(app.state, "llm_provider", None),
-                )
-                if repair_payload is None:
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "needs_review",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "status": payload.get("status") or "",
-                        "failureRemediation": payload.get("failureRemediation") or {},
-                        "message": "这次修复涉及未确认风险，已停下等待确认。",
-                    })
-                    return
-                repair_count += 1
-                repair_request = CloudTrainStartRequest(**repair_payload)
-                _set_cloud_supervisor_state(username, root_job_id, {
-                    "state": "repairing",
-                    "rootJobId": root_job_id,
-                    "currentJobId": current_job_id,
-                    "repairCount": repair_count,
-                    "repairAttempts": repair_count,
-                    "maxRepairs": max_repairs,
-                    "appliedInterventions": sorted(seen_training_interventions),
-                    "failureRemediation": payload.get("failureRemediation") or {},
-                    "message": "后端总控正在同一实例内自动修复并续跑。",
-                })
-                started = await _start_cloud_training(repair_request, schedule_supervisor=False)
-                next_job_id = str(started.get("job_id") or repair_request.task_name or "").strip()
-                if not next_job_id:
-                    _set_cloud_supervisor_state(username, root_job_id, {
-                        "state": "needs_review",
-                        "rootJobId": root_job_id,
-                        "currentJobId": current_job_id,
-                        "repairCount": repair_count,
-                        "repairAttempts": repair_count,
-                        "maxRepairs": max_repairs,
-                        "appliedInterventions": sorted(seen_training_interventions),
-                        "message": "续跑请求没有返回任务 ID，需要人工确认。",
-                    })
-                    return
-                current_job_id = next_job_id
-                _log.info(
-                    "Auto-repair submitted for job %s -> %s (strategy=%s)",
-                    payload.get("job_id") or "",
-                    next_job_id,
-                    repair_request.params.get("repairStrategy") if isinstance(repair_request.params, dict) else "",
-                )
-                _set_cloud_supervisor_state(username, root_job_id, {
-                    "state": "repair_submitted",
-                    "rootJobId": root_job_id,
-                    "currentJobId": current_job_id,
-                    "repairOfJobId": str(payload.get("job_id") or ""),
-                    "repairCount": repair_count,
-                    "repairAttempts": repair_count,
-                    "maxRepairs": max_repairs,
-                    "appliedInterventions": sorted(seen_training_interventions),
-                    "message": "修复任务已提交，后端总控继续观察。",
-                })
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                _set_cloud_supervisor_state(username, root_job_id, {
-                    "state": "cancelled",
-                    "rootJobId": root_job_id,
-                    "currentJobId": current_job_id,
-                    "repairCount": repair_count,
-                    "repairAttempts": repair_count,
-                    "maxRepairs": max_repairs,
-                    "appliedInterventions": sorted(seen_training_interventions),
-                    "message": "后端总控已停止观察。",
-                })
-                raise
-            except Exception as exc:  # noqa: BLE001 - keep supervisor failures contained
-                _set_cloud_supervisor_state(username, root_job_id, {
-                    "state": "needs_review",
-                    "rootJobId": root_job_id,
-                    "currentJobId": current_job_id,
-                    "repairCount": repair_count,
-                    "repairAttempts": repair_count,
-                    "maxRepairs": max_repairs,
-                    "appliedInterventions": sorted(seen_training_interventions),
-                    "message": f"后端总控观察失败：{exc}",
-                })
-                return
-
     def _schedule_cloud_supervisor(
         *,
         username: str,
         payload: dict[str, Any],
         automation_policy: dict[str, Any],
     ) -> None:
-        policy = _auto_repair_policy(automation_policy)
-        if not username.strip() or not policy["autoRetrySameRuntime"]:
-            return
-        job_id = str(payload.get("job_id") or "").strip()
-        if not job_id:
-            return
-        root_job_id = _watch_root_job_id(job_id, payload)
-        key = _cloud_supervisor_task_key(username, root_job_id)
-        with _cloud_supervisor_runtime_lock:
-            existing = _cloud_supervisor_tasks.get(key)
-            if existing is not None and not existing.done():
-                return
-            task = asyncio.create_task(
-                _cloud_supervisor_watch(
-                    root_job_id=root_job_id,
-                    username=username,
-                    automation_policy=automation_policy,
-                    initial_payload=dict(payload),
-                )
-            )
-            _cloud_supervisor_tasks[key] = task
+        async def _start_unscheduled(body: CloudTrainStartRequest) -> dict[str, Any]:
+            return await _start_cloud_training(body, schedule_supervisor=False)
+
+        async def _deployment_mode_for_payload(next_payload: dict[str, Any]) -> str:
+            return await _cloud_deployment_mode(provider=str(next_payload.get("provider") or ""))
+
+        schedule_cloud_supervisor(
+            username=username,
+            payload=payload,
+            automation_policy=automation_policy,
+            training=training,
+            start_cloud_training=_start_unscheduled,
+            deployment_mode_for_payload=_deployment_mode_for_payload,
+            llm_provider=getattr(app.state, "llm_provider", None),
+        )
 
     async def _start_cloud_training(body: CloudTrainStartRequest, *, schedule_supervisor: bool = True) -> dict[str, Any]:
         if not training.cloud_enabled:
@@ -964,165 +544,11 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/train/cloud/dev/rebind-ssh")
     async def train_cloud_dev_rebind_ssh(body: CloudSshRuntimeBindRequest) -> dict[str, Any]:
-        if not _local_runtime_bind_enabled():
-            raise HTTPException(status_code=403, detail="local runtime binding is disabled for this deployment")
-        if not body.restart_bridge:
-            raise HTTPException(
-                status_code=400,
-                detail="restartBridge must be true so the new SSH runtime is verified before use",
-            )
-        try:
-            host, port, user = _parse_ssh_command(body.ssh_command)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        password = body.password
-        key_path = body.key_path.strip()
-        if not password and not key_path:
-            raise HTTPException(status_code=400, detail="password or keyPath is required")
-        previous_endpoint = _read_ssh_runtime_endpoint()
-        endpoint = f"{user}@{host}:{port}"
-        try:
-            banner_attempts = max(3, min(20, int(os.environ.get("ROBOCLAW_SSH_BIND_ATTEMPTS", "5"))))
-        except ValueError:
-            banner_attempts = 5
-        try:
-            banner_interval_s = max(1.0, min(5.0, float(os.environ.get("ROBOCLAW_SSH_BIND_INTERVAL_S", "2"))))
-        except ValueError:
-            banner_interval_s = 2.0
-        banner_ready, banner_error = _probe_ssh_banner(
-            host,
-            port,
-            timeout=4.0,
-            attempts=banner_attempts,
-            interval_s=banner_interval_s,
-        )
-        if not banner_ready:
-            cleared_stale_binding = endpoint == previous_endpoint.get("endpoint", "")
-            clear_restart_result: dict[str, Any] = {}
-            if cleared_stale_binding:
-                _clear_ssh_runtime_env()
-                clear_restart_result = _restart_local_evo_train_bridge(_ssh_runtime_env_path())
-                clear_cloud_supervisor_runtime_for_tests()
-            return {
-                "ok": False,
-                "saved": False,
-                "rolledBack": False,
-                "clearedStaleBinding": cleared_stale_binding,
-                "host": host,
-                "port": port,
-                "user": user,
-                "endpoint": endpoint,
-                "previousEndpoint": previous_endpoint.get("endpoint", ""),
-                "activeEndpoint": "" if cleared_stale_binding else previous_endpoint.get("endpoint", ""),
-                "authMode": "key" if key_path else "password",
-                "envPath": previous_endpoint.get("envPath", str(_ssh_runtime_env_path())),
-                "bridge": clear_restart_result or {"restarted": False, "listening": _listening_on_local_port(9000)},
-                "runtimeReady": False,
-                "gpuReady": False,
-                "validation": {},
-                "validationError": banner_error,
-                "rollback": {
-                    "restored": False,
-                    "reason": "current stale binding was cleared" if cleared_stale_binding else "candidate endpoint was rejected before saving",
-                },
-                "message": (
-                    f"{endpoint} 未连上，已自动清除这个旧绑定：{banner_error}"
-                    if cleared_stale_binding
-                    else f"{endpoint} 未连上，未保存为新的当前实例：{banner_error}"
-                ),
-            }
-        previous_env_path = _ssh_runtime_env_path()
-        previous_env_text = previous_env_path.read_text(encoding="utf-8") if previous_env_path.exists() else None
-        env_path = _write_ssh_runtime_env(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            key_path=key_path,
-        )
-        restart_result = _restart_local_evo_train_bridge(env_path)
-        validation: dict[str, Any] = {}
-        validation_error = ""
-        runtime_ready = False
-        if restart_result.get("listening"):
-            try:
-                validation = dict(await training.configuration_check(provider="autodl"))
-                runtime_ready, validation_error = _runtime_configuration_ready(validation, require_gpu=False)
-                if runtime_ready:
-                    clear_cloud_supervisor_runtime_for_tests()
-            except RuntimeError as exc:
-                validation_error = str(exc)
-        else:
-            validation_error = "EVO_Train bridge did not start after rebinding the SSH runtime"
-        rollback_result: dict[str, Any] = {}
-        saved = bool(runtime_ready)
-        if not runtime_ready:
-            if previous_env_text is not None:
-                previous_env_path.write_text(previous_env_text, encoding="utf-8")
-                try:
-                    previous_env_path.chmod(0o600)
-                except OSError:
-                    pass
-                rollback_result = _restart_local_evo_train_bridge(previous_env_path)
-            else:
-                try:
-                    env_path.unlink()
-                except FileNotFoundError:
-                    pass
-                rollback_result = {"restored": False, "reason": "no previous runtime binding"}
-        gpu_ready = bool(validation.get("gpuReady", validation.get("sshGpuReady", False)))
-        _log.info(
-            "SSH runtime rebind attempted: endpoint=%s runtime_ready=%s gpu_ready=%s saved=%s error=%s",
-            endpoint,
-            runtime_ready,
-            gpu_ready,
-            saved,
-            validation_error,
-        )
-        return {
-            "ok": bool(runtime_ready),
-            "saved": saved,
-            "rolledBack": not saved,
-            "host": host,
-            "port": port,
-            "user": user,
-            "endpoint": endpoint,
-            "previousEndpoint": previous_endpoint.get("endpoint", ""),
-            "activeEndpoint": endpoint if saved else previous_endpoint.get("endpoint", ""),
-            "authMode": "key" if key_path else "password",
-            "envPath": str(env_path),
-            "bridge": restart_result,
-            "runtimeReady": runtime_ready,
-            "gpuReady": gpu_ready,
-            "validation": validation,
-            "validationError": validation_error,
-            "rollback": rollback_result,
-            "message": (
-                f"{endpoint} 已连接，GPU 可用"
-                if runtime_ready and gpu_ready
-                else f"{endpoint} 已连接，可先无卡准备；GPU 任务需开卡或重新绑定有卡实例"
-                if runtime_ready
-                else f"{endpoint} 未连上，已保留之前的实例配置：{validation_error}"
-            ),
-        }
+        return await bind_ssh_runtime(body, training=training)
 
     @app.post("/api/train/cloud/dev/unbind-ssh")
     async def train_cloud_dev_unbind_ssh() -> dict[str, Any]:
-        if not _local_runtime_bind_enabled():
-            raise HTTPException(status_code=403, detail="local runtime binding is disabled for this deployment")
-        previous_endpoint = _clear_ssh_runtime_env()
-        restart_result = _restart_local_evo_train_bridge(_ssh_runtime_env_path())
-        clear_cloud_supervisor_runtime_for_tests()
-        _log.info("SSH runtime binding cleared: previous_endpoint=%s", previous_endpoint.get("endpoint", ""))
-        return {
-            "ok": True,
-            "cleared": True,
-            "previousEndpoint": previous_endpoint.get("endpoint", ""),
-            "activeEndpoint": "",
-            "envPath": previous_endpoint.get("envPath", str(_ssh_runtime_env_path())),
-            "bridge": restart_result,
-            "message": "已清除旧实例绑定。请粘贴当前实例最新 SSH 命令后重新连接。",
-        }
+        return await unbind_ssh_runtime()
 
     def _cloud_bridge_message(status: dict[str, Any]) -> str:
         if status.get("configurationReady") is False:
