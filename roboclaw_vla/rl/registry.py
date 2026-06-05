@@ -22,7 +22,7 @@ def register() -> bool:
     except Exception:
         return False
 
-    register_model("roboclaw-placeholder", _PlaceholderPolicy)
+    register_model("roboclaw-placeholder", _PlaceholderPolicy, force=True)
     return True
 
 

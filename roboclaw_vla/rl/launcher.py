@@ -22,28 +22,60 @@ except Exception:  # pragma: no cover - torch is optional for import/help tests
 
 from roboclaw_vla.rl import registry
 
+_SUITE_CONFIG_ALIASES = {
+    "libero_10": "libero_10_grpo_roboclaw",
+}
+
 
 def _resolve_config_name(argv: list[str]) -> tuple[str, list[str]]:
-    """Extract --config-name from argv, return (config_name, remaining_argv)."""
+    """Extract --config-name/--suite from argv, return (config_name, remaining_argv)."""
 
     config_name = "libero_10_grpo_roboclaw"
+    suite_name = ""
+    config_explicit = False
     remaining: list[str] = []
     i = 0
     while i < len(argv):
         if argv[i].startswith("--config-name="):
             config_name = argv[i].split("=", 1)[1]
+            config_explicit = True
         elif argv[i] == "--config-name" and i + 1 < len(argv):
             config_name = argv[i + 1]
+            config_explicit = True
+            i += 1
+        elif argv[i].startswith("--suite="):
+            suite_name = argv[i].split("=", 1)[1]
+        elif argv[i] == "--suite" and i + 1 < len(argv):
+            suite_name = argv[i + 1]
             i += 1
         else:
             remaining.append(argv[i])
         i += 1
+    if suite_name and not config_explicit:
+        config_name = _resolve_config_name_from_suite(suite_name)
     return config_name, remaining
+
+
+def _resolve_config_name_from_suite(suite_name: str) -> str:
+    suite = suite_name.strip().lower().replace("-", "_")
+    if not suite:
+        raise ValueError("--suite cannot be empty")
+    if suite in _SUITE_CONFIG_ALIASES:
+        return _SUITE_CONFIG_ALIASES[suite]
+    config_dir = Path(__file__).resolve().parents[1] / "config" / "rl"
+    matches = sorted(path.stem for path in config_dir.glob(f"{suite}_*.yaml"))
+    if len(matches) == 1:
+        return matches[0]
+    if not matches and (config_dir / f"{suite}.yaml").is_file():
+        return suite
+    if not matches:
+        raise ValueError(f"Unknown RLinf suite {suite_name!r}. No matching config under {config_dir}.")
+    raise ValueError(f"Ambiguous RLinf suite {suite_name!r}. Matches: {matches}")
 
 
 def run_roboclaw_rl(cfg: Any) -> None:
     # [experimental] Ray workers load this module via RLINF_EXT_MODULE and call register().
-    os.environ.setdefault("RLINF_EXT_MODULE", "roboclaw_vla.rl.registry")
+    os.environ.setdefault("RLINF_EXT_MODULE", "roboclaw.training.rlinf_registry_hook")
     registry.register_all()
 
     print("[RoboClaw RL] Launching with RLinf backend.")
@@ -105,6 +137,7 @@ def main() -> None:
             description="RoboClaw VLA RLinf launcher — experimental worker orchestration."
         )
         parser.add_argument("--config-name", default=config_name)
+        parser.add_argument("--suite", default="")
         parser.add_argument("--dataset_path", default=os.environ.get("RLINF_DATASET_PATH", ""))
         parser.add_argument("--checkpoint_path", default=os.environ.get("RLINF_CHECKPOINT_PATH", ""))
         parser.add_argument("--artifact_path", default=os.environ.get("RLINF_ARTIFACT_DIR", "outputs"))
