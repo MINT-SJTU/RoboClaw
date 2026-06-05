@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from math import ceil
 from typing import Any, Mapping
 
 DEFAULT_SERVICE_FEE_BPS = 1_000
 DEFAULT_MIN_BILLABLE_MINUTES = 60
+_log = logging.getLogger(__name__)
 
 
 def estimate_training_hold_cents(
@@ -53,7 +55,8 @@ def hourly_cost_from_params(params: Mapping[str, Any]) -> int:
             continue
         try:
             parsed = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            _log.warning("Invalid hourly cost value for %s=%r: %s", key, value, exc)
             continue
         if parsed > 0:
             return parsed

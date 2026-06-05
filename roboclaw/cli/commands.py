@@ -47,9 +47,11 @@ console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 # Register sub-apps
+from roboclaw.cli.datasets import dataset_app
 from roboclaw.cli.dev import dev_app
 
 app.add_typer(dev_app, name="dev", help="Developer utilities (reset workspace, etc.).")
+app.add_typer(dataset_app, name="dataset", help="Dataset collection and upload commands.")
 app.add_typer(web_app, name="web", help="Web UI server commands.")
 
 
