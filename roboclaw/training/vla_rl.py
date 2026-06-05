@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from roboclaw.embodied.policy import policy_registry
+from roboclaw.providers.base import LLMProvider
+from roboclaw.training.ai_planner import generate_ai_training_plan, merge_ai_plan
+from roboclaw.training.rlinf_catalog import (
+    apply_rlinf_config_contract,
+    discover_rlinf_catalog,
+    match_rlinf_config_name,
+    rlinf_shell_backend_interface,
+)
 from roboclaw.training.schema import TrainingPlanSpec
 from roboclaw.training.service import TrainingService
 
@@ -24,7 +32,12 @@ _MODEL_ALIASES = {
     "pi0": "pi0",
     "dm0": "dm0",
     "cogact": "cogact",
+    "openvla-oft": "openvla-oft",
+    "openvla oft": "openvla-oft",
+    "openvla": "openvla",
     "oft": "oft",
+    "starvla": "starvla",
+    "star vla": "starvla",
     "navila": "navila",
 }
 
@@ -41,7 +54,10 @@ _DEFAULT_TRAINING_PROFILES = {
     "gr00t": "roboclaw_rlinf_backend",
     "dm0": "dexbotic_dm0_rlinf",
     "cogact": "roboclaw_rlinf_backend",
-    "oft": "roboclaw_rlinf_backend",
+    "oft": "openvla_oft_libero_eval",
+    "openvla": "openvla_oft_libero_eval",
+    "openvla-oft": "openvla_oft_libero_eval",
+    "starvla": "roboclaw_rlinf_backend",
     "navila": "roboclaw_rlinf_backend",
     "uni-navid": "roboclaw_rlinf_backend",
 }
@@ -122,6 +138,39 @@ _BACKEND_INTERFACE_CATALOG = {
             "contractFile": "run_contract.json",
             "requiredFields": ["backendKind", "modelFamily", "datasetPath", "checkpointPath", "artifactPath", "metricPaths"],
             "successMetricField": "successMetric",
+        },
+    },
+    "openvla_oft": {
+        "interfaceVersion": "vla-rl-backend/v1",
+        "workflow": "vla_rl_backend",
+        "launchModes": ["project_backend"],
+        "launcherKinds": ["python_script"],
+        "requiredParams": ["repoUrl", "workdir", "scriptPath", "checkpointPath", "artifactPath"],
+        "registryInjection": {
+            "field": "",
+            "env": "",
+            "preflightImport": False,
+        },
+        "envExports": [
+            "TRANSFORMERS_CACHE",
+            "HF_HOME",
+            "MUJOCO_GL",
+            "VLA_RL_CONTRACT_PATH",
+            "VLA_RL_MODEL_FAMILY",
+            "VLA_RL_TRAINING_MODE",
+        ],
+        "preflightChecks": [
+            "repo has experiments/robot/libero/run_libero_eval.py",
+            "runtime image provides OpenVLA-OFT dependencies",
+            "LIBERO/MuJoCo assets are installed",
+        ],
+        "launcherContract": {
+            "python_script": "python {scriptPath} --pretrained_checkpoint {checkpointPath} --task_suite_name {suite}",
+        },
+        "artifactContract": {
+            "contractFile": "run_contract.json",
+            "requiredFields": ["backendKind", "modelFamily", "checkpointPath", "artifactPath", "metricPaths"],
+            "successMetricField": "success_rate",
         },
     },
     "lerobot": {
@@ -271,6 +320,28 @@ _PROFILE_CATALOG = {
         "requiredParams": ["repoUrl", "launcherModule", "artifactPath"],
         "recommendedBackend": "custom",
     },
+    "openvla_oft_libero_eval": {
+        "title": "OpenVLA-OFT LIBERO baseline evaluation",
+        "backendKind": "openvla_oft",
+        "modelFamily": "openvla",
+        "policyTypes": ["openvla", "oft", "openvla-oft"],
+        "trainingMode": "baseline_reproduction",
+        "launchMode": "project_backend",
+        "status": "adapter",
+        "requiredParams": ["repoUrl", "workdir", "scriptPath", "checkpointPath", "artifactPath"],
+        "recommendedBackend": "openvla_oft",
+    },
+    "rlinf_openvla_oft_libero_pro_eval": {
+        "title": "RLinf OpenVLA-OFT LIBERO-Pro evaluation",
+        "backendKind": "rlinf",
+        "modelFamily": "openvla-oft",
+        "policyTypes": ["openvla", "openvla-oft", "oft"],
+        "trainingMode": "simulation_eval",
+        "launchMode": "project_backend",
+        "status": "official",
+        "requiredParams": ["repoUrl", "workdir", "scriptPath", "configName", "artifactPath"],
+        "recommendedBackend": "rlinf",
+    },
 }
 
 
@@ -288,24 +359,59 @@ class VLAPlanRequest:
 class VLARLService:
     """RoboClaw control-plane helpers for VLA-RL workflows."""
 
-    def __init__(self, training: TrainingService) -> None:
+    def __init__(self, training: TrainingService, *, llm_provider: LLMProvider | None = None) -> None:
         self._training = training
+        self._llm_provider = llm_provider
 
     async def plan(self, request: VLAPlanRequest) -> dict[str, Any]:
         params = normalize_capabilities(request.message, dict(request.params or {}))
         params.setdefault("launchMode", "project_backend")
         workflow = _workflow_for_request(request.workflow, params)
-        response = await self._training.plan(
-            TrainingPlanSpec(
-                username=request.username,
-                message=request.message,
-                workflow=workflow,
-                params=params,
-                provider=request.provider,
-                sku_id=request.sku_id,
-                image_id=request.image_id,
-            )
+        spec = TrainingPlanSpec(
+            username=request.username,
+            message=request.message,
+            workflow=workflow,
+            params=params,
+            provider=request.provider,
+            sku_id=request.sku_id,
+            image_id=request.image_id,
         )
+        ai_plan = await generate_ai_training_plan(
+            self._llm_provider,
+            spec,
+            workflow=workflow,
+            params=params,
+        )
+        workflow, params = merge_ai_plan(ai_plan=ai_plan, workflow=workflow, params=params)
+        params = normalize_capabilities(request.message, params)
+        workflow = _workflow_for_request(workflow, params)
+        spec = TrainingPlanSpec(
+            username=request.username,
+            message=request.message,
+            workflow=workflow,
+            params=params,
+            provider=request.provider,
+            sku_id=request.sku_id,
+            image_id=request.image_id,
+        )
+        if self._training.cloud_enabled:
+            response = await self._training.plan(spec)
+        else:
+            warnings = ["EVO_Train bridge is not connected; generated plan only."]
+            missing_fields = ["EVO_Train bridge"]
+            if ai_plan:
+                missing_fields.extend(str(item) for item in ai_plan.get("missingFields") or [])
+                warnings.extend(str(item) for item in ai_plan.get("warnings") or [])
+            response = {
+                "message": "AI plan generated locally; cloud execution is not connected.",
+                "plan": {
+                    "workflow": workflow,
+                    "params": params,
+                    "readyToStart": False,
+                    "missingFields": missing_fields,
+                    "warnings": warnings,
+                },
+            }
         plan = dict(response.get("plan") or {})
         hints = _deployability_hints(plan.get("params") if isinstance(plan.get("params"), dict) else params)
         response["vlaPlan"] = {
@@ -316,10 +422,37 @@ class VLARLService:
             "warnings": list(plan.get("warnings") or []),
             "deployabilityHints": hints,
         }
+        if ai_plan:
+            ai_source = str(ai_plan.get("source") or "")
+            response["aiPlan"] = ai_plan
+            response["vlaPlan"]["aiSummary"] = ai_plan.get("humanSummary", "")
+            response["vlaPlan"]["planSteps"] = list(ai_plan.get("planSteps") or [])
+            response["vlaPlan"]["evaluationPlan"] = list(ai_plan.get("evaluationPlan") or [])
+            response["vlaPlan"]["resourceHints"] = list(ai_plan.get("resourceHints") or [])
+            response["vlaPlan"]["safetyChecks"] = list(ai_plan.get("safetyChecks") or [])
+            response["vlaPlan"]["clarifyingQuestions"] = list(ai_plan.get("clarifyingQuestions") or [])
+            response["vlaPlan"]["intentUnderstanding"] = dict(ai_plan.get("intentUnderstanding") or {})
+            response["vlaPlan"]["planner"] = {
+                "source": ai_plan.get("source"),
+                "providerModel": ai_plan.get("providerModel"),
+            }
+            if ai_source and ai_source != "llm":
+                response["vlaPlan"]["readyToStart"] = False
+                response["vlaPlan"]["missingFields"] = [
+                    "AI planner did not complete",
+                    *response["vlaPlan"]["missingFields"],
+                ]
+                response["vlaPlan"]["warnings"] = [
+                    "AI planner did not produce a usable structured plan; do not treat the deterministic fallback as a launch-ready plan.",
+                    *response["vlaPlan"]["warnings"],
+                ]
         return response
 
     def profiles(self) -> dict[str, Any]:
         return vla_profile_catalog()
+
+    def rlinf_catalog(self) -> dict[str, Any]:
+        return discover_rlinf_catalog()
 
     def playground(self) -> dict[str, Any]:
         return vla_playground_spec()
@@ -347,6 +480,18 @@ class VLARLService:
 def normalize_capabilities(message: str, params: dict[str, Any]) -> dict[str, Any]:
     lowered = message.lower()
     enriched = dict(params)
+    explicit_rlinf = (
+        bool(str(enriched.get("rlinfConfigName") or "").strip())
+        or "rlinf" in lowered
+        or str(enriched.get("backendKind") or "").lower() == "rlinf"
+        or str(enriched.get("workflow") or "").lower() == "rlinf_vla"
+        or str(enriched.get("repoUrl") or "").rstrip("/") == "https://github.com/RLinf/RLinf.git"
+    )
+    requested_rlinf_config = str(enriched.get("rlinfConfigName") or "").strip()
+    if explicit_rlinf and not requested_rlinf_config:
+        requested_rlinf_config = str(enriched.get("configName") or "").strip()
+    if not requested_rlinf_config and ("rlinf" in lowered or str(enriched.get("backendKind") or "") == "rlinf"):
+        requested_rlinf_config = match_rlinf_config_name(message)
     for token, model_family in _MODEL_ALIASES.items():
         if token in lowered and not enriched.get("modelFamily"):
             enriched["modelFamily"] = model_family
@@ -372,15 +517,170 @@ def normalize_capabilities(message: str, params: dict[str, Any]) -> dict[str, An
         enriched.setdefault("workdir", "/root/autodl-tmp/dexbotic")
         enriched.setdefault("launcherModule", "dexbotic.rl.model_rl_libero_pi0")
         enriched.setdefault("rlinfExtModule", "dexbotic.rl.rlinf_registry")
+    if requested_rlinf_config:
+        enriched = apply_rlinf_config_contract(
+            enriched,
+            config_name=requested_rlinf_config,
+            message=message,
+        )
+        return enriched
+    if "libero" in lowered:
+        suite = "libero_10" if _contains_any(lowered, ("libero pro", "libero-pro", "liberopro", "libero plus", "libero-plus", "liberoplus")) else "libero_spatial"
+        if "libero_object" in lowered or "object" in lowered:
+            suite = "libero_object"
+        elif "libero_goal" in lowered or "goal" in lowered:
+            suite = "libero_goal"
+        elif "libero_10" in lowered or "libero 10" in lowered:
+            suite = "libero_10"
+        enriched.setdefault("benchmark", "libero")
+        enriched.setdefault("suite", suite)
+        enriched.setdefault(
+            "datasetSource",
+            {
+                "sourceType": "public_reference",
+                "datasetId": "libero",
+                "uri": "hf://HuggingFaceVLA/libero",
+                "format": "libero",
+                "benchmark": "libero",
+                "suite": suite,
+            },
+        )
+        enriched.setdefault("datasetFormat", "libero")
+    if _contains_any(lowered, ("openvla", "openvla-oft", "oft")):
+        suite = str(enriched.get("suite") or "libero_spatial")
+        if _contains_any(lowered, ("rlinf", "libero pro", "libero-pro", "liberopro", "libero plus", "libero-plus", "liberoplus")):
+            libero_type = "plus" if _contains_any(lowered, ("libero plus", "libero-plus", "liberoplus")) else "pro"
+            config_name = "libero_10_grpo_openvlaoft_eval" if suite == "libero_10" else f"{suite}_grpo_openvlaoft"
+            artifact_path = f"/root/autodl-tmp/RLinf/outputs/{config_name}_{libero_type}"
+            enriched.update(
+                {
+                    "backendKind": "rlinf",
+                    "workflow": "rlinf_vla",
+                    "modelFamily": "openvla-oft",
+                    "policyType": "openvla-oft",
+                    "policyFamily": "openvla-oft",
+                    "algorithm": "grpo",
+                    "trainingMode": "simulation_eval",
+                    "builtinTrainingProfile": "rlinf_openvla_oft_libero_pro_eval",
+                    "repoUrl": "https://github.com/RLinf/RLinf.git",
+                    "branch": "main",
+                    "workdir": "/root/autodl-tmp/RLinf",
+                    "launchMode": "project_backend",
+                    "launcherKind": "python_script",
+                    "launcherModule": "",
+                    "scriptPath": "examples/embodiment/eval_embodied_agent.py",
+                    "entrypoint": "examples/embodiment/eval_embodied_agent.py",
+                    "configName": config_name,
+                    "configPath": f"examples/embodiment/config/{config_name}.yaml",
+                    "artifactPath": artifact_path,
+                    "contractPath": f"{artifact_path}/run_contract.json",
+                    "successMetric": "success_rate",
+                    "metricPaths": [f"{artifact_path}/metrics.json", f"{artifact_path}/rollout_summary.json"],
+                    "resultFiles": ["run_contract.json", "metrics.json", "rollout_summary.json", "logs"],
+                    "evalEpisodes": int(enriched.get("evalEpisodes") or 2),
+                    "bootstrapProfile": "",
+                    "backendInterface": rlinf_shell_backend_interface(
+                        libero_type=libero_type,
+                        robot_platform="LIBERO",
+                        direct_python=True,
+                    ),
+                }
+            )
+            if not isinstance(enriched.get("modelSource"), dict) or str(
+                (enriched.get("modelSource") or {}).get("modelFamily")
+                or (enriched.get("modelSource") or {}).get("uri")
+                or ""
+            ).strip().lower() in {"", "auto", "unknown"}:
+                enriched["modelSource"] = {
+                    "sourceType": "rlinf_config_default",
+                    "modelFamily": "openvla-oft",
+                    "format": "rlinf_config",
+                }
+                enriched.setdefault("checkpointFormat", "rlinf_config")
+            enriched.setdefault("launcherArgs", [])
+            enriched.setdefault(
+                "trainingContract",
+                {
+                    "interfaceKind": "rlinf_runner",
+                    "framework": "rlinf",
+                    "sources": {
+                        "code": {"uri": "https://github.com/RLinf/RLinf.git"},
+                        "dataset": enriched.get("datasetSource"),
+                        "model": enriched.get("modelSource"),
+                    },
+                    "runner": "EmbodiedRunner",
+                    "algorithm": {"name": "grpo"},
+                    "env": {"benchmark": "libero", "suite": suite, "liberoType": libero_type},
+                    "runtime": {"placementStrategy": enriched.get("placementStrategy", "single_node")},
+                    "artifacts": {"path": artifact_path},
+                },
+            )
+            return enriched
+        enriched.setdefault("backendKind", "openvla_oft")
+        enriched.setdefault("modelFamily", "openvla")
+        enriched.setdefault("policyType", "openvla")
+        enriched.setdefault("policyFamily", "openvla")
+        enriched.setdefault("trainingMode", "baseline_reproduction")
+        enriched.setdefault("builtinTrainingProfile", "openvla_oft_libero_eval")
+        enriched.setdefault("repoUrl", "https://github.com/moojink/openvla-oft.git")
+        enriched.setdefault("branch", "main")
+        enriched.setdefault("workdir", "/root/autodl-tmp/openvla-oft")
+        enriched.setdefault("scriptPath", "experiments/robot/libero/run_libero_eval.py")
+        enriched.setdefault("configName", "libero_oft_eval")
+        enriched.setdefault("artifactPath", "/workspace/outputs")
+        enriched.setdefault(
+            "modelSource",
+            {
+                "sourceType": "catalog_lookup_required",
+                "modelFamily": "openvla",
+                "format": "auto",
+            },
+        )
+        enriched.setdefault("launcherArgs", ["--center_crop", "True", "--num_trials_per_task", "2"])
     model_family = str(enriched.get("modelFamily") or "")
     if model_family in _DEFAULT_TRAINING_PROFILES:
         enriched.setdefault("builtinTrainingProfile", _DEFAULT_TRAINING_PROFILES[model_family])
     return enriched
 
 
+def _rlinf_libero_shell_backend_interface(libero_type: str) -> dict[str, Any]:
+    return {
+        "interfaceVersion": "vla-rl-backend/v1",
+        "backendKind": "rlinf",
+        "workflow": "rlinf_vla",
+        "launchModes": ["project_backend"],
+        "launcherKinds": ["python_script"],
+        "requiredParams": ["repoUrl", "workdir", "scriptPath", "configName", "artifactPath"],
+        "registryInjection": {"field": "rlinfExtModule", "env": "RLINF_EXT_MODULE", "preflightImport": False},
+        "envExports": {
+            "LIBERO_TYPE": f"literal:{libero_type}",
+            "ROBOT_PLATFORM": "literal:LIBERO",
+            "VLA_RL_CONTRACT_PATH": "contractPath",
+            "VLA_RL_MODEL_FAMILY": "modelFamily",
+            "VLA_RL_TRAINING_MODE": "trainingMode",
+        },
+        "preflightImports": ["rlinf"],
+        "preflightCommands": [
+            "test -f {scriptPath}",
+            "test -f {configPath}",
+        ],
+        "usePreflightCommands": True,
+        "useLauncherContract": True,
+        "launcherContract": {
+            "python_script": "bash {scriptPath} {configName} LIBERO",
+        },
+        "artifactContract": {
+            "contractFile": "run_contract.json",
+            "requiredFields": ["backendKind", "modelFamily", "artifactPath", "metricPaths"],
+            "successMetricField": "success_rate",
+        },
+    }
+
+
 def vla_profile_catalog() -> dict[str, Any]:
     supported_policy_types = sorted(policy_registry.supported_types())
     backend_interfaces = _configured_backend_interfaces()
+    rlinf_catalog = discover_rlinf_catalog()
     profiles = []
     for profile_id, profile in _PROFILE_CATALOG.items():
         item = dict(profile)
@@ -400,6 +700,16 @@ def vla_profile_catalog() -> dict[str, Any]:
             "ROBOCLAW_VLA_BACKEND_INTERFACES_JSON",
             "ROBOCLAW_VLA_BACKEND_INTERFACES_FILE",
         ],
+        "rlinfCatalog": {
+            "configured": rlinf_catalog["configured"],
+            "repoUrl": rlinf_catalog["repoUrl"],
+            "repoPath": rlinf_catalog["repoPath"],
+            "configCount": rlinf_catalog["configCount"],
+            "benchmarks": rlinf_catalog["benchmarks"],
+            "algorithms": rlinf_catalog["algorithms"],
+            "modelFamilies": rlinf_catalog["modelFamilies"],
+            "entrypoint": "/api/vla-rl/rlinf-catalog",
+        },
         "defaultTrainingProfiles": dict(_DEFAULT_TRAINING_PROFILES),
         "profiles": profiles,
     }
@@ -533,9 +843,11 @@ def _load_backend_interfaces_file() -> dict[str, Any]:
 
 def _workflow_for_request(workflow: str, params: Mapping[str, Any]) -> str:
     requested = workflow.strip()
+    backend_kind = str(params.get("backendKind") or params.get("backend") or "rlinf").strip()
+    if backend_kind in {"", "rlinf"} and requested in {"", "vla_rl_backend"}:
+        return "rlinf_vla"
     if requested:
         return requested
-    backend_kind = str(params.get("backendKind") or params.get("backend") or "rlinf").strip()
     return "rlinf_vla" if backend_kind in {"", "rlinf"} else "vla_rl_backend"
 
 

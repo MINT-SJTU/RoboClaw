@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from roboclaw.embodied.service import EmbodiedService
@@ -38,20 +38,25 @@ def _bridge_error_status(exc: RuntimeError) -> int:
     return 503 if "bridge is not enabled" in str(exc).lower() else 502
 
 
-def register_vla_rl_routes(app: FastAPI, service: EmbodiedService) -> None:
-    vla_rl = VLARLService(TrainingService(service))
+def register_vla_rl_routes(app: FastAPI, service: EmbodiedService, llm_provider: Any | None = None) -> None:
+    vla_rl = VLARLService(TrainingService(service), llm_provider=llm_provider)
 
     @app.get("/api/vla-rl/profiles")
     async def vla_rl_profiles() -> dict[str, Any]:
         return vla_rl.profiles()
+
+    @app.get("/api/vla-rl/rlinf-catalog")
+    async def vla_rl_rlinf_catalog() -> dict[str, Any]:
+        return vla_rl.rlinf_catalog()
 
     @app.get("/api/vla-rl/playground")
     async def vla_rl_playground() -> dict[str, Any]:
         return vla_rl.playground()
 
     @app.post("/api/vla-rl/plan")
-    async def vla_rl_plan(body: VLARLPlanBody) -> dict[str, Any]:
+    async def vla_rl_plan(body: VLARLPlanBody, request: Request) -> dict[str, Any]:
         try:
+            vla_rl._llm_provider = llm_provider or getattr(request.app.state, "llm_provider", None)
             return await vla_rl.plan(
                 VLAPlanRequest(
                     username=body.username,

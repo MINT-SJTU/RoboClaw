@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
+
+_log = logging.getLogger(__name__)
 
 TrainingMode = Literal["local", "cloud"]
 PolicySource = Literal["local", "cloud"]
@@ -29,11 +32,13 @@ class TrainingStartSpec:
     steps: int = 100_000
     device: str = "cuda"
     username: str = ""
+    provider: str = ""
     workflow: str = ""
     params: Mapping[str, Any] | None = None
     sku_id: str = ""
     image_id: str = ""
     task_name: str = ""
+    wait_for_submit: bool = True
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,8 @@ class TrainingJobStatus:
     checkpoint_path: str = ""
     dataset_path: str = ""
     provider: str = ""
+    error: str = ""
+    failure_remediation: Mapping[str, Any] | None = None
 
     @classmethod
     def from_payload(
@@ -89,6 +96,8 @@ class TrainingJobStatus:
             checkpoint_path=_as_text(payload.get("checkpoint_path")),
             dataset_path=_as_text(payload.get("dataset_path")),
             provider=_as_text(payload.get("provider")),
+            error=_as_text(payload.get("error")),
+            failure_remediation=_as_mapping_or_none(payload.get("failureRemediation") or payload.get("failure_remediation")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -105,6 +114,8 @@ class TrainingJobStatus:
             "checkpoint_path": self.checkpoint_path,
             "dataset_path": self.dataset_path,
             "provider": self.provider,
+            "error": self.error,
+            "failureRemediation": dict(self.failure_remediation or {}),
         }
 
 
@@ -204,10 +215,17 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _as_mapping_or_none(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
 def _as_int_or_none(value: Any) -> int | None:
     if value is None or value == "":
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        _log.warning("Invalid integer value in training status payload: %r (%s)", value, exc)
         return None

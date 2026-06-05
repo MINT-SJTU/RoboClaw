@@ -21,6 +21,12 @@ from roboclaw.providers.factory import ProviderConfigurationError, UnconfiguredP
 from roboclaw.session.manager import SessionManager
 
 
+def _provider_default_model(provider: Any, config: Any) -> str:
+    """Use the provider's normalized model when it differs from stored config."""
+    model = provider.get_default_model()
+    return model or config.agents.defaults.model
+
+
 class WebRuntime:
     """Holds all services, manages their lifecycle."""
 
@@ -57,11 +63,12 @@ class WebRuntime:
         rt.cron = CronService(cron_store_path)
 
         # Agent loop
+        effective_model = _provider_default_model(rt.provider, config)
         rt.agent = AgentLoop(
             bus=rt.bus,
             provider=rt.provider,
             workspace=config.workspace_path,
-            model=config.agents.defaults.model,
+            model=effective_model,
             max_iterations=config.agents.defaults.max_tool_iterations,
             context_window_tokens=config.agents.defaults.context_window_tokens,
             web_search_config=config.tools.web.search,
@@ -172,17 +179,21 @@ class WebRuntime:
         """Atomically swap provider and refresh agent defaults."""
         self.provider = new_provider
         self.agent.provider = new_provider
+        for tool in self.agent.tools.iter_tools():
+            if hasattr(tool, "llm_provider"):
+                tool.llm_provider = new_provider
         self._refresh_agent_defaults(config)
 
     def _refresh_agent_defaults(self, config: Any) -> None:
-        self.agent.model = config.agents.defaults.model
+        effective_model = _provider_default_model(self.provider, config)
+        self.agent.model = effective_model
         self.agent.provider.generation = GenerationSettings(
             temperature=config.agents.defaults.temperature,
             max_tokens=config.agents.defaults.max_tokens,
             reasoning_effort=config.agents.defaults.reasoning_effort,
         )
-        self.agent.memory_consolidator.model = config.agents.defaults.model
-        self.agent.subagents.model = config.agents.defaults.model
+        self.agent.memory_consolidator.model = effective_model
+        self.agent.subagents.model = effective_model
 
     def _pick_heartbeat_target(self) -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""

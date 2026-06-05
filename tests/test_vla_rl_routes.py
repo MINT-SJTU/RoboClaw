@@ -14,6 +14,7 @@ from roboclaw.embodied.embodiment.hardware.monitor import HardwareMonitor
 from roboclaw.embodied.embodiment.manifest import Manifest
 from roboclaw.embodied.service import EmbodiedService
 from roboclaw.http.routes.vla_rl import register_vla_rl_routes
+from roboclaw.providers.base import LLMResponse
 
 
 class StubBridge:
@@ -38,6 +39,24 @@ class StubBridge:
         }
 
 
+class DisabledBridge:
+    enabled = False
+    settings = SimpleNamespace(username="")
+
+
+class FakePlannerProvider:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls: list[dict[str, object]] = []
+
+    def get_default_model(self) -> str:
+        return "openai-codex/gpt-5.1-codex"
+
+    async def chat_with_retry(self, messages, **kwargs):  # noqa: ANN001
+        self.calls.append({"messages": messages, **kwargs})
+        return LLMResponse(content=self.content, finish_reason="stop")
+
+
 @pytest.fixture()
 def route_app(tmp_path: Path):
     app = FastAPI()
@@ -46,6 +65,62 @@ def route_app(tmp_path: Path):
     hw_monitor = HardwareMonitor(board=board, manifest=manifest)
     service = EmbodiedService(hardware_monitor=hw_monitor, board=board, manifest=manifest)
     return app, service
+
+
+def test_vla_rl_plan_uses_ai_provider_without_cloud_bridge(route_app):
+    app, service = route_app
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "workflow": "rlinf_vla",
+                "params": {
+                    "modelFamily": "pi0",
+                    "algorithm": "grpo",
+                    "benchmark": "libero",
+                    "evalEpisodes": 1,
+                },
+                "readyToStart": False,
+                "missingFields": ["datasetSource"],
+                "warnings": ["run a smoke eval first"],
+                "humanSummary": "先用 pi0 和 LIBERO 生成一次 smoke eval 方案。",
+                "intentUnderstanding": {
+                    "objective": "用 pi0 在 LIBERO 上做一次 smoke eval",
+                    "taskType": "simulation_eval",
+                    "confidence": "high",
+                },
+                "planSteps": ["解析数据和模型来源", "生成 smoke eval", "确认资源后启动"],
+                "evaluationPlan": ["1 episode smoke eval"],
+                "resourceHints": ["single 4090-class GPU"],
+                "safetyChecks": ["do not start paid compute before confirmation"],
+            }
+        )
+    )
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=DisabledBridge()):
+        register_vla_rl_routes(app, service, llm_provider=provider)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/vla-rl/plan",
+        json={
+            "username": "pearl",
+            "message": "帮我用 pi0 在 LIBERO 上只做一次 smoke eval",
+            "params": {},
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert provider.calls
+    assert data["aiPlan"]["source"] == "llm"
+    assert data["vlaPlan"]["planner"]["providerModel"] == "openai-codex/gpt-5.1-codex"
+    assert data["vlaPlan"]["params"]["modelFamily"] == "pi0"
+    assert data["vlaPlan"]["params"]["evalEpisodes"] == 1
+    assert data["vlaPlan"]["intentUnderstanding"]["objective"] == "用 pi0 在 LIBERO 上做一次 smoke eval"
+    assert data["vlaPlan"]["aiSummary"].startswith("先用 pi0")
+    assert data["vlaPlan"]["planSteps"]
+    assert data["vlaPlan"]["readyToStart"] is False
+    assert "EVO_Train bridge" in data["vlaPlan"]["missingFields"]
 
 
 def test_vla_rl_plan_normalizes_capabilities_before_evo_train(route_app):
@@ -81,6 +156,131 @@ def test_vla_rl_plan_normalizes_capabilities_before_evo_train(route_app):
     assert params["imageProfile"] == "blackwell"
     assert data["vlaPlan"]["workflow"] == "rlinf_vla"
     assert data["vlaPlan"]["deployabilityHints"]
+    assert data["aiPlan"]["source"] == "llm_unconfigured"
+    assert data["vlaPlan"]["readyToStart"] is False
+    assert "AI planner did not complete" in data["vlaPlan"]["missingFields"]
+
+
+def test_vla_rl_plan_routes_openvla_oft_libero_pro_to_rlinf_official_recipe(route_app):
+    app, service = route_app
+    bridge = StubBridge()
+    provider = FakePlannerProvider(
+        json.dumps(
+            {
+                "workflow": "vla_rl_backend",
+                "params": {
+                    "backendKind": "openvla_oft",
+                    "modelFamily": "openvla",
+                    "repoUrl": "https://github.com/moojink/openvla-oft.git",
+                },
+                "humanSummary": "用 OpenVLA-OFT 做 LIBERO Pro 评测。",
+            }
+        )
+    )
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_vla_rl_routes(app, service, llm_provider=provider)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/vla-rl/plan",
+        json={
+            "username": "pearl",
+            "message": "用 RLinf 做 openvla-oft 的 LIBERO Pro 仿真评测",
+            "params": {},
+            "provider": "autodl",
+        },
+    )
+
+    assert resp.status_code == 200
+    params = bridge.plan_calls[0]["params"]
+    assert bridge.plan_calls[0]["workflow"] == "rlinf_vla"
+    assert params["backendKind"] == "rlinf"
+    assert params["repoUrl"] == "https://github.com/RLinf/RLinf.git"
+    assert params["workdir"] == "/root/autodl-tmp/RLinf"
+    assert params["scriptPath"] == "examples/embodiment/eval_embodied_agent.py"
+    assert params["configName"] == "libero_10_grpo_openvlaoft_eval"
+    assert params["configPath"] == "examples/embodiment/config/libero_10_grpo_openvlaoft_eval.yaml"
+    assert params["builtinTrainingProfile"] == "rlinf_openvla_oft_libero_pro_eval"
+    assert params["modelFamily"] == "openvla-oft"
+    assert params["algorithm"] == "grpo"
+    assert params["trainingContract"]["framework"] == "rlinf"
+    assert params["trainingContract"]["env"]["liberoType"] == "pro"
+    backend_interface = params["backendInterface"]
+    assert backend_interface["useLauncherContract"] is True
+    assert backend_interface["launcherContract"]["python_script"].startswith("python {entrypoint}")
+    assert backend_interface["envExports"]["LIBERO_TYPE"] == "literal:pro"
+    data = resp.json()
+    assert data["vlaPlan"]["params"]["repoUrl"] == "https://github.com/RLinf/RLinf.git"
+
+
+def test_vla_rl_plan_routes_explicit_rlinf_config_to_discovered_contract(route_app, tmp_path, monkeypatch):
+    repo = tmp_path / "RLinf"
+    config_dir = repo / "examples" / "embodiment" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "maniskill_ppo_openvlaoft_quickstart.yaml").write_text("runner: {}\n", encoding="utf-8")
+    monkeypatch.setenv("ROBOCLAW_RLINF_REPO_PATH", str(repo))
+    app, service = route_app
+    bridge = StubBridge()
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_vla_rl_routes(app, service)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/vla-rl/plan",
+        json={
+            "username": "pearl",
+            "message": "用 RLinf 跑 maniskill_ppo_openvlaoft_quickstart 做一次 smoke",
+            "params": {},
+            "provider": "autodl",
+        },
+    )
+
+    assert resp.status_code == 200
+    params = bridge.plan_calls[0]["params"]
+    assert bridge.plan_calls[0]["workflow"] == "rlinf_vla"
+    assert params["repoUrl"] == "https://github.com/RLinf/RLinf.git"
+    assert params["backendKind"] == "rlinf"
+    assert params["configName"] == "maniskill_ppo_openvlaoft_quickstart"
+    assert params["configPath"] == "examples/embodiment/config/maniskill_ppo_openvlaoft_quickstart.yaml"
+    assert params["scriptPath"] == "examples/embodiment/run_embodiment.sh"
+    assert params["trainingMode"] == "rl_post_train"
+    assert params["algorithm"] == "ppo"
+    assert params["modelFamily"] == "openvla-oft"
+    assert params["benchmark"] == "maniskill"
+    assert params["rlinfConfig"]["status"] == "discovered"
+    assert params["backendInterface"]["launcherContract"]["python_script"] == "bash {scriptPath} {configName}"
+
+
+def test_vla_rl_rlinf_catalog_discovers_repo_configs(route_app, tmp_path, monkeypatch):
+    repo = tmp_path / "RLinf"
+    embodiment_config_dir = repo / "examples" / "embodiment" / "config"
+    sft_config_dir = repo / "examples" / "sft" / "config"
+    embodiment_config_dir.mkdir(parents=True)
+    sft_config_dir.mkdir(parents=True)
+    (embodiment_config_dir / "libero_10_grpo_openvlaoft_eval.yaml").write_text("runner: {}\n", encoding="utf-8")
+    (sft_config_dir / "libero_sft_openpi.yaml").write_text("runner: {}\n", encoding="utf-8")
+    monkeypatch.setenv("ROBOCLAW_RLINF_REPO_PATH", str(repo))
+    app, service = route_app
+    register_vla_rl_routes(app, service)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/api/vla-rl/rlinf-catalog")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["configured"] is True
+    assert data["configCount"] == 2
+    names = {item["configName"] for item in data["configs"]}
+    assert names == {"libero_10_grpo_openvlaoft_eval", "libero_sft_openpi"}
+    eval_item = next(item for item in data["configs"] if item["configName"] == "libero_10_grpo_openvlaoft_eval")
+    assert eval_item["scriptPath"] == "examples/embodiment/eval_embodiment.sh"
+    assert eval_item["trainingMode"] == "simulation_eval"
+    assert eval_item["liberoTypeSupport"] == ["standard", "pro", "plus"]
+    sft_item = next(item for item in data["configs"] if item["configName"] == "libero_sft_openpi")
+    assert sft_item["scriptPath"] == "examples/sft/run_vla_sft.sh"
+    assert sft_item["trainingMode"] == "supervised_finetune"
 
 
 def test_vla_rl_profiles_expose_policy_registry_capabilities(route_app):
@@ -135,6 +335,8 @@ def test_vla_rl_profiles_expose_policy_registry_capabilities(route_app):
         assert interface["artifactContract"]["contractFile"] == "run_contract.json"
     assert data["backendInterfaceConfigurable"] is True
     assert "ROBOCLAW_VLA_BACKEND_INTERFACES_JSON" in data["backendInterfaceConfigSources"]
+    assert data["rlinfCatalog"]["entrypoint"] == "/api/vla-rl/rlinf-catalog"
+    assert data["rlinfCatalog"]["repoUrl"] == "https://github.com/RLinf/RLinf.git"
 
 
 def test_vla_rl_playground_exposes_guided_training_flow(route_app):
@@ -166,6 +368,10 @@ def test_roboclaw_vla_rlinf_adapter_modules_are_importable():
     from roboclaw_vla.rl import registry
 
     assert registry.register() is False
+
+    import roboclaw.training.rlinf_registry_hook as registry_hook
+
+    assert registry_hook.register() is None
 
 
 def test_roboclaw_grpo_hydra_template_uses_rlinf_style_sections():

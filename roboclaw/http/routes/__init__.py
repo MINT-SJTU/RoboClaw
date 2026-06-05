@@ -14,6 +14,7 @@ def register_all_routes(
     web_channel: Any,
     service: EmbodiedService,
     get_config: Callable[[], tuple[str, int]],
+    llm_provider: Any | None = None,
 ) -> None:
     """Register every dashboard API group on *app*."""
     from roboclaw.http.routes.session import register_session_routes
@@ -29,6 +30,7 @@ def register_all_routes(
     from roboclaw.http.routes.train import register_train_routes
     from roboclaw.http.routes.train_cloud import register_train_cloud_routes
     from roboclaw.http.routes.vla_rl import register_vla_rl_routes
+    from roboclaw.http.routes.agent_consult import register_agent_consult_routes
     from roboclaw.http.routes.account import register_account_routes
     from roboclaw.http.routes.infer import register_infer_routes
     from roboclaw.http.routes.hub import register_hub_routes
@@ -40,14 +42,15 @@ def register_all_routes(
     register_setup_routes(app, service)
     register_device_routes(app, service)
     register_calibrate_routes(app, service)
-    register_dataset_routes(app, service)
+    register_dataset_routes(app, service, allow_anonymous_list=True)
     register_policy_routes(app, service)
     register_recovery_routes(app)
     register_network_routes(app, get_config)
     register_replay_routes(app, service)
     register_train_routes(app, service)
     register_train_cloud_routes(app, service)
-    register_vla_rl_routes(app, service)
+    register_vla_rl_routes(app, service, llm_provider=llm_provider)
+    register_agent_consult_routes(app, service, llm_provider=llm_provider)
     register_account_routes(app)
     register_infer_routes(app, service)
     register_hub_routes(app, service)
