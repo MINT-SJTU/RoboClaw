@@ -391,7 +391,7 @@ def _auto_repair_policy(automation_policy: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": mode,
         "autoRetrySameRuntime": auto_retry,
-        "allowAgentRepairSameRuntime": bool(automation_policy.get("allowAgentRepairSameRuntime", mode == "full_auto")),
+        "allowAgentRepairSameRuntime": bool(automation_policy.get("allowAgentRepairSameRuntime", mode in {"safe_auto", "full_auto"})),
         "paidStartRequiresConfirmation": bool(automation_policy.get("paidStartRequiresConfirmation", mode != "full_auto")),
     }
 def _truthy_text(value: Any) -> str:
@@ -770,15 +770,24 @@ def _cloud_supervisor_payload(
     remediation = payload.get("failureRemediation") or payload.get("failure_remediation") or {}
     auto_repair = remediation.get("autoRepair") if isinstance(remediation, dict) else {}
     safe_repair = bool(isinstance(auto_repair, dict) and auto_repair.get("safe") is True)
+    requires_user_confirmation = bool(
+        isinstance(remediation, dict)
+        and remediation.get("requiresUserConfirmationBeforeStart") is True
+    )
     failed = _cloud_failure_signal(payload)
     active = _cloud_training_active(payload)
     same_runtime_available = deployment_mode == "ssh"
     has_snapshot = snapshot is not None
+    repair_allowed = bool(
+        policy["mode"] == "full_auto"
+        or (safe_repair and not requires_user_confirmation)
+    )
     can_retry_same_runtime = bool(
         failed
         and has_snapshot
         and same_runtime_available
-        and (safe_repair or policy["allowAgentRepairSameRuntime"] or policy["mode"] == "full_auto")
+        and repair_allowed
+        and (policy["autoRetrySameRuntime"] or policy["allowAgentRepairSameRuntime"] or policy["mode"] == "full_auto")
     )
     if not failed and not active:
         state = "idle"

@@ -32,7 +32,7 @@ class CloudTrainStartRequest(BaseModel):
     )
     service_fee_bps: int = Field(default=1_000, description="Service fee in basis points. 1000 = 10%.")
     confirmed: bool = Field(default=False, description="Skip user confirmation gate for full_auto mode.")
-    automation_mode: str = Field(default="ask", alias="automationMode")
+    automation_mode: str = Field(default="safe_auto", alias="automationMode")
     automation_policy: dict[str, Any] = Field(default_factory=dict, alias="automationPolicy")
 
 

@@ -25,6 +25,7 @@ from .cloud_supervisor import (
     _auto_repair_policy,
     _cloud_failure_signal,
     _cloud_supervisor_payload,
+    _cloud_supervisor_runtime_state,
     _cloud_supervisor_task_key,
     _cloud_training_active,
     _is_prepare_only_params,
@@ -101,6 +102,33 @@ _STALE_SSH_BINDING_MARKERS = (
     "connection closed by remote host",
 )
 _CLOUD_ARTIFACT_PATH_RE = re.compile(r"(?P<path>/(?:root/autodl-tmp|workspace|tmp)/[^\s'\"`]+?\.(?:json|txt|log))")
+
+_DEFAULT_SAFE_AUTOMATION_POLICY: dict[str, Any] = {
+    "mode": "safe_auto",
+    "autoRetrySameRuntime": True,
+    "allowAgentRepairSameRuntime": True,
+    "paidStartRequiresConfirmation": True,
+}
+
+
+def _resolve_automation_policy(
+    automation_policy: dict[str, Any] | None,
+    automation_mode: str = "",
+) -> dict[str, Any]:
+    policy = dict(_DEFAULT_SAFE_AUTOMATION_POLICY)
+    supplied = dict(automation_policy or {})
+    policy.update(supplied)
+    requested_mode = str(automation_mode or "").strip()
+    if requested_mode and "mode" not in supplied:
+        policy["mode"] = requested_mode
+    if policy.get("mode") == "full_auto":
+        policy.setdefault("autoRetrySameRuntime", True)
+        policy.setdefault("allowAgentRepairSameRuntime", True)
+        if "paidStartRequiresConfirmation" not in supplied:
+            policy["paidStartRequiresConfirmation"] = False
+        else:
+            policy["paidStartRequiresConfirmation"] = bool(policy.get("paidStartRequiresConfirmation", False))
+    return policy
 
 
 def _stale_ssh_binding_detected(warnings: list[str]) -> bool:
@@ -281,9 +309,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
         snapshot = _lookup_cloud_start(username, payload) if username.strip() else None
         start_payload = snapshot.get("payload") if isinstance(snapshot, dict) else {}
         if not isinstance(start_payload, dict):
-            return {}
+            return _resolve_automation_policy(None)
         policy = start_payload.get("automationPolicy") or start_payload.get("automation_policy")
-        return dict(policy) if isinstance(policy, dict) else {}
+        return _resolve_automation_policy(policy if isinstance(policy, dict) else None)
 
     async def _cloud_supervisor_for_payload(
         payload: dict[str, Any],
@@ -326,9 +354,35 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
             return
         provider = str(initial_payload.get("provider") or "")
         current_job_id = root_job_id
-        repair_count = 0
+        runtime_seed = _cloud_supervisor_runtime_state(
+            username,
+            {
+                "job_id": root_job_id,
+                "supervisor": {
+                    "runtime": {
+                        "rootJobId": root_job_id,
+                        "currentJobId": current_job_id,
+                    }
+                },
+            },
+        )
+        seeded_current_job_id = str(runtime_seed.get("currentJobId") or "").strip()
+        if seeded_current_job_id:
+            current_job_id = seeded_current_job_id
+        try:
+            repair_count = max(
+                0,
+                int(runtime_seed.get("repairAttempts", runtime_seed.get("repairCount", 0)) or 0),
+            )
+        except (TypeError, ValueError):
+            repair_count = 0
         seen_failure_fingerprints: set[str] = set()
-        seen_training_interventions: set[str] = set()
+        seed_interventions = runtime_seed.get("appliedInterventions")
+        seen_training_interventions: set[str] = (
+            {str(item) for item in seed_interventions if str(item).strip()}
+            if isinstance(seed_interventions, list)
+            else set()
+        )
         max_repairs = _cloud_supervisor_max_repairs()
         interval = max(1.0, float(os.environ.get("EVO_STUDIO_CLOUD_SUPERVISOR_INTERVAL_SECONDS", "6") or "6"))
         initial_delay = max(0.0, float(os.environ.get("EVO_STUDIO_CLOUD_SUPERVISOR_INITIAL_DELAY_SECONDS", "4") or "4"))
@@ -337,7 +391,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
             "rootJobId": root_job_id,
             "currentJobId": current_job_id,
             "repairCount": repair_count,
+            "repairAttempts": repair_count,
             "maxRepairs": max_repairs,
+            "appliedInterventions": sorted(seen_training_interventions),
             "message": "后端总控正在观察云端任务。",
         })
         if initial_delay:
@@ -374,14 +430,22 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         )
                         if intervention_payload is not None:
                             _set_cloud_supervisor_state(username, root_job_id, {
-                                "state": "intervening",
+                                "state": "repairing",
                                 "rootJobId": root_job_id,
                                 "currentJobId": current_job_id,
                                 "repairCount": repair_count,
+                                "repairAttempts": repair_count,
                                 "maxRepairs": max_repairs,
+                                "appliedInterventions": sorted(seen_training_interventions),
+                                "interventionCode": intervention.get("code") or "",
                                 "trainingIntervention": intervention,
                                 "message": "后端总控检测到训练异常，正在调整参数并续跑。",
                             })
+                            _log.warning(
+                                "Training intervention triggered for job %s: %s",
+                                current_job_id,
+                                intervention.get("summary") or intervention.get("code") or "",
+                            )
                             await training.stop(TrainingStopSpec(job_id=current_job_id, username=username))
                             intervention_request = CloudTrainStartRequest(**intervention_payload)
                             started = await _start_cloud_training(intervention_request, schedule_supervisor=False)
@@ -392,19 +456,25 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                                     "rootJobId": root_job_id,
                                     "currentJobId": current_job_id,
                                     "repairCount": repair_count,
+                                    "repairAttempts": repair_count,
                                     "maxRepairs": max_repairs,
+                                    "appliedInterventions": sorted(seen_training_interventions),
+                                    "interventionCode": intervention.get("code") or "",
                                     "trainingIntervention": intervention,
                                     "message": "训练异常干预请求没有返回任务 ID，需要人工确认。",
                                 })
                                 return
                             current_job_id = next_job_id
                             _set_cloud_supervisor_state(username, root_job_id, {
-                                "state": "intervention_submitted",
+                                "state": "repairing",
                                 "rootJobId": root_job_id,
                                 "currentJobId": current_job_id,
                                 "repairOfJobId": str(payload.get("job_id") or ""),
                                 "repairCount": repair_count,
+                                "repairAttempts": repair_count,
                                 "maxRepairs": max_repairs,
+                                "appliedInterventions": sorted(seen_training_interventions),
+                                "interventionCode": intervention.get("code") or "",
                                 "trainingIntervention": intervention,
                                 "message": "训练异常已自动处理，后端总控继续观察。",
                             })
@@ -415,7 +485,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "status": payload.get("status") or "",
                         "message": "后端总控正在观察云端任务。",
                     })
@@ -427,7 +499,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "status": payload.get("status") or "",
                         "message": "任务已结束，后端总控停止观察。",
                     })
@@ -439,7 +513,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "status": payload.get("status") or "",
                         "failureRemediation": payload.get("failureRemediation") or {},
                         "message": runtime_binding_message,
@@ -452,7 +528,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "status": payload.get("status") or "",
                         "failureRemediation": payload.get("failureRemediation") or {},
                         "failureFingerprint": failure_fingerprint,
@@ -466,7 +544,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "status": payload.get("status") or "",
                         "failureRemediation": payload.get("failureRemediation") or {},
                         "message": "自动修复已暂停，避免在同一错误上无限重试。请确认下一步处理方式。",
@@ -486,7 +566,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "status": payload.get("status") or "",
                         "failureRemediation": payload.get("failureRemediation") or {},
                         "message": "这次修复涉及未确认风险，已停下等待确认。",
@@ -499,7 +581,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                     "rootJobId": root_job_id,
                     "currentJobId": current_job_id,
                     "repairCount": repair_count,
+                    "repairAttempts": repair_count,
                     "maxRepairs": max_repairs,
+                    "appliedInterventions": sorted(seen_training_interventions),
                     "failureRemediation": payload.get("failureRemediation") or {},
                     "message": "后端总控正在同一实例内自动修复并续跑。",
                 })
@@ -511,18 +595,28 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                         "rootJobId": root_job_id,
                         "currentJobId": current_job_id,
                         "repairCount": repair_count,
+                        "repairAttempts": repair_count,
                         "maxRepairs": max_repairs,
+                        "appliedInterventions": sorted(seen_training_interventions),
                         "message": "续跑请求没有返回任务 ID，需要人工确认。",
                     })
                     return
                 current_job_id = next_job_id
+                _log.info(
+                    "Auto-repair submitted for job %s -> %s (strategy=%s)",
+                    payload.get("job_id") or "",
+                    next_job_id,
+                    repair_request.params.get("repairStrategy") if isinstance(repair_request.params, dict) else "",
+                )
                 _set_cloud_supervisor_state(username, root_job_id, {
                     "state": "repair_submitted",
                     "rootJobId": root_job_id,
                     "currentJobId": current_job_id,
                     "repairOfJobId": str(payload.get("job_id") or ""),
                     "repairCount": repair_count,
+                    "repairAttempts": repair_count,
                     "maxRepairs": max_repairs,
+                    "appliedInterventions": sorted(seen_training_interventions),
                     "message": "修复任务已提交，后端总控继续观察。",
                 })
                 await asyncio.sleep(interval)
@@ -532,7 +626,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                     "rootJobId": root_job_id,
                     "currentJobId": current_job_id,
                     "repairCount": repair_count,
+                    "repairAttempts": repair_count,
                     "maxRepairs": max_repairs,
+                    "appliedInterventions": sorted(seen_training_interventions),
                     "message": "后端总控已停止观察。",
                 })
                 raise
@@ -542,7 +638,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                     "rootJobId": root_job_id,
                     "currentJobId": current_job_id,
                     "repairCount": repair_count,
+                    "repairAttempts": repair_count,
                     "maxRepairs": max_repairs,
+                    "appliedInterventions": sorted(seen_training_interventions),
                     "message": f"后端总控观察失败：{exc}",
                 })
                 return
@@ -582,11 +680,10 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
         training_params = _normalize_cloud_training_params(body.params, dataset_name=body.dataset_name)
         training_params = _repair_harden_known_training_params(training_params)
         _validate_cloud_training_start(training_params, policy_type=body.policy_type)
-        automation_policy = dict(body.automation_policy or {})
-        if body.automation_mode and "mode" not in automation_policy:
-            automation_policy["mode"] = body.automation_mode
+        automation_policy = _resolve_automation_policy(body.automation_policy, body.automation_mode)
         start_snapshot = body.model_dump(by_alias=True)
         start_snapshot["params"] = training_params
+        start_snapshot["automationPolicy"] = automation_policy
         auth_errors = validate_training_auth_refs(training_params, username=username)
         if auth_errors:
             raise HTTPException(status_code=400, detail={"code": "training_auth_ref_invalid", "errors": auth_errors})

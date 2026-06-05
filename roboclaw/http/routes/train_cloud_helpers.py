@@ -239,7 +239,7 @@ def _runtime_binding_failure_message(payload: dict[str, Any]) -> str:
 
 
 def _cloud_supervisor_max_repairs() -> int:
-    raw = os.environ.get("EVO_STUDIO_CLOUD_SUPERVISOR_MAX_REPAIRS", "-1").strip().lower()
+    raw = os.environ.get("EVO_STUDIO_CLOUD_SUPERVISOR_MAX_REPAIRS", "3").strip().lower()
     if raw in {"", "-1", "none", "unlimited"}:
         return -1
     try:

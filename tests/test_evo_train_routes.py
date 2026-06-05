@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -192,6 +193,54 @@ class StubBridge:
                 "risks": ["public_source_download", "cloud_cost", "license_responsibility", "unknown_size"],
             },
         }
+
+
+class AutoRepairSshBridge(StubBridge):
+    def __init__(self, *, failure_payloads: dict[str, dict[str, object]]) -> None:
+        super().__init__()
+        self.failure_payloads = failure_payloads
+        self.started_job_ids: list[str] = []
+
+    def configuration_check(self, **kwargs: object) -> dict[str, object]:
+        result = dict(super().configuration_check(**kwargs))
+        result["mode"] = "ssh"
+        return result
+
+    def start_training(self, service: EmbodiedService, **kwargs: object) -> dict[str, object]:
+        self.start_calls.append(kwargs)
+        job_id = f"cloud-job-{len(self.start_calls)}"
+        self.started_job_ids.append(job_id)
+        return {
+            "job_id": job_id,
+            "status": "Submitted",
+            "running": True,
+            "message": "status: Submitted\nrunning: True",
+            "task_name": str(kwargs.get("task_name") or f"cloud-task-{len(self.start_calls)}"),
+            "provider": "autodl",
+        }
+
+    def task_status(self, **kwargs: object) -> dict[str, object]:
+        self.status_calls.append(kwargs)
+        job_id = str(kwargs.get("job_id") or "")
+        if job_id in self.failure_payloads:
+            return dict(self.failure_payloads[job_id])
+        return {
+            "job_id": job_id,
+            "status": "Succeeded",
+            "running": False,
+            "task_name": "cloud-task",
+            "provider": "autodl",
+            "message": "status: Succeeded\nrunning: False",
+        }
+
+
+def _wait_for(predicate, *, timeout: float = 1.5) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
 
 
 @pytest.fixture()
@@ -1333,6 +1382,197 @@ def test_train_status_marks_failed_ssh_job_as_same_runtime_repairable(route_app)
     assert supervisor["sameRuntimeAvailable"] is True
 
 
+def test_cloud_watch_loop_auto_submits_safe_repair_by_default(route_app, monkeypatch):
+    app, _, _ = route_app
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INITIAL_DELAY_SECONDS", "0")
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INTERVAL_SECONDS", "0.01")
+    bridge = AutoRepairSshBridge(
+        failure_payloads={
+            "cloud-job-1": {
+                "job_id": "cloud-job-1",
+                "status": "Failed",
+                "running": False,
+                "task_name": "cloud-openvla-smoke",
+                "provider": "autodl",
+                "log_tail": "__EVO_STAGE_FAILED__=setup_env\nModuleNotFoundError: No module named 'peft'",
+                "failureRemediation": {
+                    "code": "PYTHON_IMPORT_MISSING",
+                    "autoRepair": {"safe": True, "strategy": "install_missing_dependency_and_retry"},
+                    "requiresUserConfirmationBeforeStart": False,
+                },
+            }
+        }
+    )
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_train_cloud_routes(app, app.state.embodied_service)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/api/train/cloud/start",
+            json={
+                "username": "pearl",
+                "provider": "autodl",
+                "workflow": "vla_rl_backend",
+                "task_name": "cloud-openvla-smoke",
+                "params": {
+                    "modelFamily": "openvla",
+                    "sourceResolutions": {"dataset": {"resolvedPath": "/root/cache/dataset"}},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["supervisor"]["nextAction"] == "auto_retry_same_runtime"
+        assert _wait_for(lambda: len(bridge.start_calls) >= 2)
+
+    assert len(bridge.start_calls) == 2
+    retry_params = bridge.start_calls[-1]["params"]
+    assert retry_params["repairOfJobId"] == "cloud-job-1"
+    assert retry_params["forceSkipStageCache"] is True
+    assert "peft" in " ".join(retry_params["repairBootstrapCommands"])
+
+
+def test_cloud_watch_loop_does_not_repair_confirmation_required_failure(route_app, monkeypatch):
+    app, _, _ = route_app
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INITIAL_DELAY_SECONDS", "0")
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INTERVAL_SECONDS", "0.01")
+    bridge = AutoRepairSshBridge(
+        failure_payloads={
+            "cloud-job-1": {
+                "job_id": "cloud-job-1",
+                "status": "Failed",
+                "running": False,
+                "task_name": "cloud-openvla-smoke",
+                "provider": "autodl",
+                "log_tail": "__EVO_STAGE_FAILED__=preflight\n__EVO_GPU_UNAVAILABLE__=cuda",
+                "failureRemediation": {
+                    "code": "CLOUD_GPU_UNAVAILABLE",
+                    "autoRepair": {"safe": False, "strategy": "rebind_ssh_runtime_before_retry"},
+                    "requiresUserConfirmationBeforeStart": True,
+                },
+            }
+        }
+    )
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_train_cloud_routes(app, app.state.embodied_service)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/api/train/cloud/start",
+            json={
+                "username": "pearl",
+                "provider": "autodl",
+                "workflow": "vla_rl_backend",
+                "task_name": "cloud-openvla-smoke",
+                "params": {
+                    "modelFamily": "openvla",
+                    "sourceResolutions": {"dataset": {"resolvedPath": "/root/cache/dataset"}},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert _wait_for(lambda: bool(cloud_supervisor_state._cloud_supervisor_states), timeout=0.4)
+
+    assert len(bridge.start_calls) == 1
+
+
+def test_cloud_watch_loop_caps_safe_auto_repairs_at_three(route_app, monkeypatch):
+    app, _, _ = route_app
+    monkeypatch.delenv("EVO_STUDIO_CLOUD_SUPERVISOR_MAX_REPAIRS", raising=False)
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INITIAL_DELAY_SECONDS", "0")
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INTERVAL_SECONDS", "0.01")
+    bridge = AutoRepairSshBridge(
+        failure_payloads={
+            f"cloud-job-{idx}": {
+                "job_id": f"cloud-job-{idx}",
+                "status": "Failed",
+                "running": False,
+                "task_name": "cloud-openvla-smoke",
+                "provider": "autodl",
+                "log_tail": f"__EVO_STAGE_FAILED__=setup-env-{idx}\nModuleNotFoundError: No module named 'peft'",
+                "failureRemediation": {
+                    "code": "PYTHON_IMPORT_MISSING",
+                    "autoRepair": {"safe": True, "strategy": "install_missing_dependency_and_retry"},
+                    "requiresUserConfirmationBeforeStart": False,
+                },
+            }
+            for idx in range(1, 5)
+        }
+    )
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_train_cloud_routes(app, app.state.embodied_service)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/api/train/cloud/start",
+            json={
+                "username": "pearl",
+                "provider": "autodl",
+                "workflow": "vla_rl_backend",
+                "task_name": "cloud-openvla-smoke",
+                "params": {
+                    "modelFamily": "openvla",
+                    "sourceResolutions": {"dataset": {"resolvedPath": "/root/cache/dataset"}},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert _wait_for(lambda: len(bridge.start_calls) >= 4, timeout=4.5)
+        time.sleep(0.08)
+
+    assert len(bridge.start_calls) == 4
+    runtime_state = next(iter(cloud_supervisor_state._cloud_supervisor_states.values()))
+    assert runtime_state["repairAttempts"] == 3
+    assert runtime_state["maxRepairs"] == 3
+
+
+def test_cloud_watch_loop_oom_intervention_halves_batch_size(route_app, monkeypatch):
+    app, _, _ = route_app
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INITIAL_DELAY_SECONDS", "0")
+    monkeypatch.setenv("EVO_STUDIO_CLOUD_SUPERVISOR_INTERVAL_SECONDS", "0.01")
+    bridge = AutoRepairSshBridge(
+        failure_payloads={
+            "cloud-job-1": {
+                "job_id": "cloud-job-1",
+                "status": "Running",
+                "running": True,
+                "task_name": "cloud-openvla-smoke",
+                "provider": "autodl",
+                "log_tail": "RuntimeError: CUDA out of memory. Tried to allocate 8.00 GiB",
+            }
+        }
+    )
+
+    with patch("roboclaw.training.service.EvoTrainBridge", return_value=bridge):
+        register_train_cloud_routes(app, app.state.embodied_service)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/api/train/cloud/start",
+            json={
+                "username": "pearl",
+                "provider": "autodl",
+                "workflow": "vla_rl_backend",
+                "task_name": "cloud-openvla-smoke",
+                "params": {
+                    "modelFamily": "openvla",
+                    "batchSize": 8,
+                    "sourceResolutions": {"dataset": {"resolvedPath": "/root/cache/dataset"}},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert _wait_for(lambda: len(bridge.start_calls) >= 2)
+
+    intervention_params = bridge.start_calls[-1]["params"]
+    assert bridge.stop_calls[-1]["job_id"] == "cloud-job-1"
+    assert intervention_params["batchSize"] == 4
+    assert intervention_params["resumeFromCheckpoint"] is True
+    assert intervention_params["repairStrategy"] == "halve_batch_size_and_resume"
+
+
 def test_train_status_does_not_show_stale_watching_runtime_for_failed_current_job(route_app):
     app, _, _ = route_app
 
@@ -1450,8 +1690,27 @@ def test_cloud_supervisor_defaults_to_safe_same_runtime_repair():
 
     assert policy["mode"] == "safe_auto"
     assert policy["autoRetrySameRuntime"] is True
-    assert policy["allowAgentRepairSameRuntime"] is False
+    assert policy["allowAgentRepairSameRuntime"] is True
     assert policy["paidStartRequiresConfirmation"] is True
+
+
+def test_cloud_start_policy_defaults_safe_auto_but_full_auto_bypasses_paid_gate():
+    safe_policy = train_cloud_routes._resolve_automation_policy(None)
+    assert safe_policy["mode"] == "safe_auto"
+    assert safe_policy["autoRetrySameRuntime"] is True
+    assert safe_policy["allowAgentRepairSameRuntime"] is True
+    assert safe_policy["paidStartRequiresConfirmation"] is True
+
+    full_policy = train_cloud_routes._resolve_automation_policy({}, "full_auto")
+    assert full_policy["mode"] == "full_auto"
+    assert full_policy["autoRetrySameRuntime"] is True
+    assert full_policy["allowAgentRepairSameRuntime"] is True
+    assert full_policy["paidStartRequiresConfirmation"] is False
+
+    explicit_policy = train_cloud_routes._resolve_automation_policy(
+        {"mode": "full_auto", "paidStartRequiresConfirmation": True}
+    )
+    assert explicit_policy["paidStartRequiresConfirmation"] is True
 
 
 def test_cloud_supervisor_uses_configured_llm_for_unknown_repair():
