@@ -107,7 +107,7 @@ export function LossCurvePanel() {
   return (
     <section className="bg-sf rounded-lg p-4 shadow-card flex flex-col animate-slide-up stagger-5">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('lossCurve')}</h3>
+        <h3 className="text-2xs text-tx3 font-mono uppercase tracking-widest">{t('taskMetrics')}</h3>
         <div className="text-right text-[11px] font-mono text-tx3">
           {chart.has ? (
             <>
