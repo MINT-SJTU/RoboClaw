@@ -46,8 +46,9 @@ def ingest_dataset_source(catalog: DatasetCatalog, spec: DatasetIngestSpec) -> D
 
     if source_kind in {"cloud_object", "oss_object", "s3_object", "cos_object", "gcs_object"}:
         raise NotImplementedError(
-            "cloud object ingestion requires a configured storage provider "
-            "(OSS/S3/COS/GCS) and is not enabled in this backend yet"
+            "云对象存储（OSS/S3/COS/GCS）尚未启用。"
+            "当前支持：HuggingFace 远程数据集、本地路径、本地压缩包。"
+            "如需云存储接入，请联系管理员配置 storage provider。"
         )
 
     raise ValueError(f"Unsupported dataset source_kind: {spec.source_kind!r}")

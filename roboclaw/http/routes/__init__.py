@@ -42,7 +42,7 @@ def register_all_routes(
     register_setup_routes(app, service)
     register_device_routes(app, service)
     register_calibrate_routes(app, service)
-    register_dataset_routes(app, service)
+    register_dataset_routes(app, service, allow_anonymous_list=True)
     register_policy_routes(app, service)
     register_recovery_routes(app)
     register_network_routes(app, get_config)

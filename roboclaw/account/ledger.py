@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,14 +156,23 @@ class AccountLedger:
         self.path = path or Path.home() / ".roboclaw" / "account_ledger.json"
         self._lock = threading.Lock()
 
+    @contextmanager
+    def _locked(self):
+        if not self._lock.acquire(timeout=5):
+            raise RuntimeError("Timed out waiting for account ledger lock")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
     def wallet(self, username: str) -> Wallet:
         username = _clean_username(username)
-        with self._lock:
+        with self._locked():
             state = self._load()
             return self._wallet_from_state(state, username)
 
     def records(self, username: str = "", *, limit: int = 50) -> list[BillingRecord]:
-        with self._lock:
+        with self._locked():
             state = self._load()
             records = [_record_from_payload(item) for item in state.get("records", [])]
         if username:
@@ -170,7 +180,7 @@ class AccountLedger:
         return records[-max(limit, 0) :][::-1]
 
     def orders(self, username: str = "", *, limit: int = 50) -> list[PaymentOrder]:
-        with self._lock:
+        with self._locked():
             state = self._load()
             orders = [_order_from_payload(item) for item in state.get("paymentOrders", [])]
         if username:
@@ -196,7 +206,7 @@ class AccountLedger:
         provider = (provider or "mock").strip()
         if not provider:
             raise ValueError("provider is required")
-        with self._lock:
+        with self._locked():
             state = self._load()
             order_id = uuid4().hex
             order = PaymentOrder(
@@ -227,7 +237,7 @@ class AccountLedger:
         order_id = order_id.strip()
         if not order_id:
             raise ValueError("order_id is required")
-        with self._lock:
+        with self._locked():
             state = self._load()
             orders = state.setdefault("paymentOrders", [])
             for index, payload in enumerate(orders):
@@ -290,7 +300,7 @@ class AccountLedger:
         dataset_id = dataset_id.strip()
         if not dataset_id:
             raise ValueError("dataset_id is required")
-        with self._lock:
+        with self._locked():
             state = self._load()
             for payload in state.get("records", []):
                 record = _record_from_payload(payload)
@@ -335,7 +345,7 @@ class AccountLedger:
         if not dataset_id:
             raise ValueError("dataset_id is required")
         contributor_username = contributor_username.strip()
-        with self._lock:
+        with self._locked():
             state = self._load()
             for payload in state.get("datasetAccessGrants", []):
                 grant = _dataset_access_grant_from_payload(payload)
@@ -401,7 +411,7 @@ class AccountLedger:
         if amount_cents <= 0:
             raise ValueError("amount_cents must be positive")
         username = _clean_username(username)
-        with self._lock:
+        with self._locked():
             state = self._load()
             wallet = self._wallet_from_state(state, username)
             wallet = Wallet(
@@ -428,7 +438,7 @@ class AccountLedger:
         if amount_cents <= 0:
             raise ValueError("amount_cents must be positive")
         username = _clean_username(username)
-        with self._lock:
+        with self._locked():
             state = self._load()
             wallet = self._wallet_from_state(state, username)
             if wallet.available_cents < amount_cents:
@@ -465,7 +475,7 @@ class AccountLedger:
         if amount_cents <= 0:
             raise ValueError("amount_cents must be positive")
         username = _clean_username(username)
-        with self._lock:
+        with self._locked():
             state = self._load()
             wallet = self._wallet_from_state(state, username)
             if wallet.frozen_cents < amount_cents:
@@ -502,7 +512,7 @@ class AccountLedger:
         if amount_cents <= 0:
             raise ValueError("amount_cents must be positive")
         username = _clean_username(username)
-        with self._lock:
+        with self._locked():
             state = self._load()
             wallet = self._wallet_from_state(state, username)
             if wallet.frozen_cents < amount_cents:
@@ -542,7 +552,7 @@ class AccountLedger:
         job_id = job_id.strip()
         if not job_id:
             raise ValueError("job_id is required")
-        with self._lock:
+        with self._locked():
             state = self._load()
             outstanding = self._job_frozen_cents(state, username=username, job_id=job_id)
             if outstanding <= 0:
@@ -602,7 +612,7 @@ class AccountLedger:
         new_job_id = new_job_id.strip()
         if not old_job_id or not new_job_id:
             raise ValueError("old_job_id and new_job_id are required")
-        with self._lock:
+        with self._locked():
             state = self._load()
             records = state.setdefault("records", [])
             for index in range(len(records) - 1, -1, -1):
@@ -638,7 +648,7 @@ class AccountLedger:
         job_id = job_id.strip()
         if not job_id:
             raise ValueError("job_id is required")
-        with self._lock:
+        with self._locked():
             state = self._load()
             amount_cents = self._job_frozen_cents(state, username=username, job_id=job_id)
             if amount_cents <= 0:

@@ -36,6 +36,7 @@ export interface DatasetRef {
 
 export interface DatasetStorageUsage {
   username: string
+  role: string
   quotaBytes: number
   usedBytes: number
   availableBytes: number
@@ -49,8 +50,61 @@ export interface DatasetStorageUsage {
     totalBytes: number
     sourceKind: string
     sourceUri: string
+    storageMode: string
     canTrain: boolean
+    createdAt: string
+    ingestedAt: string
+    publicationStatus: string
+    privateRetentionDays: number | string
+    privateExpiresAt: string
   }>
+  policy: DataPoolPolicy
+}
+
+export interface DataPoolPolicy {
+  pendingRetentionDays: number
+  privateRetentionDays: number
+  billingAlertUsd: number
+  billingConfirmUsd: number
+  acceptedUploadExtensions: string[]
+  recommendedPackaging: string
+  privateRetentionByRole: {
+    free: number
+    contributor: number
+    team: number
+  }
+  publicRetention: string
+  quotas: {
+    free: number
+    contributor: number
+    team: number
+  }
+  user: {
+    username: string
+    role: string
+    quotaBytes: number
+    usedBytes: number
+    availableBytes: number
+  }
+}
+
+export interface DatasetStorageStatus {
+  provider: string
+  configured: boolean
+  endpoint: string
+  bucket: string
+  region: string
+  prefix: string
+  publicBaseUrl: string
+  missingFields: string[]
+  clientAvailable: boolean
+  layout: {
+    pending: string
+    approved: string
+    previews: string
+    redemption: string
+  }
+  policy: DataPoolPolicy
 }
 
 export interface DatasetImportJob {

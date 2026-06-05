@@ -7,7 +7,9 @@ from typing import Any, Callable
 
 import numpy as np
 
-from roboclaw.data.dataset_adapters import resolve_dataset_adapter
+def _resolve_dataset_adapter(dataset_path):
+    from roboclaw.data.dataset_adapters import resolve_dataset_adapter
+    return resolve_dataset_adapter(dataset_path)
 
 from .features import percentile
 from .propagation import (
@@ -129,7 +131,7 @@ def _merge_threshold_overrides(threshold_overrides: dict[str, float] | None = No
 
 def load_episode_data(dataset_path: Path, episode_index: int) -> dict[str, Any]:
     """Load one episode through the dataset adapter registry."""
-    return resolve_dataset_adapter(dataset_path).load_episode(episode_index)
+    return _resolve_dataset_adapter(dataset_path).load_episode(episode_index)
 
 
 from .visual_validators import validate_depth_assets, validate_visual_assets

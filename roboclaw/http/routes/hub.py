@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from roboclaw.embodied.service import EmbodiedService
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
 
 
 class HubPushRequest(BaseModel):
@@ -70,6 +78,15 @@ def register_hub_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/hub/datasets/pull")
     async def hub_datasets_pull(body: DatasetHubPullRequest) -> dict[str, Any]:
+        if not _env_flag("ROBOCLAW_ALLOW_LOCAL_REMOTE_DATASET_INGEST"):
+            raise HTTPException(
+                status_code=501,
+                detail=(
+                    "Hub dataset pull downloads to the local RoboClaw data directory and is "
+                    "disabled by default. Use the cloud data ingestion pipeline for Evo Studio, "
+                    "or set ROBOCLAW_ALLOW_LOCAL_REMOTE_DATASET_INGEST=1 for local development only."
+                ),
+            )
         return await _call(service.hub.pull_dataset, body)
 
     @app.post("/api/hub/policies/push")

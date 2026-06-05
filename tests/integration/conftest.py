@@ -160,6 +160,7 @@ def simulated_agent(tmp_path: Path):
         ROBOCLAW_HOME=str(roboclaw_home),
         ROBOCLAW_STUB="1",
         ROBOCLAW_STUB_LLM="tests.integration.stub_llm",
+        ROBOCLAW_DISABLE_CAMERA_SCAN="1",
         PYTHONIOENCODING="utf-8",
         PYTHONUTF8="1",
         NO_COLOR="1",
