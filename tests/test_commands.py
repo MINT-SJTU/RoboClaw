@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from roboclaw.cli.commands import app
 from roboclaw.config.schema import Config
 from roboclaw.providers.litellm_provider import LiteLLMProvider
-from roboclaw.providers.openai_codex_provider import _strip_model_prefix
+from roboclaw.providers.openai_codex_provider import _strip_model_prefix, normalize_codex_model
 from roboclaw.providers.registry import find_by_model
 
 
@@ -195,8 +195,14 @@ def test_litellm_provider_canonicalizes_github_copilot_hyphen_prefix():
 
 
 def test_openai_codex_strip_prefix_supports_hyphen_and_underscore():
-    assert _strip_model_prefix("openai-codex/gpt-5.1-codex") == "gpt-5.1-codex"
-    assert _strip_model_prefix("openai_codex/gpt-5.1-codex") == "gpt-5.1-codex"
+    assert _strip_model_prefix("openai-codex/gpt-5.5") == "gpt-5.5"
+    assert _strip_model_prefix("openai_codex/gpt-5.5") == "gpt-5.5"
+
+
+def test_openai_codex_normalizes_stale_and_non_codex_models():
+    assert normalize_codex_model("openai-codex/gpt-5.3-codex") == "openai-codex/gpt-5.5"
+    assert normalize_codex_model("gpt-5.5") == "openai-codex/gpt-5.5"
+    assert normalize_codex_model("anthropic/claude-opus-4-5") == "openai-codex/gpt-5.5"
 
 
 @pytest.fixture

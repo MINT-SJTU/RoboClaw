@@ -9,8 +9,37 @@ from typing import Any
 from roboclaw.agent.tools.base import Tool
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class ExecTool(Tool):
     """Tool to execute shell commands."""
+
+    _LOCAL_TRAINING_BLOCK_PATTERNS = [
+        r"\bgit\s+clone\b",
+        r"\bhuggingface-cli\s+download\b",
+        r"\bhf\s+download\b",
+        r"\b(snapshot_download|hf_hub_download|load_dataset)\s*\(",
+        r"\bkaggle\s+datasets?\s+download\b",
+        r"\bmodelscope\s+download\b",
+        r"\b(?:wget|curl)\b.*\b(?:-o|--output|--remote-name|--output-dir)\b",
+        r"\b(?:rclone|rsync)\b",
+        r"\baws\s+s3\s+(?:cp|sync)\b",
+        r"\b(?:ossutil|coscli|azcopy)\b",
+        r"\b(?:pip|pip3)\s+install\b",
+        r"\bpython(?:\d+(?:\.\d+)?)?\s+-m\s+pip\s+install\b",
+        r"\b(?:conda|mamba)\s+install\b",
+        r"\b(?:torchrun|accelerate|deepspeed)\b",
+        r"\bpython(?:\d+(?:\.\d+)?)?\s+[^;&|]*train[\w-]*\.py\b",
+        r"\bnvidia-smi\b",
+        r"\bnvcc\b",
+        r"\bCUDA_VISIBLE_DEVICES\b",
+        r"\bwhoami\s*&&\s*hostname\s*&&\s*pwd\s*&&\s*date\b",
+    ]
 
     def __init__(
         self,
@@ -47,7 +76,11 @@ class ExecTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Execute a shell command and return its output. Use with caution."
+        return (
+            "Execute a LOCAL RoboClaw backend shell command and return its output. "
+            "Do not use for SSH/cloud training backend probes, GPU/CUDA checks, or VLA/RL "
+            "training setup; use evo_studio_cloud_train instead."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -56,7 +89,10 @@ class ExecTool(Tool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute",
+                    "description": (
+                        "The local shell command to execute. This is not the SSH/cloud "
+                        "training machine."
+                    ),
                 },
                 "working_dir": {
                     "type": "string",
@@ -153,6 +189,18 @@ class ExecTool(Tool):
         if self.allow_patterns:
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
+
+        if not _env_flag("ROBOCLAW_ALLOW_AGENT_LOCAL_TRAINING"):
+            for pattern in self._LOCAL_TRAINING_BLOCK_PATTERNS:
+                if re.search(pattern, lower):
+                    return (
+                        "Error: local training, dependency installation, repository cloning, "
+                        "dataset/model ingestion, or local GPU/cloud-runtime probing is blocked "
+                        "for the RoboClaw agent by default. Use evo_studio_cloud_train for "
+                        "SSH/cloud backend checks and the cloud training/data-pool pipeline for "
+                        "training work, or set "
+                        "ROBOCLAW_ALLOW_AGENT_LOCAL_TRAINING=1 only for explicit local development."
+                    )
 
         from roboclaw.security.network import contains_internal_url
         if contains_internal_url(cmd):

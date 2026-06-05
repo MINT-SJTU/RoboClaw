@@ -34,9 +34,9 @@ class PolicyRegistry:
         """Instantiate the config registered for ``policy_type``."""
         config_cls = self._config_types.get(policy_type)
         if config_cls is None:
-            allowed = ", ".join(sorted(self.supported_types()))
             raise ValueError(
-                f"Unsupported policy_type '{policy_type}'. Expected one of: {allowed}."
+                f"Unknown policy type: {policy_type!r}. "
+                f"Available: {sorted(self._config_types.keys())}"
             )
         return config_cls()
 
@@ -46,4 +46,3 @@ class PolicyRegistry:
 
 
 policy_registry = PolicyRegistry()
-

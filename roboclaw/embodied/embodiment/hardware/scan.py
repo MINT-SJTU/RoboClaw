@@ -323,6 +323,8 @@ def restore_stderr(saved: int) -> None:
 
 def scan_cameras() -> list[VideoInterface]:
     """Scan cameras, return list of VideoInterface objects."""
+    if os.environ.get("ROBOCLAW_DISABLE_CAMERA_SCAN"):
+        return []
     try:
         import cv2
     except ImportError:
@@ -496,6 +498,7 @@ def _try_open_camera(cv2, index: int, dev: str, by_path: dict, by_id: dict) -> V
     cap = _open_camera_capture(cv2, index)
     try:
         if not cap.isOpened():
+            logger.warning("Hardware probe failed for camera {} at {}", index, dev)
             return None
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -525,6 +528,7 @@ def _try_open_camera_macos(cv2, metadata: dict[str, Any]) -> VideoInterface | No
     cap = _open_camera_capture(cv2, index)
     try:
         if not cap.isOpened():
+            logger.warning("Hardware probe failed for macOS camera {}", metadata)
             return None
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -647,6 +651,7 @@ def _capture_camera_frame(
     cap = _open_camera_capture(cv2, source)
     try:
         if not cap.isOpened():
+            logger.warning("Hardware probe failed for camera preview {}", source)
             return None
         # Skip initial frames — some cameras (e.g. RealSense) produce
         # garbage on the first few reads while the sensor initialises.

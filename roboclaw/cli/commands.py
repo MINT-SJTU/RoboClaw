@@ -1,13 +1,10 @@
 """CLI commands for roboclaw."""
 
 import asyncio
-from contextlib import contextmanager, nullcontext
 import os
-import select
 import signal
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -20,18 +17,27 @@ except (AttributeError, ValueError):
     pass
 
 import typer
-from prompt_toolkit import print_formatted_text
 from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import ANSI, HTML
+from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.application import run_in_terminal
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.table import Table
-from rich.text import Text
 
 from roboclaw import __logo__, __version__
+from roboclaw.cli import interactive as cli_interactive
+from roboclaw.cli.interactive import (
+    _ThinkingSpinner,
+    _flush_pending_tty_input,
+    _is_exit_command,
+    _new_cli_session_id,
+    _print_agent_response,
+    _print_cli_progress_line,
+    _print_interactive_line,
+    _print_session_exit_message,
+    _restore_terminal,
+)
+from roboclaw.cli.provider_auth import provider_app
 from roboclaw.config.paths import get_workspace_path
 from roboclaw.config.schema import Config
 from roboclaw.utils.helpers import sync_workspace_templates
@@ -43,8 +49,8 @@ app = typer.Typer(
 )
 web_app = typer.Typer(name="web", help="Web UI server commands.")
 
-console = Console()
-EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+console = cli_interactive.console
+_PROMPT_SESSION: PromptSession | None = None
 
 # Register sub-apps
 from roboclaw.cli.datasets import dataset_app
@@ -53,228 +59,38 @@ from roboclaw.cli.dev import dev_app
 app.add_typer(dev_app, name="dev", help="Developer utilities (reset workspace, etc.).")
 app.add_typer(dataset_app, name="dataset", help="Dataset collection and upload commands.")
 app.add_typer(web_app, name="web", help="Web UI server commands.")
-
-
-def _new_cli_session_id() -> str:
-    """Generate a fresh CLI session id for one agent invocation."""
-    return f"cli:{uuid.uuid4().hex[:12]}"
-
-
-def _print_session_exit_message(session_id: str, *, prefix: str = "Goodbye!") -> None:
-    """Show a consistent exit message with the resume command."""
-    console.print(f"\n{prefix}")
-    console.print(
-        "[dim]Resume this session:[/dim] "
-        f"[bold]roboclaw agent --session {session_id}[/bold]"
-    )
-
-# ---------------------------------------------------------------------------
-# CLI input: prompt_toolkit for editing, paste, history, and display
-# ---------------------------------------------------------------------------
-
-_PROMPT_SESSION: PromptSession | None = None
-_SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
-_tty_handoff_active = False
-_last_sigint_at = 0.0
-
-
-def _flush_pending_tty_input() -> None:
-    """Drop unread keypresses typed while the model was generating output."""
-    try:
-        fd = sys.stdin.fileno()
-        if not os.isatty(fd):
-            return
-    except Exception:
-        return
-
-    try:
-        import termios
-        termios.tcflush(fd, termios.TCIFLUSH)
-        return
-    except Exception:
-        pass
-
-    try:
-        while True:
-            ready, _, _ = select.select([fd], [], [], 0)
-            if not ready:
-                break
-            if not os.read(fd, 4096):
-                break
-    except Exception:
-        return
-
-
-def _restore_terminal() -> None:
-    """Restore terminal to its original state (echo, line buffering, etc.)."""
-    if _SAVED_TERM_ATTRS is None:
-        return
-    try:
-        import termios
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
-    except Exception:
-        pass
+app.add_typer(provider_app, name="provider")
 
 
 def _init_prompt_session() -> None:
     """Create the prompt_toolkit session with persistent file history."""
-    global _PROMPT_SESSION, _SAVED_TERM_ATTRS
-
-    # Save terminal state so we can restore it on exit
-    try:
-        import termios
-        _SAVED_TERM_ATTRS = termios.tcgetattr(sys.stdin.fileno())
-    except Exception:
-        pass
-
+    global _PROMPT_SESSION
     from roboclaw.config.paths import get_cli_history_path
 
     history_file = get_cli_history_path()
     history_file.parent.mkdir(parents=True, exist_ok=True)
-
     _PROMPT_SESSION = PromptSession(
         history=FileHistory(str(history_file)),
         enable_open_in_editor=False,
-        multiline=False,   # Enter submits (single line mode)
+        multiline=False,
     )
-
-
-def _make_console() -> Console:
-    return Console(file=sys.stdout)
-
-
-def _render_interactive_ansi(render_fn) -> str:
-    """Render Rich output to ANSI so prompt_toolkit can print it safely."""
-    ansi_console = Console(
-        force_terminal=True,
-        color_system=console.color_system or "standard",
-        width=console.width,
-    )
-    with ansi_console.capture() as capture:
-        render_fn(ansi_console)
-    return capture.get()
-
-
-def _print_agent_response(response: str, render_markdown: bool) -> None:
-    """Render assistant response with consistent terminal styling."""
-    console = _make_console()
-    content = response or ""
-    body = Markdown(content) if render_markdown else Text(content)
-    console.print()
-    console.print(f"[cyan]{__logo__} RoboClaw[/cyan]")
-    console.print(body)
-    console.print()
-
-
-async def _print_interactive_line(text: str) -> None:
-    """Print async interactive updates with prompt_toolkit-safe Rich styling."""
-    def _write() -> None:
-        ansi = _render_interactive_ansi(
-            lambda c: c.print(f"  [dim]↳ {text}[/dim]")
-        )
-        print_formatted_text(ANSI(ansi), end="")
-
-    await run_in_terminal(_write)
-
-
-async def _print_interactive_response(response: str, render_markdown: bool) -> None:
-    """Print async interactive replies with prompt_toolkit-safe Rich styling."""
-    def _write() -> None:
-        content = response or ""
-        ansi = _render_interactive_ansi(
-            lambda c: (
-                c.print(),
-                c.print(f"[cyan]{__logo__} RoboClaw[/cyan]"),
-                c.print(Markdown(content) if render_markdown else Text(content)),
-                c.print(),
-            )
-        )
-        print_formatted_text(ANSI(ansi), end="")
-
-    await run_in_terminal(_write)
-
-
-class _ThinkingSpinner:
-    """Spinner wrapper with pause support for clean progress output."""
-
-    def __init__(self, enabled: bool):
-        self._spinner = console.status(
-            "[dim]RoboClaw is thinking...[/dim]", spinner="dots"
-        ) if enabled else None
-        self._active = False
-        self._suspended = False
-
-    def __enter__(self):
-        if self._spinner:
-            self._spinner.start()
-        self._active = True
-        return self
-
-    def __exit__(self, *exc):
-        self._active = False
-        if self._spinner:
-            self._spinner.stop()
-        return False
-
-    def suspend(self) -> None:
-        """Stop the spinner until resume() is called."""
-        self._suspended = True
-        if self._spinner and self._active:
-            self._spinner.stop()
-
-    def resume(self) -> None:
-        """Restart the spinner after a suspend()."""
-        self._suspended = False
-        if self._spinner and self._active:
-            self._spinner.start()
-
-    @contextmanager
-    def pause(self):
-        """Temporarily stop spinner while printing progress."""
-        if self._spinner and self._active:
-            self._spinner.stop()
-        try:
-            yield
-        finally:
-            if self._spinner and self._active and not self._suspended:
-                self._spinner.start()
-
-
-def _print_cli_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:
-    """Print a CLI progress line, pausing the spinner if needed."""
-    with thinking.pause() if thinking else nullcontext():
-        console.print(f"  [dim]↳ {text}[/dim]")
-
-
-async def _print_interactive_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:
-    """Print an interactive progress line, pausing the spinner if needed."""
-    with thinking.pause() if thinking else nullcontext():
-        await _print_interactive_line(text)
-
-
-def _is_exit_command(command: str) -> bool:
-    """Return True when input should end interactive chat."""
-    return command.lower() in EXIT_COMMANDS
 
 
 async def _read_interactive_input_async() -> str:
-    """Read user input using prompt_toolkit (handles paste, history, display).
-
-    prompt_toolkit natively handles:
-    - Multiline paste (bracketed paste mode)
-    - History navigation (up/down arrows)
-    - Clean display (no ghost characters or artifacts)
-    """
+    """Read user input using prompt_toolkit."""
     if _PROMPT_SESSION is None:
         raise RuntimeError("Call _init_prompt_session() first")
     try:
         with patch_stdout():
-            return await _PROMPT_SESSION.prompt_async(
-                HTML("<b fg='ansiblue'>You:</b> "),
-            )
+            return await _PROMPT_SESSION.prompt_async(HTML("<b fg='ansiblue'>You:</b> "))
     except EOFError as exc:
         raise KeyboardInterrupt from exc
 
+
+async def _print_interactive_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:
+    """Print an interactive progress line, pausing the spinner if needed."""
+    with thinking.pause() if thinking else cli_interactive.nullcontext():
+        await _print_interactive_line(text)
 
 
 def version_callback(value: bool):
@@ -695,17 +511,16 @@ def agent(
     # TTY handoff for interactive embodied commands (calibrate, teleoperate, record)
     async def _embodied_tty_handoff(*, start: bool, label: str) -> None:
         nonlocal _thinking
-        global _tty_handoff_active, _last_sigint_at
         if start:
-            _tty_handoff_active = True
-            _last_sigint_at = 0.0
+            cli_interactive._tty_handoff_active = True
+            cli_interactive._last_sigint_at = 0.0
             if _thinking:
                 _thinking.suspend()
             _flush_pending_tty_input()
             console.print(f"\n[dim]Executing {label}...[/dim]")
         else:
-            _tty_handoff_active = False
-            _last_sigint_at = 0.0
+            cli_interactive._tty_handoff_active = False
+            cli_interactive._last_sigint_at = 0.0
             _flush_pending_tty_input()
             console.print(f"[dim]{label} finished.[/dim]\n")
             if _thinking:
@@ -770,17 +585,16 @@ def agent(
             cli_channel, cli_chat_id = "cli", resolved_session_id
 
         def _handle_signal(signum, frame):
-            global _last_sigint_at
-            if signum == signal.SIGINT and _tty_handoff_active:
+            if signum == signal.SIGINT and cli_interactive._tty_handoff_active:
                 now = time.monotonic()
-                if now - _last_sigint_at <= 2:
+                if now - cli_interactive._last_sigint_at <= 2:
                     _restore_terminal()
                     _print_session_exit_message(
                         resolved_session_id,
                         prefix="Received double Ctrl+C during terminal handoff, goodbye!",
                     )
                     sys.exit(130)
-                _last_sigint_at = now
+                cli_interactive._last_sigint_at = now
                 return
             sig_name = signal.Signals(signum).name
             _restore_terminal()
@@ -1093,105 +907,6 @@ def status():
             else:
                 has_key = bool(p.api_key)
                 console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
-
-
-# ============================================================================
-# OAuth Login
-# ============================================================================
-
-provider_app = typer.Typer(help="Manage providers")
-app.add_typer(provider_app, name="provider")
-
-
-_LOGIN_HANDLERS: dict[str, callable] = {}
-
-
-def _register_login(name: str):
-    def decorator(fn):
-        _LOGIN_HANDLERS[name] = fn
-        return fn
-    return decorator
-
-
-def _oauth_print(s: str) -> None:
-    """Print with Rich, but use plain print for URLs to avoid wrapping."""
-    if s.startswith("http://") or s.startswith("https://"):
-        print(s)
-    else:
-        console.print(s)
-
-
-@provider_app.command("login")
-def provider_login(
-    provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-authentication even if already logged in"),
-):
-    """Authenticate with an OAuth provider."""
-    from roboclaw.providers.registry import PROVIDERS
-
-    key = provider.replace("-", "_")
-    spec = next((s for s in PROVIDERS if s.name == key and s.is_oauth), None)
-    if not spec:
-        names = ", ".join(s.name.replace("_", "-") for s in PROVIDERS if s.is_oauth)
-        console.print(f"[red]Unknown OAuth provider: {provider}[/red]  Supported: {names}")
-        raise typer.Exit(1)
-
-    handler = _LOGIN_HANDLERS.get(spec.name)
-    if not handler:
-        console.print(f"[red]Login not implemented for {spec.label}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
-    handler(force=force)
-
-
-@_register_login("openai_codex")
-def _login_openai_codex(force: bool = False) -> None:
-    try:
-        from oauth_cli_kit import get_token, login_oauth_interactive
-    except ImportError:
-        console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
-
-    if not force:
-        try:
-            token = get_token()
-        except RuntimeError:
-            token = None
-        if token and token.access:
-            console.print(f"[green]✓ Already authenticated[/green]  [dim]{token.account_id}[/dim]")
-            console.print("[dim]Use --force to re-authenticate[/dim]")
-            return
-
-    console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-    token = login_oauth_interactive(
-        print_fn=_oauth_print,
-        prompt_fn=lambda s: typer.prompt(s),
-        originator="roboclaw",
-    )
-    if not (token and token.access):
-        console.print("[red]✗ Authentication failed[/red]")
-        raise typer.Exit(1)
-    console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
-
-
-@_register_login("github_copilot")
-def _login_github_copilot(force: bool = False) -> None:
-    # GitHub Copilot uses device flow via LiteLLM — no local token cache to check
-    import asyncio
-
-    console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
-
-    async def _trigger():
-        from litellm import acompletion
-        await acompletion(model="github_copilot/gpt-4o", messages=[{"role": "user", "content": "hi"}], max_tokens=1)
-
-    try:
-        asyncio.run(_trigger())
-        console.print("[green]✓ Authenticated with GitHub Copilot[/green]")
-    except Exception as e:
-        console.print(f"[red]Authentication error: {e}[/red]")
-        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
