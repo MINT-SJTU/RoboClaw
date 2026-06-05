@@ -84,23 +84,6 @@ class TrainSession:
             for entry in list_policy_entries(root)
         ]
 
-    async def train(
-        self,
-        manifest: Manifest,
-        kwargs: dict[str, Any],
-        tty_handoff: Any,
-    ) -> str:
-        status = await self.start_job(
-            manifest,
-            TrainingStartSpec(
-                dataset_name=kwargs.get("dataset_name", "default"),
-                policy_type=kwargs.get("policy_type", "act"),
-                steps=kwargs.get("steps", 100_000),
-                device=kwargs.get("device", "cuda"),
-            ),
-        )
-        return status.message
-
     async def stop_job(
         self,
         manifest: Manifest,

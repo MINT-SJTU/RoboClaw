@@ -22,12 +22,15 @@ from roboclaw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileT
 from roboclaw.agent.tools.message import MessageTool
 from roboclaw.agent.tools.registry import ToolRegistry
 from roboclaw.agent.tools.shell import ExecTool
+from roboclaw.agent.tools.cloud_training import EvoStudioCloudTrainTool
+from roboclaw.agent.tools.evo_studio_agent import EvoStudioAgentConsultTool
 from roboclaw.agent.tools.spawn import SpawnTool
 from roboclaw.agent.tools.web import WebFetchTool, WebSearchTool
 from roboclaw.bus.events import InboundMessage, OutboundMessage
 from roboclaw.bus.queue import MessageBus
-from roboclaw.providers.base import LLMProvider
+from roboclaw.providers.base import LLMProvider, ToolCallRequest
 from roboclaw.session.manager import Session, SessionManager
+from roboclaw.training.embodied_intent import classify_embodied_intent
 
 if TYPE_CHECKING:
     from roboclaw.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
@@ -47,6 +50,57 @@ class AgentLoop:
     """
 
     _TOOL_RESULT_MAX_CHARS = 16_000
+    _CLOUD_PROBE_EXEC_PATTERNS = LLMProvider._CLOUD_PROBE_EXEC_PATTERNS
+    _EVO_STUDIO_AUTO_DELEGATE_DOMAIN = [
+        "openvla",
+        "libero",
+        "rlinf",
+        "vla",
+        "starvla",
+        "xlerobot",
+        "lerobot",
+        "ros2",
+        "ros 2",
+        "kiss-icp",
+        "slam",
+        "lidar",
+        "autodl",
+        "seetacloud",
+        "ssh 后端",
+        "ssh后端",
+        "云训练",
+        "云端训练",
+        "baseline",
+        "checkpoint",
+    ]
+    _EVO_STUDIO_AUTO_DELEGATE_ACTION = [
+        "复现",
+        "训练",
+        "评测",
+        "跑",
+        "运行",
+        "启动",
+        "配置",
+        "调测",
+        "采集",
+        "上传",
+        "部署",
+        "bringup",
+        "launch",
+        "smoke",
+        "eval",
+        "evaluate",
+        "train",
+        "run",
+    ]
+    _EVO_STUDIO_EXPLAIN_ONLY_PREFIX = (
+        "为什么",
+        "为啥",
+        "什么意思",
+        "解释",
+        "说明",
+        "什么是",
+    )
 
     def __init__(
         self,
@@ -134,6 +188,12 @@ class AgentLoop:
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        if self.embodied_service is not None:
+            self.tools.register(EvoStudioAgentConsultTool(
+                embodied_service=self.embodied_service,
+                llm_provider=self.provider,
+            ))
+            self.tools.register(EvoStudioCloudTrainTool(embodied_service=self.embodied_service))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
         if not self.restrict_to_workspace:
@@ -158,8 +218,8 @@ class AgentLoop:
             if self._mcp_stack:
                 try:
                     await self._mcp_stack.aclose()
-                except Exception:
-                    pass
+                except Exception as close_exc:
+                    logger.warning("Failed to close MCP stack after connection failure: {}", close_exc)
                 self._mcp_stack = None
         finally:
             self._mcp_connecting = False
@@ -189,6 +249,149 @@ class AgentLoop:
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
+    @classmethod
+    def _is_cloud_probe_exec(cls, tool_call: ToolCallRequest) -> bool:
+        if tool_call.name != "exec":
+            return False
+        command = str(tool_call.arguments.get("command") or "").strip().lower()
+        return any(re.search(pattern, command) for pattern in cls._CLOUD_PROBE_EXEC_PATTERNS)
+
+    @classmethod
+    def _rewrite_cloud_probe_tool_calls(cls, tool_calls: list[ToolCallRequest]) -> list[ToolCallRequest]:
+        """Route cloud/SSH/GPU probes away from local exec before progress is shown."""
+        rewritten: list[ToolCallRequest] = []
+        cloud_probe_inserted = False
+        for tool_call in tool_calls:
+            if not cls._is_cloud_probe_exec(tool_call):
+                if cloud_probe_inserted and tool_call.name == "exec":
+                    continue
+                rewritten.append(tool_call)
+                continue
+            if cloud_probe_inserted:
+                continue
+            rewritten.append(ToolCallRequest(
+                id=tool_call.id,
+                name="evo_studio_cloud_train",
+                arguments={
+                    "action": "backend_probe",
+                    "provider": os.environ.get("ROBOCLAW_EVO_TRAIN_PROVIDER", "").strip(),
+                    "username": os.environ.get("ROBOCLAW_EVO_TRAIN_USERNAME", "").strip(),
+                },
+            ))
+            cloud_probe_inserted = True
+        return rewritten
+
+    @classmethod
+    def _should_auto_delegate_evo_studio(cls, content: str) -> bool:
+        intent = classify_embodied_intent(content)
+        if intent.should_delegate:
+            return True
+        text = (content or "").strip().lower()
+        if not text or text.startswith(cls._EVO_STUDIO_EXPLAIN_ONLY_PREFIX):
+            return False
+        return any(marker in text for marker in cls._EVO_STUDIO_AUTO_DELEGATE_DOMAIN) and any(
+            marker in text for marker in cls._EVO_STUDIO_AUTO_DELEGATE_ACTION
+        )
+
+    @staticmethod
+    def _infer_evo_studio_context(content: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        text = (content or "").lower()
+        intent = classify_embodied_intent(content, metadata)
+        context: dict[str, Any] = {}
+        username = str(metadata.get("username") or metadata.get("user") or "").strip()
+        if username:
+            context["username"] = username
+        if "ssh" in text:
+            context["backend"] = "ssh"
+        context["embodiedIntent"] = intent.to_dict()
+        if intent.workflow:
+            context["workflow"] = intent.workflow
+        if intent.params:
+            context["params"] = dict(intent.params)
+        return context
+
+    async def _auto_delegate_evo_studio(self, msg: InboundMessage) -> tuple[str, dict[str, Any]]:
+        tool = self.tools.get("evo_studio_agent_consult")
+        if tool is None:
+            return "Evo Studio 后端总控工具未注册，暂时不能自动接管这个训练任务。", {}
+        context = self._infer_evo_studio_context(msg.content, msg.metadata or {})
+        args = {
+            "task": msg.content,
+            "mode": "execute",
+            "username": str(context.get("username") or ""),
+            "provider": "ssh" if context.get("backend") == "ssh" else "",
+            "workflow": str(context.get("workflow") or ""),
+            "context": context,
+            "automationMode": "full_auto",
+            "automationPolicy": {
+                "mode": "full_auto",
+                "autoRetrySameRuntime": True,
+                "allowAgentRepairSameRuntime": True,
+                "paidStartRequiresConfirmation": False,
+            },
+        }
+        logger.info("Auto-delegating Evo Studio request via evo_studio_agent_consult")
+        result = await tool.execute(**args)
+        payload = self._parse_evo_studio_consult_payload(result)
+        return self._format_evo_studio_consult_result(result), payload
+
+    @staticmethod
+    def _parse_evo_studio_consult_payload(result: str | list) -> dict[str, Any]:
+        if not isinstance(result, str):
+            return {}
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _format_evo_studio_consult_result(result: str | list) -> str:
+        if not isinstance(result, str):
+            return str(result)
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return result
+        runtime = payload.get("runtimeMatch") if isinstance(payload.get("runtimeMatch"), dict) else {}
+        bridge = payload.get("bridge") if isinstance(payload.get("bridge"), dict) else {}
+        config = payload.get("configuration") if isinstance(payload.get("configuration"), dict) else {}
+        actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+        lines = ["已由 Evo Studio 后端总控接管这个训练请求。"]
+        if payload.get("runtimeMode"):
+            lines.append(f"运行模式：{payload.get('runtimeMode')}")
+        elif bridge.get("deploymentMode"):
+            lines.append(f"运行模式：{bridge.get('deploymentMode')}")
+        if bridge.get("enabled") is not None:
+            lines.append(f"EVO_Train bridge：{'已连接' if bridge.get('enabled') else '未连接'}")
+        if config.get("ready") is not None:
+            lines.append(f"后端配置：{'已就绪' if config.get('ready') else '未就绪'}")
+        if runtime.get("skipped"):
+            lines.append("资源匹配：已有 SSH 实例模式，已跳过云厂商 SKU 匹配。")
+        elif runtime:
+            lines.append(f"资源匹配：{'可启动' if runtime.get('readyToStart') else '不可启动'}")
+        if actions:
+            lines.append("已执行检查：" + " / ".join(str(item) for item in actions))
+        if payload.get("capabilityRoute") and payload.get("capabilityRoute") != "cloud_training":
+            lines.append(f"能力路由：{payload.get('capabilityRoute')}")
+            lines.append(str(payload.get("plannerMessage") or "该任务不会被误交给云训练。"))
+            lines.append(f"下一步：{payload.get('nextAction') or '接入对应执行器'}")
+            return "\n".join(lines)
+        if payload.get("started") or (isinstance(payload.get("start"), dict) and payload["start"].get("started")):
+            start = payload.get("start") if isinstance(payload.get("start"), dict) else {}
+            job_id = start.get("job_id") or start.get("jobId")
+            if job_id:
+                lines.append(f"任务已提交：{job_id}")
+            else:
+                lines.append("任务已提交，后端总控会继续观察并自动处理同实例内的可修复问题。")
+        elif payload.get("readyForConfirmation"):
+            lines.append("下一步：后端已准备好；自动模式会在策略允许时直接启动，需要新增费用、换机器或访问私有资源时才会停下确认。")
+        else:
+            reason = runtime.get("error") or payload.get("plannerMessage") or payload.get("nextAction") or "计划还没达到可确认启动状态。"
+            lines.append(f"当前还不能启动：{reason}")
+        lines.append("我不会要求你在聊天里粘贴 SSH 密码或 key；这些应由后端部署配置管理。")
+        return "\n".join(lines)
+
     async def _run_agent_loop(
         self,
         initial_messages: list[dict],
@@ -212,6 +415,7 @@ class AgentLoop:
             )
 
             if response.has_tool_calls:
+                response.tool_calls = self._rewrite_cloud_probe_tool_calls(response.tool_calls)
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
@@ -294,8 +498,10 @@ class AgentLoop:
         for t in tasks:
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as exc:
+                logger.warning("Stopped task raised while cancelling session {}: {}", msg.session_key, exc)
         sub_cancelled = await self.subagents.cancel_by_session(msg.session_key)
         total = cancelled + sub_cancelled
         content = f"Stopped {total} task(s)." if total else "No active task to stop."
@@ -419,6 +625,20 @@ class AgentLoop:
             ]
             return OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines),
+            )
+        if self._should_auto_delegate_evo_studio(msg.content):
+            content, payload = await self._auto_delegate_evo_studio(msg)
+            session.messages.append({"role": "user", "content": msg.content})
+            session.messages.append({"role": "assistant", "content": content})
+            self.sessions.save(session)
+            metadata = dict(msg.metadata or {})
+            if payload:
+                metadata["evoStudioAgentConsult"] = payload
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=content,
+                metadata=metadata,
             )
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
