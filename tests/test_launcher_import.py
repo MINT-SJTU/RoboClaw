@@ -17,6 +17,16 @@ def test_launcher_main_help() -> None:
 
     assert result.returncode == 0
     assert "--dataset_path" in result.stdout
+    assert "--suite" in result.stdout
+
+
+def test_launcher_suite_alias_resolves_config_name() -> None:
+    from roboclaw_vla.rl.launcher import _resolve_config_name
+
+    config_name, remaining = _resolve_config_name(["--suite=libero_10", "--dataset_path", "/data"])
+
+    assert config_name == "libero_10_grpo_roboclaw"
+    assert remaining == ["--dataset_path", "/data"]
 
 
 def test_adapters_grpo_advantage_shape() -> None:
