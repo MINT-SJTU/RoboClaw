@@ -281,6 +281,28 @@ class LiteLLMProvider(LLMProvider):
             response = await acompletion(**kwargs)
             return self._parse_response(response)
         except Exception as e:
+            if tools and self._is_tool_payload_rejected_error(str(e)):
+                fallback = dict(kwargs)
+                fallback.pop("tools", None)
+                fallback.pop("tool_choice", None)
+                fallback["messages"] = self._text_tool_protocol_messages(
+                    messages,
+                    tools,
+                    tool_choice=tool_choice,
+                )
+                try:
+                    parsed = self._parse_response(await acompletion(**fallback))
+                    content, text_tool_calls = self._parse_text_tool_protocol(parsed.content)
+                    if text_tool_calls:
+                        parsed.content = content
+                        parsed.tool_calls = text_tool_calls
+                        parsed.finish_reason = "tool_calls"
+                    return parsed
+                except Exception as fallback_error:
+                    return LLMResponse(
+                        content=f"Error calling LLM: {str(fallback_error)}",
+                        finish_reason="error",
+                    )
             # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",

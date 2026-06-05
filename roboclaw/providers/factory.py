@@ -30,8 +30,8 @@ def build_provider(config: Config) -> LLMProvider:
     provider_config = config.get_provider(model)
 
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
-        from roboclaw.providers.openai_codex_provider import OpenAICodexProvider
-        provider = OpenAICodexProvider(default_model=model)
+        from roboclaw.providers.openai_codex_provider import OpenAICodexProvider, normalize_codex_model
+        provider = OpenAICodexProvider(default_model=normalize_codex_model(model))
     elif provider_name == "custom":
         if not provider_config or not provider_config.api_base:
             raise ProviderConfigurationError(
