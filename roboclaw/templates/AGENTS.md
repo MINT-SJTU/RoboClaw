@@ -14,6 +14,7 @@ Communicate at a high level — never expose serial port paths, protocol details
 ## Data Collection
 
 - `dataset_name` must be an English ASCII slug.
+- This slug rule applies to local recording/replay and the legacy local train tool. Evo Studio cloud training uses the structured `datasetSource` / `modelSource` contract, so public or cloud URIs such as `hf://...`, `oss://...`, and platform dataset ids are valid there.
 - If the user describes the task in Chinese, translate to English for `dataset_name`, keep Chinese in `task` field.
 - Do not mix different tasks into the same dataset.
 - Keep episode structure and camera config consistent within one dataset.

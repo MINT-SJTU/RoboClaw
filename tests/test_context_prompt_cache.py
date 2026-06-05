@@ -71,3 +71,31 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_system_prompt_includes_connected_cloud_training_context(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ROBOCLAW_EVO_TRAIN_HOST", "127.0.0.1")
+    monkeypatch.setenv("ROBOCLAW_EVO_TRAIN_PORT", "9000")
+    monkeypatch.setenv("ROBOCLAW_EVO_TRAIN_PROVIDER", "autodl")
+    monkeypatch.delenv("ROBOCLAW_ALLOW_AGENT_LOCAL_TRAINING", raising=False)
+
+    builder = ContextBuilder(_make_workspace(tmp_path))
+    prompt = builder.build_system_prompt()
+
+    assert "Cloud training bridge: connected via EVO_Train TCP" in prompt
+    assert "autodl" in prompt
+    assert "do not ask the user for AutoDL, SeetaCloud, SSH, or cloud host details" in prompt
+    assert "legacy local/minimal interface" in prompt
+    assert "params.datasetSource/modelSource" in prompt
+    assert "hf://HuggingFaceVLA/libero" in prompt
+    assert "Local training" in prompt
+
+
+def test_system_prompt_marks_cloud_training_disconnected_without_secrets(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("ROBOCLAW_EVO_TRAIN_HOST", raising=False)
+
+    builder = ContextBuilder(_make_workspace(tmp_path))
+    prompt = builder.build_system_prompt()
+
+    assert "Cloud training bridge: not connected" in prompt
+    assert "ROBOCLAW_EVO_TRAIN_HOST" not in prompt
