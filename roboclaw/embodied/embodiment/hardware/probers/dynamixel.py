@@ -1,6 +1,8 @@
 """Dynamixel (XL430 / XL330) port prober."""
 from __future__ import annotations
 
+import logging
+
 from roboclaw.embodied.embodiment.hardware.probers import register_prober
 
 DEFAULT_BAUDRATE = 1_000_000
@@ -22,7 +24,10 @@ class DynamixelProber:
         try:
             if not handler.openPort():
                 return []
-        except OSError:
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "Hardware probe failed for %s: %s", __name__, exc
+            )
             return []
         try:
             handler.setBaudRate(baudrate)

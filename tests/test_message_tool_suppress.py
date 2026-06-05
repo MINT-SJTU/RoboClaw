@@ -115,6 +115,46 @@ class TestMessageToolSuppressLogic:
             ('read_file("foo.txt")', True),
         ]
 
+    async def test_cloud_probe_exec_tool_calls_are_rewritten_before_progress(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOCLAW_EVO_TRAIN_PROVIDER", "autodl")
+        monkeypatch.setenv("ROBOCLAW_EVO_TRAIN_USERNAME", "pearl")
+        loop = _make_loop(tmp_path)
+        calls = iter([
+            LLMResponse(
+                content="Checking the SSH backend.",
+                tool_calls=[
+                    ToolCallRequest(id="call1", name="exec", arguments={"command": "whoami && hostname && pwd && date"}),
+                    ToolCallRequest(id="call2", name="exec", arguments={"command": "nvidia-smi --query-gpu=name"}),
+                    ToolCallRequest(id="call3", name="exec", arguments={"command": "python3 --version"}),
+                ],
+            ),
+            LLMResponse(content="Backend checked.", tool_calls=[]),
+        ])
+        loop.provider.chat_with_retry = AsyncMock(side_effect=lambda *a, **kw: next(calls))
+        loop.tools.get_definitions = MagicMock(return_value=[])
+        loop.tools.execute = AsyncMock(return_value='{"bridge":{"configurationReady":true}}')
+
+        progress: list[tuple[str, bool]] = []
+
+        async def on_progress(content: str, *, tool_hint: bool = False) -> None:
+            progress.append((content, tool_hint))
+
+        final_content, tools_used, messages = await loop._run_agent_loop([], on_progress=on_progress)
+
+        assert final_content == "Backend checked."
+        assert tools_used == ["evo_studio_cloud_train"]
+        assert progress == [
+            ("Checking the SSH backend.", False),
+            ('evo_studio_cloud_train("backend_probe")', True),
+        ]
+        loop.tools.execute.assert_awaited_once_with(
+            "evo_studio_cloud_train",
+            {"action": "backend_probe", "provider": "autodl", "username": "pearl"},
+        )
+        assistant_tool_calls = messages[0]["tool_calls"]
+        assert len(assistant_tool_calls) == 1
+        assert assistant_tool_calls[0]["function"]["name"] == "evo_studio_cloud_train"
+
 
 class TestMessageToolTurnTracking:
 

@@ -7,6 +7,7 @@ emits events when faults appear or resolve.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import stat
 import time
@@ -150,7 +151,10 @@ def get_missing_arm_motors(arm: ArmBinding) -> list[str]:
     try:
         if not stat.S_ISCHR(os.stat(arm.port).st_mode):
             return []
-    except OSError:
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "Hardware probe failed for %s: %s", __name__, exc
+        )
         return []
 
     runtime_spec = get_runtime_spec(arm.arm_type)

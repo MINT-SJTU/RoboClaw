@@ -34,5 +34,5 @@ def test_policy_registry_returns_registered_builtin_policy() -> None:
 
 
 def test_policy_registry_raises_for_unknown_policy() -> None:
-    with pytest.raises(ValueError, match="Unsupported policy_type 'unknown'"):
+    with pytest.raises(ValueError, match="Unknown policy type: 'unknown'.*Available"):
         policy_registry.get("unknown")

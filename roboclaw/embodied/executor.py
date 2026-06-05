@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import sys
 from collections import deque
 from pathlib import Path
 from uuid import uuid4
+
+_log = logging.getLogger(__name__)
 
 
 def _utf8_env() -> dict[str, str]:
@@ -38,8 +41,8 @@ def _inject_hf_env(env: dict[str, str]) -> None:
         if hf.proxy:
             env.setdefault("HTTPS_PROXY", hf.proxy)
             env.setdefault("HTTP_PROXY", hf.proxy)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("Failed to inject HuggingFace environment for subprocess: %s", exc)
 
 
 class SubprocessExecutor:
@@ -249,11 +252,21 @@ class SubprocessExecutor:
             return False
         except PermissionError:
             return True
+        try:
+            if os.getsid(pid) != pid:
+                return False
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
         stat_path = Path(f"/proc/{pid}/stat")
         try:
             state = stat_path.read_text(encoding="utf-8", errors="replace").split()[2]
-        except (FileNotFoundError, IndexError, OSError):
-            return True
+        except FileNotFoundError:
+            return False
+        except (IndexError, OSError) as exc:
+            _log.warning("Unable to read process state for pid %s; treating job as stopped: %s", pid, exc)
+            return False
         if state == "Z":
             return False
         return True
