@@ -29,7 +29,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install .[dev]
+        pip install -e ".[dev]" pytest pytest-asyncio pexpect || pip install -e . pytest pytest-asyncio pexpect
 
     - name: Run tests
       run: python -m pytest tests/ -v

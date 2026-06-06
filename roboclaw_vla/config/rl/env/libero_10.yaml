@@ -1,0 +1,23 @@
+# LIBERO-10 environment group for RLinf-style embodied RL configs.
+
+benchmark: libero
+suite: libero_10
+task_suite_name: libero_10
+total_num_envs: 16
+max_episode_steps: 600
+num_parallel_envs: 1
+seed: 0
+use_init_states: true
+camera_names:
+  - agentview
+  - robot0_eye_in_hand
+observation_modalities:
+  - rgb
+  - proprio
+reward_type: sparse
+terminate_on_success: true
+
+eval:
+  total_num_envs: 1
+  auto_reset: true
+  is_eval: true

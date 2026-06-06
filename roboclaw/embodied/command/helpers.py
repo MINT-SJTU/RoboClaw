@@ -81,6 +81,48 @@ def policy_path(manifest: Any, name: str) -> Path:
     return get_roboclaw_home() / "workspace" / "embodied" / "policies" / name
 
 
+def resolve_policy_checkpoint(policy_dir: Path) -> Path | None:
+    """Resolve the best available checkpoint under *policy_dir*.
+
+    Preference order:
+    1. ``checkpoints/last/pretrained_model``
+    2. newest numbered checkpoint such as ``checkpoints/000020/pretrained_model``
+    3. ``pretrained_model`` directly under the policy dir
+    4. HuggingFace snapshot layout with safetensors directly in the policy dir
+    """
+    for candidate in (
+        policy_dir / "checkpoints" / "last" / "pretrained_model",
+        _latest_numbered_checkpoint(policy_dir),
+        policy_dir / "pretrained_model",
+    ):
+        if candidate is not None and candidate.is_dir():
+            return candidate
+    if any(policy_dir.glob("*.safetensors")):
+        return policy_dir
+    return None
+
+
+def _latest_numbered_checkpoint(policy_dir: Path) -> Path | None:
+    checkpoints_dir = policy_dir / "checkpoints"
+    if not checkpoints_dir.is_dir():
+        return None
+
+    numbered: list[tuple[int, str, Path]] = []
+    for entry in checkpoints_dir.iterdir():
+        if not entry.is_dir() or not entry.name.isdigit():
+            continue
+        candidate = entry / "pretrained_model"
+        if not candidate.is_dir():
+            continue
+        numbered.append((int(entry.name), entry.name, candidate))
+
+    if not numbered:
+        return None
+
+    numbered.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return numbered[0][2]
+
+
 def logs_dir() -> Path:
     """Return the embodied jobs log directory."""
     from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home

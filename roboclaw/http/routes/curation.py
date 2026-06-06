@@ -45,6 +45,7 @@ _catalog = DatasetCatalog(root_resolver=lambda: datasets_root())
 
 class QualityRunRequest(BaseModel):
     dataset: str
+    username: str = ""
     selected_validators: list[str]
     episode_indices: list[int] | None = None
     threshold_overrides: dict[str, float] | None = None
@@ -234,6 +235,7 @@ def register_curation_routes(app: FastAPI) -> None:
             body.selected_validators,
             body.episode_indices,
             body.threshold_overrides,
+            body.username,
         )
 
     @app.post("/api/curation/quality-pause")

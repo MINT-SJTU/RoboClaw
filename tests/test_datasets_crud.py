@@ -127,6 +127,17 @@ class TestDatasetCatalogLocalListing:
 
         assert set(result[0]["stats"]["features"]) == {"observation.image", "action", "next.reward"}
 
+    def test_total_bytes_reported(self, tmp_path):
+        _create_dataset(tmp_path, "sized_ds")
+        payload_path = tmp_path / "sized_ds" / "data" / "chunk-000" / "episode_000000.parquet"
+        payload_path.parent.mkdir(parents=True)
+        payload_path.write_bytes(b"12345")
+        catalog = DatasetCatalog(root_resolver=lambda: tmp_path)
+
+        result = catalog.require_local_dataset("sized_ds").to_dict()
+
+        assert result["stats"]["total_bytes"] >= 5
+
 
 class TestDatasetCatalogDetailAndDelete:
     def test_get_local_dataset(self, tmp_path):

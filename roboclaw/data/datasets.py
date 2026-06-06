@@ -57,6 +57,7 @@ def datasets_root_from_manifest(manifest: Any) -> Path:
 class DatasetStats:
     total_episodes: int = 0
     total_frames: int = 0
+    total_bytes: int = 0
     fps: int = 0
     robot_type: str = ""
     features: tuple[str, ...] = ()
@@ -66,6 +67,7 @@ class DatasetStats:
         return {
             "total_episodes": self.total_episodes,
             "total_frames": self.total_frames,
+            "total_bytes": self.total_bytes,
             "fps": self.fps,
             "robot_type": self.robot_type,
             "features": list(self.features),
@@ -456,6 +458,7 @@ class DatasetCatalog:
         return DatasetStats(
             total_episodes=int(info.get("total_episodes", 0) or 0),
             total_frames=int(info.get("total_frames", 0) or 0),
+            total_bytes=_directory_size_bytes(dataset_dir),
             fps=int(info.get("fps", 0) or 0),
             robot_type=str(info.get("robot_type", "")),
             features=tuple((info.get("features") or {}).keys()),
@@ -491,3 +494,15 @@ class DatasetCatalog:
             can_push=True,
             can_curate=True,
         )
+
+
+def _directory_size_bytes(path: Path) -> int:
+    total = 0
+    for item in path.rglob("*"):
+        if not item.is_file():
+            continue
+        try:
+            total += item.stat().st_size
+        except OSError:
+            logger.debug("Failed to stat dataset file {}", item, exc_info=True)
+    return total

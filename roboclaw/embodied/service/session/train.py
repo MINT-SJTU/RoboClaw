@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from roboclaw.embodied.command import CommandBuilder, logs_dir
+from roboclaw.http.dashboard_policies import list_policies as list_policy_entries
+from roboclaw.training import TrainingJobStatus, TrainingPolicyEntry, TrainingStartSpec
 
 if TYPE_CHECKING:
     from roboclaw.embodied.embodiment.manifest import Manifest
@@ -24,25 +26,80 @@ class TrainSession:
     def __init__(self, parent: EmbodiedService) -> None:
         self._parent = parent
 
+    async def start_job(
+        self,
+        manifest: Manifest,
+        spec: TrainingStartSpec,
+    ) -> TrainingJobStatus:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        dataset = self._parent.datasets.resolve_runtime_dataset(spec.dataset_name)
+        argv = CommandBuilder.train(
+            manifest,
+            dataset=dataset.runtime,
+            policy_type=spec.policy_type,
+            steps=spec.steps,
+            device=spec.device,
+        )
+        job_id = await SubprocessExecutor().run_detached(argv=argv, log_dir=logs_dir())
+        return TrainingJobStatus(
+            job_id=job_id,
+            status="running",
+            running=True,
+            message=f"Training started. Job ID: {job_id}",
+            mode="local",
+        )
+
+    async def stop_job_state(self, job_id: str) -> TrainingJobStatus:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        status = await SubprocessExecutor().stop_job(job_id=job_id, log_dir=logs_dir())
+        return TrainingJobStatus.from_payload(status, mode="local")
+
+    async def job_status_state(self, job_id: str) -> TrainingJobStatus:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        status = await SubprocessExecutor().job_status(job_id=job_id, log_dir=logs_dir())
+        return TrainingJobStatus.from_payload(status, mode="local")
+
+    async def current_job_state(self) -> TrainingJobStatus:
+        from roboclaw.embodied.executor import SubprocessExecutor
+
+        status = await SubprocessExecutor().latest_running_job(log_dir=logs_dir())
+        return TrainingJobStatus.from_payload(status, mode="local")
+
+    def list_policy_entries(self, manifest: Manifest | None = None) -> list[TrainingPolicyEntry]:
+        if manifest is None:
+            manifest = self._parent.manifest
+            manifest.ensure()
+        configured_root = manifest.snapshot.get("policies", {}).get("root", "")
+        if configured_root:
+            root = Path(configured_root).expanduser()
+        else:
+            from roboclaw.embodied.embodiment.manifest.helpers import get_roboclaw_home
+
+            root = get_roboclaw_home() / "workspace" / "embodied" / "policies"
+        return [
+            TrainingPolicyEntry.from_payload(entry, source="local", deployable=True)
+            for entry in list_policy_entries(root)
+        ]
+
     async def train(
         self,
         manifest: Manifest,
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        from roboclaw.embodied.executor import SubprocessExecutor
-
-        dataset_name = kwargs.get("dataset_name", "default")
-        dataset = self._parent.datasets.resolve_runtime_dataset(dataset_name)
-        argv = CommandBuilder.train(
+        status = await self.start_job(
             manifest,
-            dataset=dataset.runtime,
-            policy_type=kwargs.get("policy_type", "act"),
-            steps=kwargs.get("steps", 100_000),
-            device=kwargs.get("device", "cuda"),
+            TrainingStartSpec(
+                dataset_name=kwargs.get("dataset_name", "default"),
+                policy_type=kwargs.get("policy_type", "act"),
+                steps=kwargs.get("steps", 100_000),
+                device=kwargs.get("device", "cuda"),
+            ),
         )
-        job_id = await SubprocessExecutor().run_detached(argv=argv, log_dir=logs_dir())
-        return f"Training started. Job ID: {job_id}"
+        return status.message
 
     async def stop_job(
         self,
@@ -50,11 +107,9 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        from roboclaw.embodied.executor import SubprocessExecutor
-
         job_id = kwargs.get("job_id", "")
-        status = await SubprocessExecutor().stop_job(job_id=job_id, log_dir=logs_dir())
-        return "\n".join(f"{key}: {value}" for key, value in status.items())
+        status = await self.stop_job_state(job_id)
+        return status.message
 
     async def job_status(
         self,
@@ -62,11 +117,9 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> str:
-        from roboclaw.embodied.executor import SubprocessExecutor
-
         job_id = kwargs.get("job_id", "")
-        status = await SubprocessExecutor().job_status(job_id=job_id, log_dir=logs_dir())
-        return "\n".join(f"{key}: {value}" for key, value in status.items())
+        status = await self.job_status_state(job_id)
+        return status.message
 
     async def current_job(
         self,
@@ -74,9 +127,7 @@ class TrainSession:
         kwargs: dict[str, Any],
         tty_handoff: Any,
     ) -> dict[str, str | int | bool | None]:
-        from roboclaw.embodied.executor import SubprocessExecutor
-
-        return await SubprocessExecutor().latest_running_job(log_dir=logs_dir())
+        return (await self.current_job_state()).to_dict()
 
     def curve_data(self, job_id: str) -> dict[str, Any]:
         job_id = job_id.strip()
@@ -117,43 +168,10 @@ class TrainSession:
         return json.dumps(datasets, indent=2, ensure_ascii=False)
 
     def list_policies(self, manifest: Manifest | None = None) -> str:
-        if manifest is None:
-            manifest = self._parent.manifest
-            manifest.ensure()
-        root = Path(manifest.snapshot.get("policies", {}).get("root", ""))
-        if not root.exists():
-            return "No policies found."
-        policies = _scan_policies(root)
+        policies = [entry.to_dict() for entry in self.list_policy_entries(manifest)]
         if not policies:
             return "No policies found."
         return json.dumps(policies, indent=2, ensure_ascii=False)
-
-def _scan_policies(root: Path) -> list[dict[str, Any]]:
-    """Scan policy directories under *root* and return summary dicts."""
-    policies: list[dict[str, Any]] = []
-    for policy_dir in sorted(root.iterdir()):
-        if not policy_dir.is_dir():
-            continue
-        last_checkpoint = policy_dir / "checkpoints" / "last" / "pretrained_model"
-        if not last_checkpoint.exists():
-            continue
-        entry: dict[str, Any] = {
-            "name": policy_dir.name,
-            "checkpoint": str(last_checkpoint),
-        }
-        _enrich_policy_entry(entry, last_checkpoint)
-        policies.append(entry)
-    return policies
-
-
-def _enrich_policy_entry(entry: dict[str, Any], checkpoint_dir: Path) -> None:
-    """Add dataset and steps info from train_config.json if present."""
-    train_config = checkpoint_dir / "train_config.json"
-    if not train_config.exists():
-        return
-    cfg = json.loads(train_config.read_text())
-    entry["dataset"] = cfg.get("dataset", {}).get("repo_id", "")
-    entry["steps"] = cfg.get("steps", 0)
 
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9-]+$")
