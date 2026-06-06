@@ -22,6 +22,7 @@ from roboclaw.http.routes.train import register_train_routes
 from roboclaw.http.routes import train_cloud as train_cloud_routes
 from roboclaw.http.routes import cloud_repair_agent
 from roboclaw.http.routes import cloud_supervisor as cloud_supervisor_state
+from roboclaw.http.routes.cloud_ssh import _restart_local_evo_train_bridge
 from roboclaw.http.routes.cloud_supervisor import _set_cloud_supervisor_state
 from roboclaw.http.routes.train_cloud import register_train_cloud_routes
 from roboclaw.http.routes.agent_consult import register_agent_consult_routes
@@ -410,6 +411,18 @@ def test_train_cloud_bridge_auto_unbinds_stale_ssh_runtime(route_app):
     assert data["runtimeEndpoint"] == ""
     assert "自动解绑" in data["configurationWarnings"][0]
     clear_env.assert_called_once()
+
+
+def test_restart_local_evo_train_bridge_requires_explicit_paths(tmp_path, monkeypatch):
+    monkeypatch.delenv("EVO_TRAIN_REPO_DIR", raising=False)
+    monkeypatch.delenv("EVO_TRAIN_PYTHON_BIN", raising=False)
+    monkeypatch.setenv("EVO_TRAIN_SEETACLOUD_LOG_FILE", str(tmp_path / "bridge.log"))
+
+    result = _restart_local_evo_train_bridge(tmp_path / "runtime.env")
+
+    assert result["restarted"] is False
+    assert result["listening"] is False
+    assert result["error"] == "EVO_TRAIN_REPO_DIR is not configured."
 
 
 def test_train_cloud_provider_balance_is_provider_pool_not_user_wallet(route_app):

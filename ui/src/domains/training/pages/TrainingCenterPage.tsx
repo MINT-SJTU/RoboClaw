@@ -671,9 +671,10 @@ export default function TrainingCenterPage() {
   const [cloudGradientAccumulationSteps, setCloudGradientAccumulationSteps] = useState('')
   const [cloudLoraRank, setCloudLoraRank] = useState('')
   const [pullPolicyRepo, setPullPolicyRepo] = useState('')
+  const [pushPolicyRepos, setPushPolicyRepos] = useState<Record<string, string>>({})
   const [cloudUsername, setCloudUsername] = useState(() => {
-    if (typeof localStorage === 'undefined') return 'pearl'
-    return localStorage.getItem('roboclaw.dataset.username') || 'pearl'
+    if (typeof localStorage === 'undefined') return ''
+    return localStorage.getItem('roboclaw.dataset.username') || ''
   })
   const [cloudWorkflow, setCloudWorkflow] = useState('rlinf_vla')
   const [rlinfAlgorithm, setRlinfAlgorithm] = useState('auto')
@@ -770,7 +771,9 @@ export default function TrainingCenterPage() {
     void loadPolicies()
     void loadCloudBridgeStatus()
     void loadCloudResources(cloudProvider)
-    void loadAuthConnections(cloudUsername)
+    if (cloudUsername.trim()) {
+      void loadAuthConnections(cloudUsername.trim())
+    }
     void restoreCurrentTrainJob()
   }, [loadDatasets, loadPolicies, loadCloudBridgeStatus, loadCloudResources, loadAuthConnections, restoreCurrentTrainJob, cloudUsername, cloudProvider])
 
@@ -858,10 +861,11 @@ export default function TrainingCenterPage() {
     return () => { cancelled = true }
   }, [])
 
-  const promptPushPolicy = (value: string) => {
-    const repoId = prompt(t('enterRepoId'))
+  const handlePushPolicy = (value: string) => {
+    const repoId = (pushPolicyRepos[value] || '').trim()
     if (!repoId) return
     void pushPolicy(value, repoId)
+    setPushPolicyRepos((current) => ({ ...current, [value]: '' }))
   }
 
   const selectedCloudDataset = trainableDatasets.find(dataset => dataset.id === cloudDatasetId)
@@ -1236,6 +1240,7 @@ export default function TrainingCenterPage() {
     && /旧实例|旧任务|重新启动任务|重新绑定云端实例|当前云端实例已能看到\s*GPU/.test(trainJobMessage)
   const shouldUseCloudPlanBlockers = !cloudSnapshotRestartCandidate
   const cloudStartBlockers = [
+    ...(!cloudUsername.trim() ? ['请输入用户名后再启动云训练。'] : []),
     ...(cloudBridgeChecking ? ['正在检查云端实例连接。'] : []),
     ...(cloudBridgeStatus?.enabled === false ? ['云训练后台还没有连接到团队的 EVO_Train 服务。这是部署配置，不需要用户填写。'] : []),
     ...(requiresRuntimeRebind ? ['云端实例未就绪，请重新连接。'] : []),
@@ -1260,6 +1265,7 @@ export default function TrainingCenterPage() {
   ]
   const startBlockers = trainMode === 'cloud' ? cloudStartBlockers : localStartBlockers
   const savePrivateAuthConnection = async () => {
+    const cleanUsername = cloudUsername.trim()
     const cleanId = authConnectionId.trim()
     const cleanProvider = authConnectionProvider.trim()
     const secrets: Record<string, string> = usesObjectStorageSecret
@@ -1269,6 +1275,10 @@ export default function TrainingCenterPage() {
         }
       : { token: authConnectionToken.trim() }
     const hasSecret = Object.values(secrets).every(Boolean)
+    if (!cleanUsername) {
+      setAuthConnectionMessage('请先填写用户名。')
+      return
+    }
     if (!cleanId) {
       setAuthConnectionMessage('请先填写连接 ID。')
       return
@@ -1278,7 +1288,7 @@ export default function TrainingCenterPage() {
       return
     }
     const connection = await saveAuthConnection({
-      username: cloudUsername,
+      username: cleanUsername,
       id: cleanId,
       kind: authConnectionKind,
       provider: cleanProvider,
@@ -1607,6 +1617,7 @@ export default function TrainingCenterPage() {
   }, [cloudSourceConfirmedKey, publicSourceConfirmationKey])
 
   useEffect(() => {
+    if (!cloudUsername.trim()) return
     if (cloudSourceKind !== 'public_reference' || !normalizedPublicDatasetUri) return
     const timer = window.setTimeout(() => {
       void loadSourcePreflight({
@@ -1631,6 +1642,7 @@ export default function TrainingCenterPage() {
   ])
 
   useEffect(() => {
+    if (!cloudUsername.trim()) return
     if (cloudBridgeStatus?.enabled === false) return
     const timer = window.setTimeout(() => {
       const datasetSource = buildCloudDatasetSource()
@@ -1940,6 +1952,11 @@ export default function TrainingCenterPage() {
 
   const startCloudTraining = () => {
     try {
+      const cleanUsername = cloudUsername.trim()
+      if (!cleanUsername) {
+        useTrainingStore.setState({ trainJobMessage: '云训练启动失败：请先填写用户名。' })
+        return
+      }
       useTrainingStore.setState({ trainJobMessage: '正在提交云训练...' })
       const confirmedAt = confirmPublicSourceIfNeeded()
       const datasetSource = buildCloudDatasetSource(confirmedAt)
@@ -1980,7 +1997,7 @@ export default function TrainingCenterPage() {
         }
       }
       void doCloudTrainStart({
-        username: cloudUsername.trim(),
+        username: cleanUsername,
         provider: cloudProvider,
         sku_id: effectiveCloudSkuId,
         image_id: effectiveCloudImageId,
@@ -3621,6 +3638,9 @@ export default function TrainingCenterPage() {
                           onChange={(e) => setCloudUsername(e.target.value)}
                           className="bg-sf border border-bd text-tx px-3 py-2 rounded-lg text-sm font-mono focus:outline-none focus:border-ac"
                         />
+                        {!cloudUsername.trim() && (
+                          <span className="text-xs text-rd">请输入用户名后继续操作</span>
+                        )}
                       </label>
                       <div className="rounded-md border border-bd/50 bg-sf2 px-3 py-2 text-xs text-tx2 leading-relaxed">
                         <div className="font-semibold text-tx">执行方式自动选择</div>
@@ -4024,20 +4044,33 @@ export default function TrainingCenterPage() {
             <div className="text-tx3 text-center py-4 text-sm">{t('noPolicies')}</div>
           )}
           <div className="space-y-1.5">
-            {policies.map((p: any, i: number) => (
-              <div key={i} className="bg-bg border border-bd/30 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
-                <span className="flex-1 font-mono text-tx2 truncate">
-                  {typeof p === 'string' ? p : p.name || JSON.stringify(p)}
-                </span>
-                <button
-                  disabled={!!hubLoading}
-                  onClick={() => promptPushPolicy(typeof p === 'string' ? p : p.name)}
-                  className="px-2 py-0.5 text-ac/60 rounded text-xs hover:text-ac hover:bg-ac/10 transition-colors disabled:opacity-25"
-                >
-                  {t('pushToHub')}
-                </button>
-              </div>
-            ))}
+            {policies.map((p: any, i: number) => {
+              const policyName = typeof p === 'string' ? p : p.name || ''
+              const displayName = policyName || JSON.stringify(p)
+              const repoId = pushPolicyRepos[policyName] || ''
+              return (
+                <div key={i} className="bg-bg border border-bd/30 rounded-lg px-3 py-2 text-sm grid grid-cols-[minmax(0,1fr)_minmax(160px,220px)_auto] items-center gap-2 max-[760px]:grid-cols-1">
+                  <span className="flex-1 font-mono text-tx2 truncate">
+                    {displayName}
+                  </span>
+                  <input
+                    value={repoId}
+                    onChange={(event) => {
+                      setPushPolicyRepos((current) => ({ ...current, [policyName]: event.target.value }))
+                    }}
+                    placeholder={t('repoIdPlaceholder')}
+                    className="bg-sf border border-bd text-tx px-2.5 py-1.5 rounded-lg text-xs font-mono focus:outline-none focus:border-ac"
+                  />
+                  <button
+                    disabled={!policyName || !!hubLoading || !repoId.trim()}
+                    onClick={() => handlePushPolicy(policyName)}
+                    className="px-2 py-0.5 text-ac/60 rounded text-xs hover:text-ac hover:bg-ac/10 transition-colors disabled:opacity-25"
+                  >
+                    {t('pushToHub')}
+                  </button>
+                </div>
+              )
+            })}
           </div>
 
           <div className="mt-4 pt-4 border-t border-bd/40">

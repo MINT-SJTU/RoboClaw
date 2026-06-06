@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import shlex
 import socket
 import subprocess
@@ -273,8 +274,38 @@ def _restart_local_evo_train_bridge(env_path: Path) -> dict[str, Any]:
             pass
     log_path = Path(os.environ.get("EVO_TRAIN_SEETACLOUD_LOG_FILE", "/private/tmp/evo_train_seetacloud_9000.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    repo_dir = Path(os.environ.get("EVO_TRAIN_REPO_DIR", "/Users/pearl/Documents/codex/tmp/EVO_Train"))
-    python_bin = os.environ.get("EVO_TRAIN_PYTHON_BIN", "/Users/pearl/anaconda3/bin/python3")
+    raw_repo_dir = os.environ.get("EVO_TRAIN_REPO_DIR", "").strip()
+    python_bin = os.environ.get("EVO_TRAIN_PYTHON_BIN", "").strip()
+    if not raw_repo_dir:
+        return {
+            "restarted": False,
+            "listening": False,
+            "logPath": str(log_path),
+            "error": "EVO_TRAIN_REPO_DIR is not configured.",
+        }
+    if not python_bin:
+        return {
+            "restarted": False,
+            "listening": False,
+            "logPath": str(log_path),
+            "error": "EVO_TRAIN_PYTHON_BIN is not configured.",
+        }
+    repo_dir = Path(raw_repo_dir).expanduser()
+    if not repo_dir.exists():
+        return {
+            "restarted": False,
+            "listening": False,
+            "logPath": str(log_path),
+            "error": f"EVO_TRAIN_REPO_DIR does not exist: {repo_dir}",
+        }
+    python_path = Path(python_bin).expanduser()
+    if not python_path.exists() and shutil.which(python_bin) is None:
+        return {
+            "restarted": False,
+            "listening": False,
+            "logPath": str(log_path),
+            "error": f"EVO_TRAIN_PYTHON_BIN does not exist: {python_bin}",
+        }
     command = (
         f"source {shlex.quote(str(env_path))}; "
         f"cd {shlex.quote(str(repo_dir))}; "

@@ -404,7 +404,7 @@ export function cloudAutomationPolicy(mode: CloudAutomationMode) {
 
 function activeUsername(username?: string): string {
   if (typeof window === 'undefined') return username || ''
-  return (username || window.localStorage.getItem('roboclaw.dataset.username') || 'pearl').trim()
+  return (username || window.localStorage.getItem('roboclaw.dataset.username') || '').trim()
 }
 
 function isAbortError(error: unknown): boolean {
