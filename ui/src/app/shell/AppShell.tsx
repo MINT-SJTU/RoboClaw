@@ -101,6 +101,7 @@ export default function AppShell() {
   const navItemsBeforePipeline: NavItem[] = [
     { path: '/control', label: t('controlCenter') },
     { path: '/recovery', label: t('recoveryNav'), badge: recoveryFaults.length || undefined },
+    { path: '/datasets', label: t('datasetsNav') },
   ]
   const navItemsAfterPipeline: NavItem[] = [
     { path: '/training', label: t('trainingCenter') },

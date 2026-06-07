@@ -7,6 +7,7 @@ from roboclaw.embodied.board.channels import (
     CH_FAULT_DETECTED,
     CH_FAULT_RESOLVED,
     CH_SESSION,
+    CH_TRAINING,
     WS_TYPES,
 )
 from roboclaw.embodied.board.constants import Command, SessionState
@@ -19,6 +20,7 @@ __all__ = [
     "CH_FAULT_DETECTED",
     "CH_FAULT_RESOLVED",
     "CH_SESSION",
+    "CH_TRAINING",
     "Command",
     "Consumer",
     "InputConsumer",
