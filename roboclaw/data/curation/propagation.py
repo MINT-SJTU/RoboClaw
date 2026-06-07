@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
+
+from loguru import logger
 
 from .features import (
     clamp,
@@ -10,6 +13,50 @@ from .features import (
     resolve_state_vector,
     resolve_timestamp,
 )
+
+from .canonical import build_canonical_trajectory
+from .clustering import discover_prototype_clusters, refine_clusters_with_dba
+from .features import build_joint_trajectory_payload, extract_action_names, extract_state_names
+from .scoring import _episode_quality_summary
+from .state import (
+    load_annotations,
+    load_propagation_results,
+    load_prototype_results,
+    load_quality_results,
+    load_workflow_state,
+    save_annotations,
+    save_propagation_results,
+    save_prototype_results,
+    save_workflow_state,
+)
+
+
+def _update_stage_summary(
+    dataset_path: Path,
+    stage_key: str,
+    summary: dict[str, Any],
+    *,
+    status: str = "completed",
+) -> None:
+    state = load_workflow_state(dataset_path)
+    stage = state["stages"][stage_key]
+    stage["status"] = status
+    stage["summary"] = summary
+    save_workflow_state(dataset_path, state)
+
+
+def _load_episode_duration(dataset_path: Path, episode_index: int) -> float:
+    from .validators import load_episode_data
+
+    data = load_episode_data(dataset_path, episode_index)
+    rows = data["rows"]
+    if len(rows) < 2:
+        return 0.0
+    timestamps = [resolve_timestamp(r) for r in rows]
+    valid = [t for t in timestamps if t is not None]
+    if len(valid) < 2:
+        return 0.0
+    return max(valid[-1] - valid[0], 0.0)
 
 # ---------------------------------------------------------------------------
 # Quality tags
@@ -284,3 +331,173 @@ def _build_grasp_place_annotations(
             "tags": ["Auto-Seed", "Gripper"],
         })
     return annotations
+
+
+# ---------------------------------------------------------------------------
+# Prototype and propagation workflow helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_canonical_entries(
+    dataset_path: Path,
+    episode_indices: list[int],
+    progress_callback: Callable[[dict[str, Any]], None] | None,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    total = len(episode_indices)
+    for position, ep_idx in enumerate(episode_indices):
+        logger.info("Building canonical trajectory for episode {}/{}", position + 1, total)
+        from .validators import load_episode_data
+
+        data = load_episode_data(dataset_path, ep_idx)
+        rows = data["rows"]
+        if not rows:
+            continue
+
+        joint_traj = build_joint_trajectory_payload(
+            rows,
+            _extract_action_names(data["info"]),
+            _extract_state_names(data["info"]),
+        )
+        canonical = build_canonical_trajectory(rows, joint_traj)
+        entries.append({
+            "record_key": str(ep_idx),
+            "episode_index": ep_idx,
+            "sequence": canonical.sequence,
+            "feature_vector": canonical.feature_vector,
+            "canonical_mode": canonical.mode,
+            "canonical_groups": canonical.groups,
+            "quality": _episode_quality_summary(dataset_path, ep_idx),
+        })
+
+        if progress_callback is not None:
+            progress_callback({
+                "phase": "building_canonical",
+                "completed": position + 1,
+                "total": total,
+                "progress_percent": round(((position + 1) / max(total, 1)) * 100, 1),
+            })
+
+    return entries
+
+
+_extract_action_names = extract_action_names
+_extract_state_names = extract_state_names
+
+
+def _finish_prototype_empty(dataset_path: Path) -> dict[str, Any]:
+    results: dict[str, Any] = {
+        "clustering": {},
+        "refinement": {},
+        "candidate_count": 0,
+        "entry_count": 0,
+        "cluster_count": 0,
+    }
+    save_prototype_results(dataset_path, results)
+    _update_stage_summary(
+        dataset_path,
+        "prototype_discovery",
+        {"candidate_count": 0, "entry_count": 0, "cluster_count": 0},
+    )
+    logger.warning("Prototype discovery: no passed episodes found")
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Propagation helpers
+# ---------------------------------------------------------------------------
+
+
+def _propagate_single_target(
+    dataset_path: Path,
+    target: dict[str, Any],
+    spans: list[dict[str, Any]],
+    source_duration: float,
+    source_annotations: dict[str, Any],
+    source_episode_index: int,
+) -> tuple[dict[str, Any], bool]:
+    target_idx = target["episode_index"]
+    target_duration = _load_episode_duration(dataset_path, target_idx)
+    target_spans = propagate_annotation_spans(
+        spans,
+        source_duration=source_duration,
+        target_duration=target_duration,
+        target_record_key=str(target_idx),
+        prototype_score=target.get("prototype_score", 0.0),
+    )
+    result = {
+        "episode_index": target_idx,
+        "spans": target_spans,
+        "prototype_score": target.get("prototype_score", 0.0),
+    }
+    existing = load_annotations(dataset_path, target_idx) or {}
+    existing_annotations = existing.get("annotations", []) or []
+    has_manual = any(
+        isinstance(span, dict) and span.get("source") == "user"
+        for span in existing_annotations
+    )
+    if has_manual:
+        return result, False
+    save_annotations(
+        dataset_path,
+        target_idx,
+        {
+            "episode_index": target_idx,
+            "task_context": {
+                **(source_annotations.get("task_context", {}) or {}),
+                "source_episode_index": source_episode_index,
+                "source": "propagation",
+            },
+            "annotations": target_spans,
+        },
+    )
+    return result, True
+
+
+def _collect_propagation_targets(
+    prototype_results: dict[str, Any] | None,
+    source_episode_index: int,
+) -> list[dict[str, Any]]:
+    """Find cluster members sharing a cluster with the source episode."""
+    if prototype_results is None:
+        return []
+
+    refinement = prototype_results.get("refinement", {})
+    clusters = refinement.get("clusters", [])
+    if not clusters:
+        clusters = prototype_results.get("clustering", {}).get("clusters", [])
+
+    targets: list[dict[str, Any]] = []
+    source_key = str(source_episode_index)
+    for cluster in clusters:
+        member_keys = [str(m.get("record_key", "")) for m in cluster.get("members", [])]
+        if source_key not in member_keys:
+            continue
+        for member in cluster.get("members", []):
+            member_key = str(member.get("record_key", ""))
+            if member_key == source_key:
+                continue
+            targets.append({
+                "episode_index": int(member_key),
+                "prototype_score": 1.0 - float(member.get("distance_to_barycenter", member.get("distance_to_prototype", 0.0))),
+            })
+    return targets
+
+
+def _finish_propagation_empty(
+    dataset_path: Path,
+    source_episode_index: int,
+) -> dict[str, Any]:
+    results: dict[str, Any] = {
+        "source_episode_index": source_episode_index,
+        "target_count": 0,
+        "propagated": [],
+    }
+    save_propagation_results(dataset_path, results)
+    _update_stage_summary(
+        dataset_path,
+        "annotation",
+        {"source_episode_index": source_episode_index, "target_count": 0},
+    )
+    logger.warning("Semantic propagation: no annotations found for episode {}", source_episode_index)
+    return results

@@ -7,12 +7,17 @@ import {
 } from '@/domains/chat/model/messages'
 import { useSessionStore } from '@/domains/session/store/useSessionStore'
 import { useHubTransferStore } from '@/domains/hub/store/useHubTransferStore'
+import { useTrainingStore } from '@/domains/training/store/useTrainingStore'
 
 export type { MessageRole, Message }
+
+export type ChatConnectionStatus = 'connected' | 'disconnected' | 'reconnecting'
 
 interface WebSocketStore {
   ws: WebSocket | null
   connected: boolean
+  connectionStatus: ChatConnectionStatus
+  connectionError: string
   sessionId: string
   messages: Message[]
   connect: () => void
@@ -57,6 +62,8 @@ function resolveWebSocketUrl(sessionId: string): string {
 export const useChatSocket = create<WebSocketStore>((set, get) => ({
   ws: null,
   connected: false,
+  connectionStatus: 'disconnected',
+  connectionError: '',
   sessionId: '',
   messages: [],
 
@@ -68,13 +75,13 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
 
     const sessionId = current.sessionId || getOrCreateSessionId()
     const ws = new WebSocket(resolveWebSocketUrl(sessionId))
-    set({ ws, connected: false, sessionId })
+    set({ ws, connected: false, connectionStatus: 'reconnecting', connectionError: '', sessionId })
 
     ws.onopen = () => {
       if (get().ws !== ws) {
         return
       }
-      set({ connected: true, sessionId })
+      set({ connected: true, connectionStatus: 'connected', connectionError: '', sessionId })
     }
 
     ws.onmessage = (event) => {
@@ -86,6 +93,11 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
         data = JSON.parse(event.data)
       } catch {
         console.warn('Non-JSON websocket message:', event.data)
+        return
+      }
+
+      if (data.type === 'dashboard.training.state_changed') {
+        useTrainingStore.getState().handleTrainingWebSocketEvent(data.payload)
         return
       }
 
@@ -120,10 +132,16 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
       if (get().ws !== ws) {
         return
       }
-      set({ connected: false, ws: null })
+      set({
+        connected: false,
+        connectionStatus: 'disconnected',
+        connectionError: '连接已断开，正在重连...',
+        ws: null,
+      })
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null
         if (!get().connected && !get().ws) {
+          set({ connectionStatus: 'reconnecting', connectionError: '连接已断开，正在重连...' })
           get().connect()
         }
       }, 3000)
@@ -131,6 +149,13 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
 
     ws.onerror = (error) => {
       console.error('WebSocket error:', error)
+      if (get().ws === ws) {
+        set({
+          connected: false,
+          connectionStatus: 'disconnected',
+          connectionError: '连接已断开，正在重连...',
+        })
+      }
     }
   },
 
@@ -140,7 +165,7 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
       reconnectTimer = null
     }
     const { ws } = get()
-    set({ ws: null, connected: false })
+    set({ ws: null, connected: false, connectionStatus: 'disconnected' })
     if (ws) {
       ws.close()
     }
@@ -149,8 +174,10 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
   sendMessage: (content: string) => {
     const { ws, connected } = get()
     if (!connected || !ws) {
-      console.error('WebSocket not connected')
-      return
+      const error = new Error('连接已断开，正在重连...')
+      set({ connectionError: error.message, connectionStatus: 'disconnected' })
+      window.dispatchEvent(new CustomEvent('roboclaw:connection-error', { detail: { message: error.message } }))
+      throw error
     }
 
     get().addMessage({
@@ -171,6 +198,10 @@ export const useChatSocket = create<WebSocketStore>((set, get) => ({
   },
 
   addMessage: (message: Message) => {
+    const consult = message.metadata?.evoStudioAgentConsult
+    if (message.role === 'assistant' && consult && typeof consult === 'object' && !Array.isArray(consult)) {
+      useTrainingStore.getState().applyAgentConsultPlan(consult as Record<string, unknown>)
+    }
     set((state) => ({
       messages: [...state.messages, message],
     }))

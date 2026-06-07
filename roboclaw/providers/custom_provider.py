@@ -40,7 +40,71 @@ class CustomProvider(LLMProvider):
         try:
             return self._parse(await self._client.chat.completions.create(**kwargs))
         except Exception as e:
-            return LLMResponse(content=f"Error: {e}", finish_reason="error")
+            if tools and self._is_tool_payload_rejected(e):
+                fallback = dict(kwargs)
+                fallback.pop("tools", None)
+                fallback.pop("tool_choice", None)
+                fallback["messages"] = self._text_tool_protocol_messages(
+                    messages,
+                    tools,
+                    tool_choice=tool_choice,
+                )
+                try:
+                    parsed = self._parse(await self._client.chat.completions.create(**fallback))
+                    content, text_tool_calls = self._parse_text_tool_protocol(parsed.content)
+                    if text_tool_calls:
+                        parsed.content = content
+                        parsed.tool_calls = text_tool_calls
+                        parsed.finish_reason = "tool_calls"
+                    return parsed
+                except Exception as fallback_error:
+                    raise fallback_error from e
+            raise
+
+    @staticmethod
+    def _is_tool_payload_rejected(error: Exception) -> bool:
+        text = str(error).lower()
+        markers = (
+            "unsupported server-side tools",
+            "oversized tool descriptions",
+            "tool_use/tool_result",
+            "mismatched tool",
+            "improperly formed",
+            "tool_choice",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _text_only_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert tool-call history to plain text for OpenAI-compatible gateways.
+
+        Some Claude gateways expose an OpenAI-compatible chat endpoint but reject
+        OpenAI tool schemas or prior tool result pairs. The general RoboClaw chat
+        can still answer user questions without tools, so preserve useful history
+        as text and drop provider-specific tool fields.
+        """
+        safe: list[dict[str, Any]] = []
+        for message in messages:
+            role = str(message.get("role") or "user")
+            if role == "tool":
+                name = str(message.get("name") or "tool")
+                safe.append({
+                    "role": "user",
+                    "content": f"Tool result from {name}: {message.get('content') or '(empty)'}",
+                })
+                continue
+
+            clean = {
+                key: value
+                for key, value in message.items()
+                if key in {"role", "content", "name"}
+            }
+            if role == "assistant" and message.get("tool_calls") and not clean.get("content"):
+                clean["content"] = "(assistant requested tool calls; omitted for this provider)"
+            if clean.get("content") is None:
+                clean["content"] = ""
+            safe.append(clean)
+        return LLMProvider._sanitize_empty_content(safe)
 
     def _parse(self, response: Any) -> LLMResponse:
         choice = response.choices[0]
@@ -59,4 +123,3 @@ class CustomProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self.default_model
-

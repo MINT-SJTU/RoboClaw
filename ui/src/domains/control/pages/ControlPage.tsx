@@ -140,6 +140,9 @@ export default function ControlPage() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [inferCheckpoint, setInferCheckpoint] = useState('')
   const [manageMode, setManageMode] = useState(false)
+  const [managePassword, setManagePassword] = useState('')
+  const [managePasswordError, setManagePasswordError] = useState('')
+  const [showManageUnlock, setShowManageUnlock] = useState(false)
   const [recordConfigReady, setRecordConfigReady] = useState(false)
   // Replay
   const [replayDataset, setReplayDataset] = useState('')
@@ -270,16 +273,23 @@ export default function ControlPage() {
   function handleManageModeToggle() {
     if (manageMode) {
       setManageMode(false)
+      setShowManageUnlock(false)
+      setManagePassword('')
+      setManagePasswordError('')
       return
     }
-    const password = window.prompt(t('enterManagePassword'))
-    if (password === 'zhaobo666') {
+    setShowManageUnlock(true)
+  }
+
+  function handleManageUnlock() {
+    if (managePassword === 'zhaobo666') {
       setManageMode(true)
+      setShowManageUnlock(false)
+      setManagePassword('')
+      setManagePasswordError('')
       return
     }
-    if (password !== null) {
-      window.alert(t('managePasswordError'))
-    }
+    setManagePasswordError(t('managePasswordError'))
   }
   const busyReason = busy ? `${stateLabel[state] || state}${owner ? ` (${owner})` : ''}` : ''
   const capabilityReason = (capability: OperationCapability) =>
@@ -428,6 +438,49 @@ export default function ControlPage() {
                 {t('manageModel')}
               </button>
             </div>
+            {showManageUnlock && !manageMode && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-yl/30 bg-yl/5 px-3 py-2">
+                <input
+                  type="password"
+                  value={managePassword}
+                  onChange={(event) => {
+                    setManagePassword(event.target.value)
+                    setManagePasswordError('')
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleManageUnlock()
+                    if (event.key === 'Escape') {
+                      setShowManageUnlock(false)
+                      setManagePassword('')
+                      setManagePasswordError('')
+                    }
+                  }}
+                  placeholder={t('enterManagePassword')}
+                  className="min-w-[200px] flex-1 bg-sf2 border border-bd text-tx px-3 py-1.5 rounded-md text-xs focus:outline-none focus:border-yl"
+                />
+                <button
+                  type="button"
+                  onClick={handleManageUnlock}
+                  className="px-3 py-1.5 rounded-md bg-yl text-bg text-xs font-semibold hover:bg-yl/90 transition-colors"
+                >
+                  {t('manageMode')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowManageUnlock(false)
+                    setManagePassword('')
+                    setManagePasswordError('')
+                  }}
+                  className="px-3 py-1.5 rounded-md border border-bd text-xs font-semibold text-tx2 hover:border-yl hover:text-yl transition-colors"
+                >
+                  {t('cancel')}
+                </button>
+                {managePasswordError && (
+                  <span role="alert" className="text-xs text-rd">{managePasswordError}</span>
+                )}
+              </div>
+            )}
 
             {/* Mode-specific input */}
             {mode === 'record' ? (

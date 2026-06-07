@@ -58,7 +58,8 @@ def _extract_interactive_content(content: dict) -> list[str]:
     if isinstance(content, str):
         try:
             content = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.warning("Invalid Feishu interactive card JSON, using raw text: {}", exc)
             return [content] if content.strip() else []
 
     if not isinstance(content, dict):
@@ -1045,7 +1046,8 @@ class FeishuChannel(BaseChannel):
 
             try:
                 content_json = json.loads(message.content) if message.content else {}
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.warning("Invalid Feishu message content JSON for {}: {}", message_id, exc)
                 content_json = {}
 
             if msg_type == "text":

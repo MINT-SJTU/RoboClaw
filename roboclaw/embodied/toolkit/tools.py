@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
+from roboclaw.training import TrainingStartSpec
 
 _SETUP_ACTIONS = ["identify", "modify", "preview_cameras"]
 _DOCTOR_ACTIONS = ["check"]
@@ -221,7 +222,11 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
         },
     },
     "train": {
-        "description": "Train ACT, inspect training jobs, and list datasets or policies.",
+        "description": (
+            "Legacy local/minimal ACT training tool for ASCII dataset slugs, plus local job "
+            "inspection. Do not use this for Evo Studio VLA cloud training; cloud workflows "
+            "use provider/workflow/params with datasetSource and modelSource."
+        ),
         "actions": _TRAIN_ACTIONS,
         "parameters": {
             "type": "object",
@@ -234,7 +239,11 @@ _TOOL_GROUPS: dict[str, dict[str, Any]] = {
                 "language": _LANGUAGE_PROP,
                 "dataset_name": {
                     "type": "string",
-                    "description": "Dataset slug for training.",
+                    "description": (
+                        "Legacy local dataset slug for this tool. Cloud VLA training sources "
+                        "may be hf://, oss://, s3://, platform dataset ids, or built-in "
+                        "benchmarks and should be passed through the cloud training contract."
+                    ),
                 },
                 "steps": {
                     "type": "integer",
@@ -572,12 +581,7 @@ def _get_service(service: Any) -> Any:
 
 
 async def _run_with_service(service: Any, func: Any) -> str | list:
-    from roboclaw.embodied.command import ActionError
-
-    try:
-        return await func(service.manifest)
-    except ActionError as exc:
-        return str(exc)
+    return await func(service.manifest)
 
 
 async def _run_hub_action(
@@ -601,7 +605,13 @@ async def _run_train_action(
     tty_handoff: Any,
 ) -> str:
     if action == "train":
-        return await train.train(manifest, kwargs, tty_handoff)
+        spec = TrainingStartSpec(
+            dataset_name=str(kwargs.get("dataset_name") or "default"),
+            policy_type=str(kwargs.get("policy_type") or "act"),
+            steps=int(kwargs.get("steps") or 100_000),
+            device=str(kwargs.get("device") or "cuda"),
+        )
+        return (await train.start_job(manifest, spec)).message
     if action == "job_status":
         return await train.job_status(manifest, kwargs, tty_handoff)
     if action == "list_datasets":

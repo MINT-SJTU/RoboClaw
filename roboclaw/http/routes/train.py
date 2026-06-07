@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from roboclaw.embodied.service import EmbodiedService
+from roboclaw.training import TrainingStartSpec
 
 
 class TrainStartRequest(BaseModel):
@@ -26,18 +27,16 @@ def register_train_routes(app: FastAPI, service: EmbodiedService) -> None:
 
     @app.post("/api/train/start")
     async def train_start(body: TrainStartRequest) -> dict[str, Any]:
-        result = await service.train.train(
-            manifest=service.manifest,
-            kwargs={
-                "dataset_name": body.dataset_name,
-                "policy_type": body.policy_type,
-                "steps": body.steps,
-                "device": body.device,
-            },
-            tty_handoff=None,
+        status = await service.train.start_job(
+            service.manifest,
+            TrainingStartSpec(
+                dataset_name=body.dataset_name,
+                policy_type=body.policy_type,
+                steps=body.steps,
+                device=body.device,
+            ),
         )
-        job_id = result.rsplit("Job ID:", 1)[-1].strip() if "Job ID:" in result else ""
-        return {"message": result, "job_id": job_id}
+        return {"message": status.message, "job_id": status.job_id}
 
     @app.post("/api/train/stop")
     async def train_stop(body: TrainStopRequest) -> dict[str, Any]:

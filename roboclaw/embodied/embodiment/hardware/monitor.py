@@ -7,6 +7,9 @@ emits events when faults appear or resolve.
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import stat
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -144,6 +147,14 @@ def get_missing_arm_motors(arm: ArmBinding) -> list[str]:
     from roboclaw.embodied.embodiment.hardware.probers import get_prober
 
     if get_model(arm.arm_type) != "so101" or not arm.port:
+        return []
+    try:
+        if not stat.S_ISCHR(os.stat(arm.port).st_mode):
+            return []
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "Hardware probe failed for %s: %s", __name__, exc
+        )
         return []
 
     runtime_spec = get_runtime_spec(arm.arm_type)
