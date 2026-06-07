@@ -1,0 +1,20 @@
+# FSDP backend defaults for RLinf-style actor training.
+
+strategy: fsdp
+sharding_strategy: full_shard
+fsdp_size: -1
+mixed_precision:
+  param_dtype: null
+  reduce_dtype: null
+  buffer_dtype: null
+use_orig_params: false
+sync_module_states: true
+forward_prefetch: false
+backward_prefetch: null
+limit_all_gathers: true
+activation_checkpointing: true
+enable_gradient_accumulation: true
+cpu_offload: false
+offload_pin_memory: false
+reshard_after_forward: true
+state_dict_type: sharded_state_dict

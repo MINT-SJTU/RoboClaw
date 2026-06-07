@@ -15,6 +15,13 @@ from roboclaw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "roboclaw"
+DEFAULT_CODEX_MODEL = "openai-codex/gpt-5.5"
+_CODEX_MODEL_ALIASES = {
+    "openai-codex/gpt-5.3-codex": DEFAULT_CODEX_MODEL,
+    "openai_codex/gpt-5.3-codex": DEFAULT_CODEX_MODEL,
+    "openai-codex/gpt-5.1-codex": DEFAULT_CODEX_MODEL,
+    "openai_codex/gpt-5.1-codex": DEFAULT_CODEX_MODEL,
+}
 
 
 _token_lock = asyncio.Lock()
@@ -23,9 +30,9 @@ _token_lock = asyncio.Lock()
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str = DEFAULT_CODEX_MODEL):
         super().__init__(api_key=None, api_base=None)
-        self.default_model = default_model
+        self.default_model = normalize_codex_model(default_model)
 
     async def chat(
         self,
@@ -79,8 +86,9 @@ class OpenAICodexProvider(LLMProvider):
                 finish_reason=finish_reason,
             )
         except Exception as e:
+            detail = str(e).strip() or e.__class__.__name__
             return LLMResponse(
-                content=f"Error calling Codex: {str(e)}",
+                content=f"Error calling Codex: {detail}",
                 finish_reason="error",
             )
 
@@ -88,10 +96,33 @@ class OpenAICodexProvider(LLMProvider):
         return self.default_model
 
 
+def has_codex_oauth_token() -> bool:
+    """Return whether a local Codex OAuth token exists without starting login."""
+    try:
+        from oauth_cli_kit.storage import FileTokenStorage
+
+        token = FileTokenStorage(token_filename="codex.json").load()
+    except Exception:
+        return False
+    return bool(token and token.access and token.refresh and token.account_id)
+
+
 def _strip_model_prefix(model: str) -> str:
     if model.startswith("openai-codex/") or model.startswith("openai_codex/"):
         return model.split("/", 1)[1]
     return model
+
+
+def normalize_codex_model(model: str | None) -> str:
+    """Normalize stale local Codex model names to a currently supported default."""
+    if not model:
+        return DEFAULT_CODEX_MODEL
+    normalized = _CODEX_MODEL_ALIASES.get(model, model)
+    if normalized.startswith("openai-codex/") or normalized.startswith("openai_codex/"):
+        return normalized
+    if normalized.startswith("gpt-") and "codex" in normalized:
+        return f"openai-codex/{normalized}"
+    return DEFAULT_CODEX_MODEL
 
 
 def _build_headers(account_id: str, token: str) -> dict[str, str]:
@@ -303,7 +334,12 @@ async def _consume_sse(response: httpx.Response) -> tuple[str, list[ToolCallRequ
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
         elif event_type in {"error", "response.failed"}:
-            raise RuntimeError("Codex response failed")
+            error = event.get("error") or (event.get("response") or {}).get("error") or {}
+            if isinstance(error, dict):
+                detail = error.get("message") or error.get("code") or json.dumps(error, ensure_ascii=False)
+            else:
+                detail = str(error)
+            raise RuntimeError(f"Codex response failed: {detail or event_type}")
 
     return content, tool_calls, finish_reason
 

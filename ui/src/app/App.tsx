@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import AppShell from '@/app/shell/AppShell'
 import ControlPage from '@/domains/control/pages/ControlPage'
 import RecoveryCenterPage from '@/domains/recovery/pages/RecoveryCenterPage'
+import DatasetsPage from '@/domains/datasets/pages/DatasetsPage'
 import DatasetExplorerPage from '@/domains/datasets/explorer/pages/DatasetExplorerPage'
 import TrainingCenterPage from '@/domains/training/pages/TrainingCenterPage'
 import QualityValidationPage from '@/domains/curation/quality/pages/QualityValidationPage'
@@ -35,7 +36,7 @@ function App() {
                     <Route index element={<Navigate to="/control" replace />} />
                     <Route path="control" element={<ControlPage />} />
                     <Route path="recovery" element={<RecoveryCenterPage />} />
-                    <Route path="datasets" element={<Navigate to="/curation/datasets" replace />} />
+                    <Route path="datasets" element={<DatasetsPage />} />
                     <Route path="datasets/explorer" element={<Navigate to="/curation/datasets" replace />} />
                     <Route path="training" element={<TrainingCenterPage />} />
                     <Route path="curation" element={<Navigate to="/curation/datasets" replace />} />

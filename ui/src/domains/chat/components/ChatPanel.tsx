@@ -18,7 +18,7 @@ export default function ChatPanel({
   const compact = variant === 'widget'
   const [input, setInput] = useState('')
   const [providerConfigured, setProviderConfigured] = useState(true)
-  const { messages, sendMessage, connected, sessionId } = useChatSocket()
+  const { messages, sendMessage, connected, connectionStatus, connectionError, sessionId } = useChatSocket()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { t } = useI18n()
 
@@ -50,9 +50,13 @@ export default function ChatPanel({
 
   function submitCurrentMessage(): void {
     const content = input.trim()
-    if (!content || !connected) return
-    sendMessage(content)
-    setInput('')
+    if (!content) return
+    try {
+      sendMessage(content)
+      setInput('')
+    } catch {
+      // The socket store owns the user-facing connection error.
+    }
   }
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -113,6 +117,18 @@ export default function ChatPanel({
                 Session {sessionId || 'pending'}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {connectionStatus !== 'connected' && (
+        <div className={compact ? 'px-4 pt-3' : 'border-b border-[color:rgba(29,43,54,0.08)] px-5 py-3 md:px-6'}>
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-[18px] border border-yl/30 bg-yl/10 px-4 py-2 text-xs font-medium text-tx2"
+          >
+            {connectionError || t('chatReconnecting')}
           </div>
         </div>
       )}
