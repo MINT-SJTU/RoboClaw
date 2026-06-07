@@ -97,7 +97,12 @@ def default_rlinf_repo_path() -> Path | None:
         if not candidate:
             continue
         path = Path(candidate).expanduser()
-        if (path / "examples").exists():
+        try:
+            has_examples = (path / "examples").exists()
+        except OSError as exc:
+            _log.warning("Skipping unreadable RLinf repo candidate %s: %s", path, exc)
+            continue
+        if has_examples:
             return path
     return None
 
