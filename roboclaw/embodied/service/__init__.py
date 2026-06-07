@@ -60,7 +60,10 @@ class EmbodiedService:
         self.manifest.ensure()
         self.datasets = DatasetCatalog(root_resolver=lambda: datasets_root_from_manifest(self.manifest))
         self._lock = threading.Lock()
-        self._file_lock = EmbodimentFileLock()
+        manifest_path = getattr(self.manifest, "_path", None)
+        self._file_lock = EmbodimentFileLock(
+            manifest_path.parent / ".embodiment.lock" if manifest_path is not None else None
+        )
         self._embodiment_owner: str = ""
         self._active_operation: Any | None = None
         self._active_session: Session | None = None

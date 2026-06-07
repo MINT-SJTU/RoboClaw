@@ -863,7 +863,7 @@ def agent(
                             _print_agent_response(turn_response[0], render_markdown=markdown)
                     except KeyboardInterrupt:
                         _restore_terminal()
-                        _print_session_exit_message(resolved_session_id)
+                        _print_session_exit_message(resolved_session_id, prefix="Received SIGINT, goodbye!")
                         break
                     except EOFError:
                         _restore_terminal()
