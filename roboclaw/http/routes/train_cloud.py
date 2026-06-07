@@ -607,7 +607,9 @@ def register_train_cloud_routes(app: FastAPI, service: EmbodiedService) -> None:
                     "warnings": runtime_config.get("warnings", runtime_config.get("configurationWarnings", [])),
                 },
             )
-        hourly_cost_cents = 0 if prepare_only else (body.hourly_cost_cents or hourly_cost_from_params(training_params))
+        runtime_mode = str(runtime_config.get("mode") or runtime_config.get("deploymentMode") or "").strip().lower()
+        external_runtime = runtime_mode in {"ssh", "ssh_existing_instance", "existing_ssh"}
+        hourly_cost_cents = 0 if prepare_only or external_runtime else (body.hourly_cost_cents or hourly_cost_from_params(training_params))
         hold_cents = 0
         freeze_record = None
         if username and hourly_cost_cents:
