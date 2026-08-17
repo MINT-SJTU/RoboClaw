@@ -1,0 +1,4 @@
+[submodule "roboclaw/embodied/engine"]
+	path = roboclaw/embodied/engine
+	url = https://github.com/Elvin-yk/lerobot-roboclaw.git
+	branch = roboclaw

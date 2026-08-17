@@ -1,0 +1,46 @@
+{
+  "arms": {
+    "zh": "机械臂",
+    "en": "Arms"
+  },
+  "cameras": {
+    "zh": "摄像头",
+    "en": "Cameras"
+  },
+  "leader": {
+    "zh": "主动臂",
+    "en": "Leader"
+  },
+  "follower": {
+    "zh": "从动臂",
+    "en": "Follower"
+  },
+  "connected": {
+    "zh": "已连接",
+    "en": "Connected"
+  },
+  "disconnected": {
+    "zh": "未连接",
+    "en": "Disconnected"
+  },
+  "scanning": {
+    "zh": "扫描中...",
+    "en": "Scanning..."
+  },
+  "noPortsFound": {
+    "zh": "未发现串口设备",
+    "en": "No serial ports found"
+  },
+  "noCamerasFound": {
+    "zh": "未发现摄像头",
+    "en": "No cameras found"
+  },
+  "motorsFound": {
+    "zh": "个电机",
+    "en": "motors"
+  },
+  "portLabel": {
+    "zh": "端口",
+    "en": "Port"
+  }
+}
