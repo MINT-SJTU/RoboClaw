@@ -1,0 +1,17 @@
+:root {
+  --bg: #f3f7fc;
+  --sf: #ffffff;
+  --sf-strong: #f9fbff;
+  --bd: rgba(55, 97, 182, 0.16);
+  --tx: #111111;
+  --tx2: #5f6b7a;
+  --ac: #2f6fe4;
+  --gn: #2f6fe4;
+  --rd: #2f6fe4;
+  --yl: #2f6fe4;
+  --or: #2f6fe4;
+  --bg-spot-1: rgba(47, 111, 228, 0.14);
+  --bg-spot-2: rgba(221, 236, 255, 0.72);
+  --bg-spot-3: rgba(47, 111, 228, 0.08);
+  --card-shadow: 0 20px 48px rgba(47, 111, 228, 0.1);
+}
