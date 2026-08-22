@@ -1,18 +1,21 @@
 """CLI commands for roboclaw."""
 
 import asyncio
-from contextlib import contextmanager, nullcontext
 import os
 import select
 import signal
 import sys
 import time
 import uuid
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
 # Force UTF-8 encoding for CLI stdio
 os.environ["PYTHONIOENCODING"] = "utf-8"
+# Keep CLI startup/status offline-friendly: LiteLLM otherwise tries to
+# refresh its model cost map at import time and logs network warnings.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -20,18 +23,18 @@ except (AttributeError, ValueError):
     pass
 
 import typer
-from prompt_toolkit import print_formatted_text
-from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession, print_formatted_text
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.application import run_in_terminal
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
 from roboclaw import __logo__, __version__
+from roboclaw.cli.dev import dev_app
 from roboclaw.config.paths import get_workspace_path
 from roboclaw.config.schema import Config
 from roboclaw.utils.helpers import sync_workspace_templates
@@ -45,9 +48,6 @@ web_app = typer.Typer(name="web", help="Web UI server commands.")
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
-
-# Register sub-apps
-from roboclaw.cli.dev import dev_app
 
 app.add_typer(dev_app, name="dev", help="Developer utilities (reset workspace, etc.).")
 app.add_typer(web_app, name="web", help="Web UI server commands.")
@@ -451,6 +451,7 @@ def gateway(
     from roboclaw.cron.service import CronService
     from roboclaw.cron.types import CronJob
     from roboclaw.heartbeat.service import HeartbeatService
+    from roboclaw.heartbeat.routing import pick_heartbeat_target
     from roboclaw.session.manager import SessionManager
 
     if verbose:
@@ -538,26 +539,24 @@ def gateway(
     # Create channel manager
     channels = ChannelManager(config, bus)
 
+    hb_cfg = config.gateway.heartbeat
+    heartbeat_target: tuple[str, str] | None = None
+
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
+        return pick_heartbeat_target(
+            enabled_channels=channels.enabled_channels,
+            sessions=session_manager.list_sessions(),
+            target_channel=hb_cfg.target_channel,
+            target_chat_id=hb_cfg.target_chat_id,
+        )
 
     # Create heartbeat service
     async def on_heartbeat_execute(tasks: str) -> str:
         """Phase 2: execute heartbeat tasks through the full agent loop."""
+        nonlocal heartbeat_target
         channel, chat_id = _pick_heartbeat_target()
+        heartbeat_target = (channel, chat_id)
 
         async def _silent(*_args, **_kwargs):
             pass
@@ -572,13 +571,14 @@ def gateway(
 
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
+        nonlocal heartbeat_target
         from roboclaw.bus.events import OutboundMessage
-        channel, chat_id = _pick_heartbeat_target()
+        channel, chat_id = heartbeat_target or _pick_heartbeat_target()
+        heartbeat_target = None
         if channel == "cli":
             return  # No external channel available to deliver to
         await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
-    hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         provider=provider,
@@ -1059,6 +1059,8 @@ def plugins_list():
 @app.command()
 def status():
     """Show roboclaw status."""
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
     from roboclaw.config.loader import get_config_path, load_config
 
     config_path = get_config_path()

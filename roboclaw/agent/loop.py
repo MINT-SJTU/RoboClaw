@@ -15,9 +15,9 @@ from loguru import logger
 
 from roboclaw.agent.context import ContextBuilder
 from roboclaw.agent.memory import MemoryConsolidator
+from roboclaw.agent.skills import BUILTIN_SKILLS_DIR
 from roboclaw.agent.subagent import SubagentManager
 from roboclaw.agent.tools.cron import CronTool
-from roboclaw.agent.skills import BUILTIN_SKILLS_DIR
 from roboclaw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from roboclaw.agent.tools.message import MessageTool
 from roboclaw.agent.tools.registry import ToolRegistry
@@ -105,7 +105,7 @@ class AgentLoop:
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
-        self._processing_lock = asyncio.Lock()
+        self._session_locks: dict[str, asyncio.Lock] = {}
         self.memory_consolidator = MemoryConsolidator(
             workspace=workspace,
             provider=provider,
@@ -284,8 +284,28 @@ class AgentLoop:
                 await self._handle_restart(msg)
             else:
                 task = asyncio.create_task(self._dispatch(msg))
-                self._active_tasks.setdefault(msg.session_key, []).append(task)
-                task.add_done_callback(lambda t, k=msg.session_key: self._active_tasks.get(k, []) and self._active_tasks[k].remove(t) if t in self._active_tasks.get(k, []) else None)
+                self._track_active_task(msg.session_key, task)
+
+    def _track_active_task(self, session_key: str, task: asyncio.Task) -> None:
+        """Track a running message task so /stop can cancel it."""
+        self._active_tasks.setdefault(session_key, []).append(task)
+        task.add_done_callback(lambda t, k=session_key: self._on_task_done(k, t))
+
+    def _on_task_done(self, session_key: str, task: asyncio.Task) -> None:
+        """Remove completed task bookkeeping and prune idle session locks."""
+        tasks = self._active_tasks.get(session_key)
+        if tasks and task in tasks:
+            tasks.remove(task)
+        if tasks:
+            return
+        self._active_tasks.pop(session_key, None)
+        self._prune_session_lock(session_key)
+
+    def _prune_session_lock(self, session_key: str) -> None:
+        """Drop an idle per-session lock."""
+        lock = self._session_locks.get(session_key)
+        if lock is not None and not lock.locked():
+            self._session_locks.pop(session_key, None)
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks and subagents for the session."""
@@ -297,6 +317,7 @@ class AgentLoop:
             except (asyncio.CancelledError, Exception):
                 pass
         sub_cancelled = await self.subagents.cancel_by_session(msg.session_key)
+        self._prune_session_lock(msg.session_key)
         total = cancelled + sub_cancelled
         content = f"Stopped {total} task(s)." if total else "No active task to stop."
         await self.bus.publish_outbound(OutboundMessage(
@@ -317,9 +338,18 @@ class AgentLoop:
 
         asyncio.create_task(_do_restart())
 
+    def _lock_for_session(self, session_key: str) -> asyncio.Lock:
+        """Return the per-session processing lock."""
+        lock = self._session_locks.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[session_key] = lock
+        return lock
+
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message under the global lock."""
-        async with self._processing_lock:
+        """Process one message, serializing only within the same session."""
+        lock = self._lock_for_session(msg.session_key)
+        async with lock:
             try:
                 response = await self._process_message(msg)
                 if response is not None:
@@ -515,5 +545,10 @@ class AgentLoop:
         """Process a message directly (for CLI or cron usage)."""
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
-        return response.content if response else ""
+        lock = self._lock_for_session(session_key)
+        async with lock:
+            try:
+                response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
+                return response.content if response else ""
+            finally:
+                self._prune_session_lock(session_key)

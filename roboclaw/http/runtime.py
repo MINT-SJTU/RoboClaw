@@ -15,6 +15,7 @@ from roboclaw.channels.web import WebChannel
 from roboclaw.config.paths import get_cron_dir
 from roboclaw.cron.service import CronService
 from roboclaw.cron.types import CronJob
+from roboclaw.heartbeat.routing import pick_heartbeat_target
 from roboclaw.heartbeat.service import HeartbeatService
 from roboclaw.providers.base import GenerationSettings
 from roboclaw.providers.factory import ProviderConfigurationError, UnconfiguredProvider, build_provider
@@ -34,12 +35,15 @@ class WebRuntime:
         self.channel_manager: ChannelManager | None = None
         self.hw_monitor: Any | None = None
         self.embodied_service: Any | None = None
+        self.config: Any = None
+        self._heartbeat_target: tuple[str, str] | None = None
         self._tasks: list[asyncio.Task] = []
 
     @classmethod
     def build(cls, config: Any, *, host: str | None = None, port: int | None = None) -> WebRuntime:
         """Construct all services from config."""
         rt = cls()
+        rt.config = config
 
         # Shared infra
         rt.bus = MessageBus()
@@ -170,6 +174,7 @@ class WebRuntime:
 
     def swap_provider(self, new_provider: Any, config: Any) -> None:
         """Atomically swap provider and refresh agent defaults."""
+        self.config = config
         self.provider = new_provider
         self.agent.provider = new_provider
         self._refresh_agent_defaults(config)
@@ -186,20 +191,17 @@ class WebRuntime:
 
     def _pick_heartbeat_target(self) -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(self.channel_manager.enabled_channels)
-        for item in self.sessions.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        return "cli", "direct"
+        hb_cfg = self.config.gateway.heartbeat
+        return pick_heartbeat_target(
+            enabled_channels=self.channel_manager.enabled_channels,
+            sessions=self.sessions.list_sessions(),
+            target_channel=hb_cfg.target_channel,
+            target_chat_id=hb_cfg.target_chat_id,
+        )
 
     async def _on_heartbeat_execute(self, tasks: str) -> str:
         channel, chat_id = self._pick_heartbeat_target()
+        self._heartbeat_target = (channel, chat_id)
 
         async def _silent(*_args: Any, **_kwargs: Any) -> None:
             pass
@@ -214,7 +216,8 @@ class WebRuntime:
 
     async def _on_heartbeat_notify(self, response: str) -> None:
         from roboclaw.bus.events import OutboundMessage
-        channel, chat_id = self._pick_heartbeat_target()
+        channel, chat_id = self._heartbeat_target or self._pick_heartbeat_target()
+        self._heartbeat_target = None
         if channel == "cli":
             return
         await self.bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))

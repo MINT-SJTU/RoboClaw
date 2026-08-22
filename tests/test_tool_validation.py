@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from roboclaw.agent.tools.base import Tool
@@ -39,6 +40,23 @@ class SampleTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         return "ok"
+
+
+class ExplodingTool(Tool):
+    @property
+    def name(self) -> str:
+        return "explode"
+
+    @property
+    def description(self) -> str:
+        return "raises an exception"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs: Any) -> str:
+        raise RuntimeError("boom")
 
 
 def test_validate_params_missing_required() -> None:
@@ -99,6 +117,25 @@ async def test_registry_returns_validation_error() -> None:
     reg.register(SampleTool())
     result = await reg.execute("sample", {"query": "hi"})
     assert "Invalid parameters" in result
+    payload = json.loads(result)
+    assert payload["tool_error"]["error_type"] == "ToolValidationError"
+    assert payload["tool_error"]["retry_hint"]
+
+
+async def test_registry_returns_trace_id_for_tool_exception() -> None:
+    reg = ToolRegistry()
+    reg.register(ExplodingTool())
+
+    result = await reg.execute("explode", {})
+
+    assert "Error executing explode" in result
+    assert "trace_id=" in result
+    assert "error_type=RuntimeError" in result
+    assert "boom" in result
+    payload = json.loads(result)
+    assert payload["tool_error"]["error_type"] == "RuntimeError"
+    assert payload["tool_error"]["trace_id"]
+    assert payload["tool_error"]["retry_hint"]
 
 
 def test_exec_extract_absolute_paths_keeps_full_windows_path() -> None:
