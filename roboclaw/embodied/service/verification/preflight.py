@@ -1,4 +1,4 @@
-"""Preflight checks for LeRobot subprocess inference."""
+"""Preflight checks for LeRobot subprocess sessions."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ _WEIGHT_PATTERNS = (
 )
 _MAX_INFERENCE_EPISODES = 1_000
 _MAX_EPISODE_TIME_S = 3_600
+_MAX_REPLAY_FPS = 120
 
 
 class Verifier(Protocol):
@@ -36,7 +37,7 @@ class Verifier(Protocol):
 
 
 class PreflightVerifier:
-    """Validate host-visible inference inputs before spawning LeRobot.
+    """Validate host-visible session inputs before spawning LeRobot.
 
     This verifier deliberately does not inspect runtime policy actions. In the
     current architecture, RoboClaw launches LeRobot as a subprocess and only has
@@ -44,44 +45,57 @@ class PreflightVerifier:
     """
 
     def verify(self, request: VerificationRequest) -> VerificationResult:
+        mode = (request.mode or "infer").lower()
         violations: list[Violation] = []
         warnings: list[Violation] = []
 
         argv = list(request.argv)
-        violations.extend(_validate_wrapper_argv(argv))
-        policy_path = _policy_path_from_request(request, argv)
-        violations.extend(_validate_policy_path(policy_path))
-        violations.extend(_validate_dataset_args(argv))
-        violations.extend(_validate_resource_limits(request))
-        violations.extend(_validate_manifest(request.manifest, request.use_cameras, argv))
-
-        if policy_path and _looks_like_remote_policy_id(policy_path):
-            warnings.append(Violation(
-                "remote_policy_unchecked",
-                f"Policy '{policy_path}' looks like a remote repo id; local checkpoint files were not checked.",
-                "checkpoint_path",
+        if mode == "replay":
+            violations.extend(_validate_wrapper_argv(argv, expected_action="replay", label="Replay"))
+            violations.extend(_validate_replay_dataset_args(argv))
+            violations.extend(_validate_replay_limits(request))
+            violations.extend(_validate_manifest(
+                request.manifest, require_cameras=False, argv=argv, label="Replay",
             ))
+        else:
+            violations.extend(_validate_wrapper_argv(argv, expected_action="record", label="Inference"))
+            policy_path = _policy_path_from_request(request, argv)
+            violations.extend(_validate_policy_path(policy_path))
+            violations.extend(_validate_inference_dataset_args(argv))
+            violations.extend(_validate_inference_limits(request))
+            violations.extend(_validate_manifest(
+                request.manifest, require_cameras=request.use_cameras, argv=argv, label="Inference",
+            ))
+
+            if policy_path and _looks_like_remote_policy_id(policy_path):
+                warnings.append(Violation(
+                    "remote_policy_unchecked",
+                    f"Policy '{policy_path}' looks like a remote repo id; local checkpoint files were not checked.",
+                    "checkpoint_path",
+                ))
 
         return VerificationResult(tuple(violations), tuple(warnings))
 
 
-def _validate_wrapper_argv(argv: Sequence[str]) -> list[Violation]:
+def _validate_wrapper_argv(
+    argv: Sequence[str], *, expected_action: str, label: str,
+) -> list[Violation]:
     violations: list[Violation] = []
     if not argv:
-        return [Violation("empty_argv", "Inference command argv is empty.", "argv")]
+        return [Violation("empty_argv", f"{label} command argv is empty.", "argv")]
     if "roboclaw.embodied.command.wrapper" not in argv:
         violations.append(Violation(
             "missing_wrapper",
-            "Inference command must launch roboclaw.embodied.command.wrapper.",
+            f"{label} command must launch roboclaw.embodied.command.wrapper.",
             "argv",
         ))
     wrapper_index = _index_or_none(argv, "roboclaw.embodied.command.wrapper")
     if wrapper_index is not None:
         action_index = wrapper_index + 1
-        if action_index >= len(argv) or argv[action_index] != "record":
+        if action_index >= len(argv) or argv[action_index] != expected_action:
             violations.append(Violation(
                 "unexpected_action",
-                "Inference command must use the LeRobot record action.",
+                f"{label} command must use the LeRobot {expected_action} action.",
                 "argv",
             ))
     return violations
@@ -129,7 +143,7 @@ def _validate_policy_path(raw_path: str) -> list[Violation]:
     return violations
 
 
-def _validate_dataset_args(argv: Sequence[str]) -> list[Violation]:
+def _validate_inference_dataset_args(argv: Sequence[str]) -> list[Violation]:
     required = (
         "--dataset.repo_id=",
         "--dataset.root=",
@@ -143,7 +157,21 @@ def _validate_dataset_args(argv: Sequence[str]) -> list[Violation]:
     ]
 
 
-def _validate_resource_limits(request: VerificationRequest) -> list[Violation]:
+def _validate_replay_dataset_args(argv: Sequence[str]) -> list[Violation]:
+    required = (
+        "--dataset.repo_id=",
+        "--dataset.root=",
+        "--dataset.episode=",
+        "--dataset.fps=",
+    )
+    return [
+        Violation("missing_dataset_arg", f"Replay command is missing {prefix.rstrip('=')}.", "argv")
+        for prefix in required
+        if not _has_prefix(argv, prefix)
+    ]
+
+
+def _validate_inference_limits(request: VerificationRequest) -> list[Violation]:
     violations: list[Violation] = []
     if request.num_episodes < 1:
         violations.append(Violation(
@@ -172,40 +200,69 @@ def _validate_resource_limits(request: VerificationRequest) -> list[Violation]:
     return violations
 
 
-def _validate_manifest(manifest: Any, use_cameras: bool, argv: Sequence[str]) -> list[Violation]:
+def _validate_replay_limits(request: VerificationRequest) -> list[Violation]:
+    violations: list[Violation] = []
+    if request.episode < 0:
+        violations.append(Violation(
+            "invalid_replay_episode",
+            "episode must be >= 0 for replay.",
+            "episode",
+        ))
+    if request.fps < 1:
+        violations.append(Violation(
+            "invalid_replay_fps",
+            "fps must be at least 1 for replay.",
+            "fps",
+        ))
+    if request.fps > _MAX_REPLAY_FPS:
+        violations.append(Violation(
+            "replay_fps_too_high",
+            f"fps must be <= {_MAX_REPLAY_FPS} for replay preflight.",
+            "fps",
+        ))
+    return violations
+
+
+def _validate_manifest(
+    manifest: Any,
+    *,
+    require_cameras: bool,
+    argv: Sequence[str],
+    label: str,
+) -> list[Violation]:
     arms = list(getattr(manifest, "arms", []) or [])
     followers = [arm for arm in arms if _role_value(getattr(arm, "role", "")) == "follower"]
     violations: list[Violation] = []
     if not followers:
         violations.append(Violation(
             "missing_follower",
-            "Inference requires at least one follower arm in the manifest.",
+            f"{label} requires at least one follower arm in the manifest.",
             "manifest.arms",
         ))
     if len(followers) not in {0, 1, 2}:
         violations.append(Violation(
             "unsupported_follower_count",
-            f"Inference supports 1 or 2 follower arms, got {len(followers)}.",
+            f"{label} supports 1 or 2 follower arms, got {len(followers)}.",
             "manifest.arms",
         ))
     if len(followers) == 2 and {getattr(arm, "side", "") for arm in followers} != {"left", "right"}:
         violations.append(Violation(
             "invalid_bimanual_sides",
-            "Bimanual inference requires one left and one right follower arm.",
+            f"Bimanual {label.lower()} requires one left and one right follower arm.",
             "manifest.arms",
         ))
 
     cameras = list(getattr(manifest, "cameras", []) or [])
-    if use_cameras and not cameras:
+    if require_cameras and not cameras:
         violations.append(Violation(
             "missing_cameras",
-            "Inference requested cameras, but no cameras are configured in the manifest.",
+            f"{label} requested cameras, but no cameras are configured in the manifest.",
             "manifest.cameras",
         ))
-    if use_cameras and cameras and not _argv_has_camera_config(argv):
+    if require_cameras and cameras and not _argv_has_camera_config(argv):
         violations.append(Violation(
             "missing_camera_argv",
-            "Inference requested cameras, but argv does not include robot camera configuration.",
+            f"{label} requested cameras, but argv does not include robot camera configuration.",
             "argv",
         ))
     return violations

@@ -218,10 +218,31 @@ class EmbodiedService:
         result = self._preflight_verifier.verify(VerificationRequest(
             argv=argv,
             manifest=self.manifest,
+            mode="infer",
             dataset=dataset,
             num_episodes=num_episodes,
             episode_time_s=episode_time_s,
             use_cameras=use_cameras,
+        ))
+        if not result.ok:
+            raise ActionError(result.format_violations())
+
+    def _verify_replay_preflight(
+        self,
+        *,
+        argv: list[str],
+        dataset: Any,
+        episode: int,
+        fps: int,
+    ) -> None:
+        result = self._preflight_verifier.verify(VerificationRequest(
+            argv=argv,
+            manifest=self.manifest,
+            mode="replay",
+            dataset=dataset,
+            episode=episode,
+            fps=fps,
+            use_cameras=False,
         ))
         if not result.ok:
             raise ActionError(result.format_violations())
@@ -277,6 +298,7 @@ class EmbodiedService:
         argv = CommandBuilder.replay(
             self.manifest, dataset=dataset.runtime, episode=episode, fps=fps, arms=arms,
         )
+        self._verify_replay_preflight(argv=argv, dataset=dataset.runtime, episode=episode, fps=fps)
         await self._start_managed_session(self.replay, owner="replaying", argv=argv)
 
     async def start_inference(
@@ -328,6 +350,7 @@ class EmbodiedService:
         argv = CommandBuilder.replay(
             self.manifest, dataset=dataset.runtime, episode=episode, fps=fps, arms=arms,
         )
+        self._verify_replay_preflight(argv=argv, dataset=dataset.runtime, episode=episode, fps=fps)
         return await self._run_managed_session(
             self.replay, owner="replaying", argv=argv, tty_handoff=tty_handoff,
         )
