@@ -3,6 +3,7 @@ import setupStrings from '../../../roboclaw/i18n/setup.json'
 import commonStrings from '../../../roboclaw/i18n/common.json'
 
 export type Locale = 'zh' | 'en'
+const LOCALE_STORAGE_KEY = 'roboclaw.locale'
 
 type SharedKey = keyof typeof setupStrings | keyof typeof commonStrings
 
@@ -135,9 +136,61 @@ const translations = {
         training: '训练',
         startTraining: '开始训练',
         stopTraining: '停止训练',
+        trainingLocation: '训练位置',
+        currentMachineTraining: '在当前机器训练',
+        remoteTrainingBackend: '提交到远端训练后端',
+        remoteBackend: '远端后端',
+        cloudTraining: '云端训练',
+        cloudTrainingService: 'Cloud/ESC 统一训练服务',
+        currentMachineProvider: '当前机器',
+        aliyunProvider: '阿里云',
+        autodlProvider: 'AutoDL',
+        deploymentMode: '当前部署模式',
+        remoteBackendUnavailable: '当前部署还没有配置可用的远端训练后端。',
+        selfHostedRemoteTrainingMode: '自部署远端训练',
+        managedRemoteTrainingMode: '托管在线训练',
+        remoteTrainingUnavailableMode: '远端训练暂不可用',
+        currentMachineTrainingHint: '直接使用 RoboClaw 当前所在机器的资源。',
+        remoteTrainingBackendHint: '把训练任务提交到当前部署配置好的外部训练后端，例如 Aliyun 或 AutoDL。',
+        selfHostedRemoteTrainingHint: '已接入自己的云端或服务器资源。',
+        managedRemoteTrainingHint: '当前部署正在尝试提供托管在线训练；正式开放前通常需要收费、配额或审批。',
+        remoteTrainingBackendUnavailableHint: '当前部署还没有配置可用的远端训练后端，所以现在只能在当前机器训练。',
         steps: '训练步数',
         policyType: '模型类型',
+        trainingProvider: '训练提供方',
+        trainingPreset: '训练预设',
+        aliyunA10RecommendedPreset: '阿里云 A10（推荐）',
+        presetSummary: '预设摘要',
+        jobName: '任务名称',
+        jobNamePlaceholder: '可选，留空自动生成',
         device: '设备',
+        trainingImage: '训练镜像',
+        trainingImageOverride: '自定义训练镜像',
+        trainingImagePlaceholder: '输入 Aliyun 可拉取镜像地址',
+        aliyunTrainingHint: '默认直接使用训练预设。只有当你想换成自己的镜像，或手动调整 GPU / CPU / 内存规格时，才需要展开下面的自定义设置。',
+        autodlTrainingHint: 'AutoDL 将使用当前部署已经配置好的实例环境。',
+        gpuType: 'GPU 类型',
+        gpuCount: 'GPU 数量',
+        cpuCores: 'CPU 核数',
+        memoryGb: '内存 (GiB)',
+        nodeCount: '节点数量',
+        showTrainingOverrides: '我想自定义镜像或资源',
+        hideTrainingOverrides: '收起自定义设置',
+        resetTrainingOverrides: '恢复预设',
+        trainingOverridesHint: '只有在你想换成自己的镜像，或手动改资源规格时才需要填写。',
+        rawTrainingStatus: '调试信息',
+        failureReason: '失败原因',
+        recentLogs: '最近输出',
+        noFailureDetails: '后端尚未返回详细错误，可展开下方调试信息查看原始日志。',
+        activeTrainingLabel: '已有训练在运行',
+        activeTrainingNotice: '请先停止当前训练任务，再开始新的训练。',
+        policyGroupVla: 'VLA 模型',
+        policyGroupClassic: '经典策略',
+        policyGroupRl: '强化学习',
+        policyGroupOther: '其他',
+        confirmCurrentMachineTraining: '这会直接在 RoboClaw 当前所在机器上开始训练，可能占用本机 CPU、GPU 和内存。确认继续吗？',
+        confirmRemoteTraining: '确认提交这个远端训练任务吗？',
+        confirmStopTraining: '确认停止当前训练任务吗？',
         stateTraining: '训练中',
         startingTraining: '启动训练中...',
         stoppingTraining: '停止中...',
@@ -723,9 +776,61 @@ const translations = {
         training: 'Training',
         startTraining: 'Start Training',
         stopTraining: 'Stop Training',
+        trainingLocation: 'Training Location',
+        currentMachineTraining: 'Train on Current Machine',
+        remoteTrainingBackend: 'Submit to Remote Backend',
+        remoteBackend: 'Remote Backend',
+        cloudTraining: 'Cloud Training',
+        cloudTrainingService: 'Cloud/ESC unified training service',
+        currentMachineProvider: 'Current Machine',
+        aliyunProvider: 'Aliyun',
+        autodlProvider: 'AutoDL',
+        deploymentMode: 'Deployment Mode',
+        remoteBackendUnavailable: 'This deployment has not configured a remote training backend yet.',
+        selfHostedRemoteTrainingMode: 'Self-hosted Remote Training',
+        managedRemoteTrainingMode: 'Managed Online Training',
+        remoteTrainingUnavailableMode: 'Remote Training Unavailable',
+        currentMachineTrainingHint: 'Use the resources on the machine where RoboClaw is currently running.',
+        remoteTrainingBackendHint: 'Submit the training job to an external backend configured by this deployment, such as Aliyun or AutoDL.',
+        selfHostedRemoteTrainingHint: 'This deployment is connected to its own cloud or server resources.',
+        managedRemoteTrainingHint: 'This deployment is experimenting with managed online training; formal access usually needs billing, quota, or approval.',
+        remoteTrainingBackendUnavailableHint: 'This deployment has not configured a remote training backend yet, so only current-machine training is available right now.',
         steps: 'Steps',
         policyType: 'Policy Type',
+        trainingProvider: 'Training Provider',
+        trainingPreset: 'Training Preset',
+        aliyunA10RecommendedPreset: 'Aliyun A10 (Recommended)',
+        presetSummary: 'Preset Summary',
+        jobName: 'Job Name',
+        jobNamePlaceholder: 'Optional, leave empty to auto-generate',
         device: 'Device',
+        trainingImage: 'Training Image',
+        trainingImageOverride: 'Custom Training Image',
+        trainingImagePlaceholder: 'Enter an Aliyun-pullable image reference',
+        aliyunTrainingHint: 'Use the training preset directly by default. Only open the custom section if you want to bring your own image or manually adjust GPU / CPU / memory.',
+        autodlTrainingHint: 'AutoDL will use the instance environment configured by this deployment.',
+        gpuType: 'GPU Type',
+        gpuCount: 'GPU Count',
+        cpuCores: 'CPU Cores',
+        memoryGb: 'Memory (GiB)',
+        nodeCount: 'Node Count',
+        showTrainingOverrides: 'I want to customize image or resources',
+        hideTrainingOverrides: 'Hide Custom Settings',
+        resetTrainingOverrides: 'Reset to Preset',
+        trainingOverridesHint: 'Only use this if you want your own image or want to manually change the resource size.',
+        rawTrainingStatus: 'Debug Details',
+        failureReason: 'Failure Reason',
+        recentLogs: 'Recent Logs',
+        noFailureDetails: 'No detailed failure reason has been returned yet. Open Debug Details for the raw logs.',
+        activeTrainingLabel: 'Training Already Running',
+        activeTrainingNotice: 'Stop the current training job before starting a new one.',
+        policyGroupVla: 'VLA models',
+        policyGroupClassic: 'Classic policies',
+        policyGroupRl: 'Reinforcement learning',
+        policyGroupOther: 'Other',
+        confirmCurrentMachineTraining: 'This will start training on the machine where RoboClaw is currently running and may use local CPU, GPU, and memory. Continue?',
+        confirmRemoteTraining: 'Submit this remote training job?',
+        confirmStopTraining: 'Stop the current training job?',
         stateTraining: 'Training',
         startingTraining: 'Starting training...',
         stoppingTraining: 'Stopping...',
@@ -1211,9 +1316,22 @@ interface I18nStore {
     t: (key: TranslationKey, vars?: Record<string, string | number>) => string
 }
 
+function loadInitialLocale(): Locale {
+    if (typeof window === 'undefined') return 'zh'
+    const saved = window.localStorage.getItem(LOCALE_STORAGE_KEY)
+    if (saved === 'zh' || saved === 'en') return saved
+    const preferred = window.navigator.language.toLowerCase()
+    return preferred.startsWith('zh') ? 'zh' : 'en'
+}
+
 export const useI18n = create<I18nStore>((set, get) => ({
-    locale: 'zh',
-    setLocale: (locale) => set({ locale }),
+    locale: loadInitialLocale(),
+    setLocale: (locale) => {
+        if (typeof window !== 'undefined') {
+            window.localStorage.setItem(LOCALE_STORAGE_KEY, locale)
+        }
+        set({ locale })
+    },
     t: (key, vars) => {
         const locale = get().locale
         const table = translations[locale] as Record<string, string>

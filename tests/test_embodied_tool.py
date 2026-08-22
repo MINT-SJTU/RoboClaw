@@ -59,6 +59,7 @@ from roboclaw.embodied.embodiment.interface.serial import SerialInterface
 from roboclaw.embodied.embodiment.interface.video import VideoInterface
 from roboclaw.embodied.command.helpers import resolve_cameras as _resolve_cameras
 from roboclaw.embodied.toolkit.tools import EmbodiedToolGroup, create_embodied_tools
+from roboclaw.embodied.training import TrainingJobStore
 
 _MOCK_SCANNED_PORTS = [
     SerialInterface(
@@ -156,7 +157,17 @@ def test_create_embodied_tools_returns_nine_groups() -> None:
         ("teleop", {"teleoperate"}, {"arms", "fps"}, {"dataset_name", "checkpoint_path", "positions"}),
         ("record", {"record"}, {"arms", "dataset_name", "task", "num_episodes", "fps", "episode_time_s", "reset_time_s", "use_cameras"}, {"checkpoint_path", "positions"}),
         ("replay", {"replay"}, {"arms", "dataset_name", "episode", "fps"}, {"checkpoint_path", "positions"}),
-        ("train", {"train", "job_status", "list_datasets", "list_policies"}, {"dataset_name", "steps", "device", "job_id"}, {"positions", "port"}),
+        (
+            "train",
+            {"train", "job_status", "stop_job", "current_job", "collect_artifacts", "list_datasets", "list_policies"},
+            {
+                "dataset_name", "policy_type", "steps", "device", "provider", "preset", "job_name",
+                "code_dir", "entrypoint", "gpu_count", "gpu_type", "cpu_cores", "memory_gb",
+                "node_count", "image", "job_id", "output_dir", "wait", "timeout_s",
+                "poll_interval_s", "auto_collect", "remote_workdir", "env",
+            },
+            {"positions", "port"},
+        ),
         ("infer", {"run_policy"}, {"arms", "dataset_name", "source_dataset", "checkpoint_path", "task", "num_episodes", "use_cameras"}, {"positions", "port"}),
     ],
 )
@@ -325,8 +336,9 @@ async def test_train_action(tmp_path: Path) -> None:
     manifest = _manifest_from_data(tmp_path, data)
     from roboclaw.embodied.service import EmbodiedService
     tool.embodied_service = EmbodiedService(manifest=manifest)
+    tool.embodied_service.train._jobs = TrainingJobStore(root=tmp_path / "logs")
 
-    with patch("roboclaw.embodied.executor.SubprocessExecutor", return_value=mock_runner):
+    with patch("roboclaw.embodied.training.local.SubprocessExecutor", return_value=mock_runner):
         result = await tool.execute(action="train", dataset_name="test", steps=5000)
 
     assert "job-abc-123" in result

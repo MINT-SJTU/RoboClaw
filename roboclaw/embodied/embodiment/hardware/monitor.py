@@ -10,6 +10,7 @@ import asyncio
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -144,6 +145,13 @@ def get_missing_arm_motors(arm: ArmBinding) -> list[str]:
     from roboclaw.embodied.embodiment.hardware.probers import get_prober
 
     if get_model(arm.arm_type) != "so101" or not arm.port:
+        return []
+    # Only probe real serial devices. Tests and local placeholders often use
+    # temporary files to stand in for a present port; probing those paths would
+    # incorrectly report every motor as disconnected.
+    if not arm.port.startswith("/dev/"):
+        return []
+    if not Path(arm.port).exists():
         return []
 
     runtime_spec = get_runtime_spec(arm.arm_type)

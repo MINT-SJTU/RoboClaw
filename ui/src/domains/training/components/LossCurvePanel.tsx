@@ -172,8 +172,7 @@ export function LossCurvePanel() {
 
               {!chart.has && (
                 <div className="absolute inset-x-0 bottom-5 text-center px-6">
-                  <div className="text-sm font-semibold text-tx">{t('lossCurve')}</div>
-                  <div className="mt-1 text-sm text-tx3">{t('lossCurvePlaceholder')}</div>
+                  <div className="text-sm text-tx3">{t('lossCurvePlaceholder')}</div>
                 </div>
               )}
             </div>
