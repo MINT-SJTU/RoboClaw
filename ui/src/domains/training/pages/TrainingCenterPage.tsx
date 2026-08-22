@@ -48,6 +48,7 @@ export default function TrainingCenterPage() {
   const [policyType, setPolicyType] = useState('act')
   const [trainSteps, setTrainSteps] = useState(100000)
   const [trainDevice, setTrainDevice] = useState('cuda')
+  const [continualLearning, setContinualLearning] = useState(false)
   const [pullPolicyRepo, setPullPolicyRepo] = useState('')
 
   useEffect(() => {
@@ -109,6 +110,15 @@ export default function TrainingCenterPage() {
               </select>
             </label>
           </div>
+          <label className="mb-3 flex items-center gap-2 text-xs text-tx2">
+            <input
+              type="checkbox"
+              checked={continualLearning}
+              onChange={(e) => setContinualLearning(e.target.checked)}
+              className="h-4 w-4 rounded border border-bd bg-bg text-ac focus:ring-ac"
+            />
+            <span>Continual learning (mix historical datasets)</span>
+          </label>
           <div className="flex gap-3 max-[520px]:flex-col">
             <button
               disabled={(session.state !== 'idle' && session.state !== 'error') || !trainDataset || !!trainingLoading}
@@ -118,6 +128,7 @@ export default function TrainingCenterPage() {
                   policy_type: policyType,
                   steps: trainSteps,
                   device: trainDevice,
+                  continual_learning: continualLearning,
                 })
               }}
               className="flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-ac hover:bg-ac2 shadow-glow-ac

@@ -33,6 +33,7 @@ from roboclaw.embodied.service.session import (
 from roboclaw.embodied.service.session.calibrate import CalibrationSession
 from roboclaw.embodied.service.session.setup import SetupSession
 from roboclaw.embodied.service.verification import (
+    InferenceConfigVerifier,
     PreflightVerifier,
     VerificationRequest,
     Verifier,
@@ -66,6 +67,7 @@ class EmbodiedService:
         self._active_session: Session | None = None
         self._recording_started = False
         self._preflight_verifier = preflight_verifier or PreflightVerifier()
+        self._inference_config_verifier = InferenceConfigVerifier()
 
         # Sub-services
         self.calibration = CalibrationSession(self)
@@ -226,6 +228,18 @@ class EmbodiedService:
         if not result.ok:
             raise ActionError(result.format_violations())
 
+    def _verify_inference_config(
+        self,
+        *,
+        checkpoint_path: str,
+        dataset_local_path: str,
+    ) -> None:
+        self._inference_config_verifier.verify(
+            checkpoint_path=checkpoint_path,
+            manifest_snapshot=self.manifest.snapshot,
+            dataset_local_path=dataset_local_path,
+        )
+
     # -- Operations (Web entry points) --
 
     async def start_teleop(self, *, fps: int = 30, arms: str = "") -> None:
@@ -311,6 +325,10 @@ class EmbodiedService:
             num_episodes=num_episodes,
             episode_time_s=episode_time_s,
             use_cameras=use_cameras,
+        )
+        self._verify_inference_config(
+            checkpoint_path=checkpoint_path or _arg_value(argv, "--policy.path="),
+            dataset_local_path=str(source.runtime.local_path if source else output_dataset.runtime.local_path),
         )
         await self._start_managed_session(self.infer, owner="inferring", argv=argv)
 
@@ -543,3 +561,10 @@ class EmbodiedService:
         if self._monitor is not None:
             self._monitor.set_recording_active(False)
         self.release_embodiment()
+
+
+def _arg_value(argv: list[str], prefix: str) -> str:
+    for arg in argv:
+        if arg.startswith(prefix):
+            return arg.split("=", 1)[1]
+    return ""
