@@ -2,17 +2,58 @@ x-common-config: &common-config
   build:
     context: .
     dockerfile: Dockerfile
+  image: roboclaw:local
   volumes:
-    - ~/.roboclaw:/root/.roboclaw
+    - /home/hafnium/.roboclaw:/root/.roboclaw
+    - hf_cache:/root/.cache/huggingface
+    # oauth_cli_kit persists tokens via platformdirs at /root/.local/share/<app>/auth/.
+    # Bind this to a host path so OAuth logins survive `--rm` containers and restarts.
+    - /home/hafnium/.roboclaw-local-share:/root/.local/share
+    # Expose /dev/serial/by-id/ so roboclaw/embodied/embodiment/hardware/scan.py
+    # can bind arms by stable ID (ttyACM indices shuffle on replug).
+    - /dev/serial:/dev/serial:ro
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
+  roboclaw-web:
+    container_name: roboclaw-web
+    <<: *common-config
+    command: ["web", "start", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:1455:1455"
+    devices:
+      - /dev/ttyACM0
+      - /dev/ttyACM1
+      - /dev/ttyACM2
+      - /dev/ttyACM3
+      - /dev/video0
+    device_cgroup_rules:
+      - 'c 81:* rmw'     # video4linux
+      - 'c 166:* rmw'    # ttyACM (CDC-ACM, CH343 default enumeration)
+      - 'c 188:* rmw'    # ttyUSB (CH343 alt-mode fallback)
+      - 'c 189:* rmw'    # usb_device — grants raw libusb access; the container can reprogram CH343 firmware. Trusted-host-only.
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8765/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   roboclaw-gateway:
     container_name: roboclaw-gateway
     <<: *common-config
     command: ["gateway"]
-    restart: unless-stopped
+    profiles: ["gateway"]
     ports:
-      - 18790:18790
+      - "127.0.0.1:18790:18790"
+    restart: unless-stopped
     deploy:
       resources:
         limits:
@@ -21,11 +62,13 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-  
+
   roboclaw-cli:
     <<: *common-config
-    profiles:
-      - cli
+    profiles: ["cli"]
     command: ["status"]
     stdin_open: true
     tty: true
+
+volumes:
+  hf_cache:
