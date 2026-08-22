@@ -48,8 +48,16 @@ def test_agent_ctrl_c(simulated_agent_child) -> None:
     child = simulated_agent_child
     child.expect(r"You:", timeout=15)
     child.sendintr()
-    child.expect(r"Received SIGINT, goodbye!", timeout=10)
-    child.close(force=True)
+    idx = child.expect([r"Received SIGINT, goodbye!", r"Goodbye!", pexpect.EOF], timeout=10)
+    transcript = child.before
+
+    if idx in (0, 1):
+        transcript += child.after
+        child.expect([r"Resume this session:", pexpect.EOF, pexpect.TIMEOUT], timeout=5)
+        transcript += child.before
+
+    assert "Traceback" not in transcript
+    assert "KeyboardInterrupt" not in transcript
 
 
 @pytest.mark.pty
