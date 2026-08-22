@@ -291,30 +291,49 @@ def ensure_bimanual_cal_dir(
 
 def refresh_bimanual_cal_dirs(manifest: dict[str, Any]) -> None:
     """Eagerly refresh bimanual calibration dirs if a bimanual pair exists."""
-    from loguru import logger
-
     arms = manifest.get("arms", [])
     followers = [a for a in arms if "follower" in a.get("type", "")]
     leaders = [a for a in arms if "leader" in a.get("type", "")]
-    try:
-        if len(followers) == 2:
-            left, right = _pair_arms_by_side(followers, "followers")
-            ensure_bimanual_cal_dir(left, right, "followers")
-        if len(leaders) == 2:
-            left, right = _pair_arms_by_side(leaders, "leaders")
-            ensure_bimanual_cal_dir(left, right, "leaders")
-    except Exception:
-        logger.opt(exception=True).warning("Failed to refresh bimanual calibration dirs")
+    if len(followers) == 2:
+        left, right = _pair_arms_by_side(followers, "followers")
+        ensure_bimanual_cal_dir(left, right, "followers")
+    if len(leaders) == 2:
+        left, right = _pair_arms_by_side(leaders, "leaders")
+        ensure_bimanual_cal_dir(left, right, "leaders")
 
 
 def _pair_arms_by_side(
     arms: list[dict[str, Any]], role: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return (left, right) arms for a bimanual role."""
+    """Return (left, right) arms for a bimanual role.
+
+    Prefers explicit `side` fields. Falls back to alias keyword inference only
+    when both arms have empty/missing sides — legacy manifests written before
+    `side` was required. Mixed/malformed sides surface as errors instead of
+    being silently masked by the alias path.
+    """
+    sides = [arm.get("side") or "" for arm in arms]
+    if all(s == "" for s in sides):
+        return _pair_arms_by_alias(arms, role)
     _validate_bimanual_arm_sides(arms, role)
     left = next(arm for arm in arms if arm.get("side") == "left")
     right = next(arm for arm in arms if arm.get("side") == "right")
     return left, right
+
+
+def _pair_arms_by_alias(
+    arms: list[dict[str, Any]], role: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Infer left/right pairing from alias keywords."""
+    left_arms = [a for a in arms if "left" in (a.get("alias") or "")]
+    right_arms = [a for a in arms if "right" in (a.get("alias") or "")]
+    if len(left_arms) == 1 and len(right_arms) == 1 and left_arms[0] is not right_arms[0]:
+        return left_arms[0], right_arms[0]
+    aliases = [arm.get("alias") for arm in arms]
+    sides = [arm.get("side") for arm in arms]
+    raise ValueError(
+        f"Bimanual {role} arms cannot be paired: aliases {aliases} with sides {sides}."
+    )
 
 
 # ── Hand probing ──────────────────────────────────────────────────────
