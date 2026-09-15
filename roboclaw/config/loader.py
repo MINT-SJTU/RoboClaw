@@ -1,9 +1,12 @@
-"""Configuration loading utilities."""
+﻿"""Configuration loading utilities."""
 
 import json
+import logging
 from pathlib import Path
 
 from roboclaw.config.schema import Config
+
+logger = logging.getLogger(__name__)
 
 
 # Global variable to store current config path (for multi-instance support)
@@ -42,8 +45,8 @@ def load_config(config_path: Path | None = None) -> Config:
             data = _migrate_config(data)
             return Config.model_validate(data)
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to load config from {path}: {e}")
-            print("Using default configuration.")
+            logger.warning(f"Failed to load config from {path}: {e}")
+            logger.info("Using default configuration.")
 
     return Config()
 
